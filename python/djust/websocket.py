@@ -3,6 +3,7 @@ WebSocket consumer for LiveView real-time updates
 """
 
 import asyncio
+import contextlib
 import collections
 import functools
 import inspect
@@ -3913,26 +3914,60 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             mgr.cancel_upload(ref, owner=owner)
             await self.send_json(build_progress_message(ref, 0, "cancelled"))
 
-    def _arm_upload_deadline(self, mgr: Any, ref: str) -> None:
+    #: Seconds before a deadline turn the view's full lane refused is tried again.
+    _UPLOAD_DEADLINE_RETRY_S = 1.0
+
+    def _arm_upload_deadline(self, mgr: Any, ref: str, delay: Optional[float] = None) -> None:
         """Start the timer that enforces the upload slot's ``timeout=`` (#4118).
 
-        When it fires, an upload still unfinished is cancelled and the browser
-        told (:meth:`_expire_overdue_uploads`). The manager keeps the timer and
-        cancels it when the upload ends or the session closes.
+        It fires after ``delay`` seconds (default: the time the upload has
+        left, on the monotonic clock the loop's timers use) and runs
+        :meth:`_upload_deadline_turn` as a turn of the view: on the view's lane
+        when it has one in use, and under the view's render lock either way, so
+        it never interleaves with a handler (one iterating
+        ``consume_uploaded_entries()``, for example). The manager keeps the
+        timer and cancels it when the upload ends or the session closes.
         """
-        entry = mgr._entries.get(ref)
-        config = mgr.get_config(entry.upload_name) if entry is not None else None
-        timeout = getattr(config, "timeout", None)
-        if timeout is None:
-            return
+        if delay is None:
+            delay = mgr.remaining(ref)
+            if delay is None:
+                return
         loop = asyncio.get_running_loop()
+        item = {"mgr": mgr, "ref": ref}
 
         def _fire() -> None:
-            task = loop.create_task(self._expire_overdue_uploads(mgr))
+            queued = _real_consumer(self)._queue_on_lane(self, "_upload_deadline_turn", item)
+            if queued:
+                return
+            if queued is None:
+                # The view's lane is full: try again shortly, not never.
+                self._arm_upload_deadline(mgr, ref, self._UPLOAD_DEADLINE_RETRY_S)
+                return
+            task = loop.create_task(self._upload_deadline_turn(item))
             _UPLOAD_EXPIRY_TASKS.add(task)
             task.add_done_callback(_UPLOAD_EXPIRY_TASKS.discard)
 
-        mgr.set_deadline_handle(ref, loop.call_later(timeout, _fire))
+        mgr.set_deadline_handle(ref, loop.call_later(max(delay, 0.0), _fire))
+
+    async def _upload_deadline_turn(self, item: Dict[str, Any]) -> None:
+        """An upload's ``timeout=`` timer fired: expire it, or wait the rest.
+
+        A timer can fire a little early (clock resolution), and the upload can
+        have been resumed (its clock restarted) since it was armed: an upload
+        with time left gets a new timer for that time instead.
+        """
+        mgr, ref = item["mgr"], item["ref"]
+        lock = getattr(self, "_render_lock", None)
+        async with lock if lock is not None else contextlib.nullcontext():
+            if getattr(self.view_instance, "_upload_manager", None) is not mgr:
+                return  # the view was replaced or its uploads cleaned up
+            left = mgr.remaining(ref)
+            if left is None:
+                return  # finished, failed or cancelled meanwhile
+            if left > 0:
+                self._arm_upload_deadline(mgr, ref, left)
+                return
+            await self._expire_overdue_uploads(mgr)
 
     async def _expire_overdue_uploads(self, mgr: Any) -> None:
         """Cancel the uploads of ``mgr`` past their ``timeout=`` and tell the

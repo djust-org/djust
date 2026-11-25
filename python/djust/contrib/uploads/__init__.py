@@ -30,6 +30,7 @@ from djust.contrib.uploads.errors import (
     UploadError,
     UploadNetworkError,
     UploadQuotaError,
+    UploadRefused,
 )
 
 __all__ = [
@@ -37,4 +38,5 @@ __all__ = [
     "UploadNetworkError",
     "UploadCredentialError",
     "UploadQuotaError",
+    "UploadRefused",
 ]

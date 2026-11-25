@@ -701,6 +701,10 @@ class UploadEntry:
     _complete: bool = field(default=False, repr=False)
     _error: Optional[str] = field(default=None, repr=False)
     _created_at: float = field(default_factory=time.time, repr=False)
+    # #4118 — when the ``timeout=`` clock started (registration or resume), on
+    # the monotonic clock the event loop's timers use, so a wall-clock step
+    # neither fires nor postpones a deadline.
+    _started: float = field(default_factory=time.monotonic, repr=False)
     # Writer path — populated when the upload slot was configured with a
     # writer= kwarg. writer_instance holds the live per-upload writer;
     # writer_result holds the value returned from writer.close() and is
@@ -837,15 +841,16 @@ _MAX_REFUSAL_MESSAGE = 200
 def _upload_refusal_message(exc: BaseException) -> Optional[str]:
     """The browser-facing message of a writer refusal, or None for a fault.
 
-    Only an :class:`UploadError` (``djust.uploads.UploadError`` and its
-    subclasses) is a refusal. Its ``message`` attribute is the text the
-    writer wrote for people; it is trimmed to one line of at most
-    ``_MAX_REFUSAL_MESSAGE`` characters. An empty or non-string message
-    counts as a fault.
+    Only an :class:`UploadRefused` is a refusal. The other ``UploadError``
+    subclasses are infrastructure faults (credentials, network, quota) whose
+    messages name the vendor, so they stay on the server. The refusal's
+    ``message`` attribute is the text the writer wrote for people; it is
+    trimmed to one line of at most ``_MAX_REFUSAL_MESSAGE`` characters. An
+    empty or non-string message counts as a fault.
     """
-    from djust.contrib.uploads.errors import UploadError as _UploadError
+    from djust.contrib.uploads.errors import UploadRefused as _UploadRefused
 
-    if not isinstance(exc, _UploadError):
+    if not isinstance(exc, _UploadRefused):
         return None
     message = getattr(exc, "message", None)
     if not isinstance(message, str):
@@ -957,13 +962,13 @@ class UploadManager:
     def _writer_failed(entry: UploadEntry, exc: BaseException, stage: str, generic: str) -> None:
         """Record a writer failure on ``entry`` and log it (#4118).
 
-        An :class:`UploadError` is a refusal the writer chose to make (a quota,
-        a size or content policy): it is logged at WARNING without a
-        traceback, and its own ``message`` becomes the entry's error, which
-        the browser receives. Its ``sdk_exc`` and ``str()`` are never used, so
-        a vendor exception attached to it stays on the server. Any other
-        exception is a fault: logged with its traceback, and the browser gets
-        only the fixed ``generic`` text.
+        An :class:`UploadRefused` is a refusal the writer chose to make (a
+        size or content policy): it is logged at WARNING without a traceback,
+        and its own ``message`` becomes the entry's error, which the browser
+        receives. Its ``sdk_exc`` and ``str()`` are never used. Any other
+        exception, the other ``UploadError`` subclasses included, is a fault:
+        logged with its traceback, and the browser gets only the fixed
+        ``generic`` text.
         """
         refusal = _upload_refusal_message(exc)
         if refusal is not None:
@@ -1128,7 +1133,11 @@ class UploadManager:
             logger.warning("No upload config for '%s'", upload_name)
             return None
 
-        # An upload past its deadline frees its place before the count.
+        # An upload past its deadline frees its place before the count. Over
+        # the WebSocket the consumer has already expired (and told the browser
+        # about) every overdue upload just before calling this, so nothing is
+        # dropped here unannounced; a direct caller gets the same place-freeing
+        # its timers would have done.
         self.expire_overdue()
 
         # Check max entries: every entry the slot holds, finished or not
@@ -1206,6 +1215,12 @@ class UploadManager:
             return True
         return False
 
+    def _drop_deadline_if_failed(self, ref: str) -> None:
+        """A failed upload needs no timer any more (#4118)."""
+        entry = self._entries.get(ref)
+        if entry is not None and entry.error is not None:
+            self._drop_deadline(ref)
+
     def add_chunk(
         self, ref: str, chunk_index: int, data: bytes, owner: Any = SERVER_CALL
     ) -> Optional[int]:
@@ -1218,6 +1233,13 @@ class UploadManager:
         When the upload slot is configured with writer=, the chunk is
         piped to the writer and nothing is buffered to RAM or disk.
         """
+        progress = self._add_chunk(ref, chunk_index, data, owner)
+        if progress is None:
+            self._drop_deadline_if_failed(ref)
+        return progress
+
+    def _add_chunk(self, ref: str, chunk_index: int, data: bytes, owner: Any) -> Optional[int]:
+        """:meth:`add_chunk` without the failed upload's timer cleanup."""
         entry = self._entries.get(ref)
         if not entry:
             return None
@@ -1268,6 +1290,13 @@ class UploadManager:
         Returns the entry if successful, None if finalization failed or
         ``owner`` does not own the upload.
         """
+        entry = self._complete_upload(ref, owner)
+        if entry is None:
+            self._drop_deadline_if_failed(ref)
+        return entry
+
+    def _complete_upload(self, ref: str, owner: Any) -> Optional[UploadEntry]:
+        """:meth:`complete_upload` without the failed upload's timer cleanup."""
         entry = self._entries.get(ref)
         if not entry:
             return None
@@ -1358,7 +1387,7 @@ class UploadManager:
             park_suspended_upload(entry)
             return None
         # The time limit runs again from the resume.
-        entry._created_at = time.time()
+        entry._started = time.monotonic()
         self._entries[ref] = entry
         self._name_to_refs.setdefault(entry.upload_name, []).append(ref)
         return entry
@@ -1381,25 +1410,39 @@ class UploadManager:
             return "Upload timed out after %g seconds." % config.timeout
         return "Upload timed out."
 
-    def is_overdue(self, ref: str, now: Optional[float] = None) -> bool:
-        """Whether the upload ``ref`` is unfinished past its slot's ``timeout=``."""
+    def remaining(self, ref: str, now: Optional[float] = None) -> Optional[float]:
+        """Seconds left before ``ref`` passes its slot's ``timeout=`` (zero or
+        less when it has), or None for an upload with no deadline: unknown,
+        finished, failed, or on a slot without ``timeout=``.
+
+        ``now`` is on the :func:`time.monotonic` clock.
+        """
         entry = self._entries.get(ref)
         if entry is None or entry.complete or entry.error is not None:
-            return False
+            return None
         config = self._configs.get(entry.upload_name)
         if config is None or config.timeout is None:
-            return False
-        now = time.time() if now is None else now
-        return now - entry._created_at >= config.timeout
+            return None
+        now = time.monotonic() if now is None else now
+        return entry._started + config.timeout - now
+
+    def is_overdue(self, ref: str, now: Optional[float] = None) -> bool:
+        """Whether the upload ``ref`` is unfinished past its slot's ``timeout=``.
+
+        ``now`` is on the :func:`time.monotonic` clock.
+        """
+        left = self.remaining(ref, now)
+        return left is not None and left <= 0
 
     def expire_overdue(self, now: Optional[float] = None) -> List[Tuple[str, str]]:
         """Cancel every upload past its slot's ``timeout=`` (#4118).
 
         Each one's writer is aborted and its entry dropped, as by
         :meth:`cancel_upload`. Returns ``(ref, message)`` for each, so the
-        caller can tell the browser.
+        caller can tell the browser. ``now`` is on the :func:`time.monotonic`
+        clock.
         """
-        now = time.time() if now is None else now
+        now = time.monotonic() if now is None else now
         expired = []
         for ref in [r for r in self._entries if self.is_overdue(r, now)]:
             message = self.timeout_message(ref)
@@ -1458,7 +1501,9 @@ class UploadManager:
         refs = self._name_to_refs.get(upload_name, [])
         consumed = []
 
-        for ref in refs:
+        # Over a copy: the list can change while a handler holds the
+        # generator (an entry cancelled meanwhile), which must not skip one.
+        for ref in list(refs):
             entry = self._entries.get(ref)
             if entry and entry.complete:
                 yield entry
@@ -1787,6 +1832,7 @@ from djust.contrib.uploads.errors import (  # noqa: E402  — re-export
     UploadError,
     UploadNetworkError,
     UploadQuotaError,
+    UploadRefused,
 )
 
 __all__ = [
@@ -1807,6 +1853,7 @@ __all__ = [
     "UploadNetworkError",
     "UploadCredentialError",
     "UploadQuotaError",
+    "UploadRefused",
 ]
 
 # Re-export resumable bits so ``from djust.uploads import

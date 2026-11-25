@@ -381,19 +381,21 @@ Clients send whatever chunk size they send (djust's default is 64 KB per WebSock
 
 #### Refusing an upload
 
-To refuse an upload with a reason the user should see (a size or content policy, a quota), raise `djust.uploads.UploadError` (or a subclass) from `open()`, `write_chunk()` or `close()`:
+To refuse an upload with a reason the user should see (a size or content policy, a per-user quota), raise `djust.uploads.UploadRefused` from `open()`, `write_chunk()` or `close()`:
 
 ```python
-from djust.uploads import UploadError, UploadWriter
+from djust.uploads import UploadRefused, UploadWriter
 
 class ImageWriter(UploadWriter):
     def write_chunk(self, chunk, chunk_index=0):
         if self.expected_size > 2_000_000:
-            raise UploadError("Images must be under 2 MB.")
+            raise UploadRefused("Images must be under 2 MB.")
         ...
 ```
 
-djust logs the refusal at WARNING without a traceback, aborts the writer, and sends the browser the exception's `message` (one line, at most 200 characters): it becomes the `error` of the `djust:upload:progress` event and of `entry.error`, and the message of the `uploadFile()` rejection. Only `message` is sent, never `sdk_exc` or anything else on the exception, so write it for the user and keep internal detail (bucket names, ARNs, URLs) out of it. Any other exception is treated as a fault: logged at ERROR with its traceback, and the browser gets fixed text ("Upload writer rejected chunk").
+djust logs the refusal at WARNING without a traceback, aborts the writer, and sends the browser the exception's `message` (one line, at most 200 characters): it becomes the `error` of the `djust:upload:progress` event and of `entry.error`, and the message of the `uploadFile()` rejection. Only `message` is sent, never `sdk_exc` or anything else on the exception, so write it for the user and keep internal detail (bucket names, ARNs, URLs) out of it.
+
+Any other exception is a fault: logged at ERROR with its traceback, and the browser gets fixed text ("Upload writer rejected chunk"). That includes the other `UploadError` subclasses (`UploadCredentialError`, `UploadNetworkError`, `UploadQuotaError`), which the object-storage backends raise for infrastructure failures and whose messages name the vendor.
 
 If your own `abort()` implementation raises, djust logs the traceback and swallows it — a failing S3 `AbortMultipartUpload` is a cleanup problem, not a correctness problem for the rest of the view.
 

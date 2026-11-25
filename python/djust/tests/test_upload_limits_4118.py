@@ -2,9 +2,10 @@
 
 * ``max_entries`` counts every entry the slot holds, finished ones too, as
   documented (a slot with ``max_entries=5`` used to accept 20 finished uploads).
-* An ``UploadError`` a writer raises is a refusal: logged at WARNING without a
-  traceback, and its own message (only that) reaches the browser. Any other
-  writer exception keeps the fixed text and the logged traceback.
+* An ``UploadRefused`` a writer raises is a refusal: logged at WARNING without
+  a traceback, and its own message (only that) reaches the browser. Any other
+  writer exception, the contrib backends' ``UploadError`` faults included,
+  keeps the fixed text and the logged traceback.
 * The view's ``cancel_upload()`` tells the browser (status ``cancelled``).
 * ``allow_upload(timeout=)`` cancels an upload still unfinished after that many
   seconds, aborting its writer and telling the browser why.
@@ -29,10 +30,9 @@ from djust.uploads import (
     FRAME_COMPLETE,
     SERVER_CANCEL_MESSAGE,
     UPLOAD_PROGRESS_PUSH_EVENT,
-    UploadError,
     UploadManager,
     UploadMixin,
-    UploadQuotaError,
+    UploadRefused,
     UploadWriter,
 )
 
@@ -61,19 +61,19 @@ class RefusingWriter(RecordingWriter):
     """Refuses every chunk the way a size or content policy would."""
 
     def write_chunk(self, chunk, chunk_index=0):
-        raise UploadQuotaError(
+        raise UploadRefused(
             "Images must be under 2 MB.", sdk_exc=RuntimeError("quota on %s" % SECRET)
         )
 
 
 class RefusingOpenWriter(RecordingWriter):
     def open(self):
-        raise UploadError("Uploads are closed for today.")
+        raise UploadRefused("Uploads are closed for today.")
 
 
 class RefusingCloseWriter(RecordingWriter):
     def close(self):
-        raise UploadError("The image could not be decoded.")
+        raise UploadRefused("The image could not be decoded.")
 
 
 class FaultyWriter(RecordingWriter):
@@ -170,7 +170,7 @@ class TestWriterRefusal:
         entry = mgr.get_entries("doc")[0]
         assert entry.error == "Images must be under 2 MB."
         assert SECRET not in entry.error
-        assert EVENTS["r1"] == ["open", ("abort", "UploadQuotaError")]
+        assert EVENTS["r1"] == ["open", ("abort", "UploadRefused")]
         _assert_refusal_logged(caplog, "Images must be under 2 MB.")
 
     def test_open_refusal(self, caplog):
@@ -202,10 +202,43 @@ class TestWriterRefusal:
         errors = [r for r in caplog.records if r.levelno == logging.ERROR]
         assert errors and errors[0].exc_info is not None
 
+    @pytest.mark.parametrize(
+        "sdk_exc",
+        [
+            type("ClientAuthenticationError", (Exception,), {})("token for %s" % SECRET),
+            type("HttpResponseError", (Exception,), {"status_code": 403})("denied"),
+            type("ServiceRequestError", (Exception,), {})("dns for %s" % SECRET),
+        ],
+        ids=["credentials", "auth-403", "network"],
+    )
+    def test_a_contrib_backend_fault_is_not_a_refusal(self, caplog, sdk_exc):
+        """The contrib backends raise their infrastructure faults as UploadError
+        subclasses ("Azure credentials rejected", ...): those name the vendor
+        and stay on the server, logged at ERROR with the traceback."""
+        from djust.contrib.uploads.azure import AzureBlockBlobWriter
+
+        fault = AzureBlockBlobWriter._translate_sdk_exc(sdk_exc)
+
+        class BackendWriter(RecordingWriter):
+            def write_chunk(self, chunk, chunk_index=0):
+                raise fault
+
+        mgr = UploadManager()
+        mgr.configure("doc", accept=".txt", writer=BackendWriter)
+        _register(mgr, "r1")
+        with caplog.at_level(logging.DEBUG, logger="djust.uploads"):
+            assert mgr.add_chunk("r1", 0, b"0123") is None
+        error = mgr.get_entries("doc")[0].error
+        assert error == "Upload writer rejected chunk"
+        assert "Azure" not in error and SECRET not in error
+        errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+        assert errors and errors[0].exc_info is not None
+        assert not [r for r in caplog.records if r.levelno == logging.WARNING]
+
     def test_the_message_is_one_trimmed_line(self):
         class LongRefusal(RecordingWriter):
             def write_chunk(self, chunk, chunk_index=0):
-                raise UploadError("line one\nline two\r\n" + "x" * 500)
+                raise UploadRefused("line one\nline two\r\n" + "x" * 500)
 
         mgr = UploadManager()
         mgr.configure("doc", accept=".txt", writer=LongRefusal)
@@ -218,7 +251,7 @@ class TestWriterRefusal:
     def test_an_empty_message_is_a_fault(self):
         class EmptyRefusal(RecordingWriter):
             def write_chunk(self, chunk, chunk_index=0):
-                raise UploadError("   ")
+                raise UploadRefused("   ")
 
         mgr = UploadManager()
         mgr.configure("doc", accept=".txt", writer=EmptyRefusal)
@@ -243,8 +276,8 @@ class TestTimeoutManager:
         mgr.configure("doc", accept=".txt", writer=RecordingWriter, timeout=30)
         entry = _register(mgr, "r1")
         mgr.add_chunk("r1", 0, b"0123")
-        assert mgr.expire_overdue(now=entry._created_at + 29) == []
-        assert mgr.expire_overdue(now=entry._created_at + 30) == [
+        assert mgr.expire_overdue(now=entry._started + 29) == []
+        assert mgr.expire_overdue(now=entry._started + 30) == [
             ("r1", "Upload timed out after 30 seconds.")
         ]
         assert mgr.get_entries("doc") == []
@@ -257,15 +290,41 @@ class TestTimeoutManager:
         done = _register(mgr, "r1")
         _finish(mgr, "r1")
         _register(mgr, "r2", name="free")
-        assert mgr.expire_overdue(now=done._created_at + 3600) == []
+        assert mgr.expire_overdue(now=done._started + 3600) == []
 
     def test_an_overdue_upload_frees_its_place(self):
         mgr = UploadManager()
         mgr.configure("doc", accept=".txt", max_entries=1, timeout=5)
         entry = _register(mgr, "r1")
         assert _register(mgr, "r2") is None
-        entry._created_at -= 10
+        entry._started -= 10
         assert _register(mgr, "r2") is not None
+
+    def test_a_wall_clock_step_does_not_move_the_deadline(self, monkeypatch):
+        """The deadline runs on the monotonic clock, as the loop's timers do: a
+        wall-clock step neither expires an upload early nor keeps it alive."""
+        import time as _time
+
+        mgr = UploadManager()
+        mgr.configure("doc", accept=".txt", timeout=30)
+        entry = _register(mgr, "r1")
+        real = _time.time()
+        monkeypatch.setattr(_time, "time", lambda: real + 3600)  # set forward
+        assert not mgr.is_overdue("r1")
+        monkeypatch.setattr(_time, "time", lambda: real - 3600)  # set back
+        entry._started -= 31  # 31 s have really passed
+        assert mgr.is_overdue("r1")
+
+    def test_a_failed_upload_drops_its_timer(self):
+        mgr = UploadManager()
+        mgr.configure("doc", accept=".txt", max_file_size=4, timeout=5)
+        _register(mgr, "r1", size=4)
+        handle = MagicMock()
+        mgr.set_deadline_handle("r1", handle)
+        assert mgr.add_chunk("r1", 0, b"too long") is None
+        handle.cancel.assert_called_once_with()
+        assert mgr._deadline_handles == {}
+        assert mgr.remaining("r1") is None
 
     def test_cleanup_and_completion_cancel_the_timer(self):
         mgr = UploadManager()
@@ -314,7 +373,7 @@ async def test_a_frame_for_an_overdue_upload_is_not_applied_and_the_browser_is_t
     )
     mgr = view._upload_manager
     assert "r1" in mgr._deadline_handles
-    mgr._entries["r1"]._created_at -= 10
+    mgr._entries["r1"]._started -= 10
     await consumer._handle_upload_frame_for_view(
         {"type": "chunk", "ref": "r1", "chunk_index": 0, "data": b"0123"}
     )
@@ -327,6 +386,47 @@ async def test_a_frame_for_an_overdue_upload_is_not_applied_and_the_browser_is_t
     }
     assert "r1" not in mgr._entries and "r1" not in EVENTS  # the chunk never reached the writer
     assert mgr._deadline_handles == {}
+
+
+def test_consume_entries_skips_nothing_when_an_entry_goes_meanwhile():
+    mgr = UploadManager()
+    mgr.configure("doc", accept=".txt", max_entries=3)
+    for ref in ("r1", "r2", "r3"):
+        _register(mgr, ref)
+        _finish(mgr, ref)
+    seen = []
+    for entry in mgr.consume_entries("doc"):
+        seen.append(entry.ref)
+        if entry.ref == "r1":
+            mgr.cancel_upload("r1")  # e.g. a deadline turn, or the view itself
+    assert seen == ["r1", "r2", "r3"]
+    assert mgr.get_entries("doc") == []
+
+
+async def test_the_deadline_turn_waits_for_the_render_lock_and_re_arms_when_early():
+    view = _Page()
+    view.allow_upload("doc", accept=".txt", writer=RecordingWriter, timeout=5)
+    consumer = _consumer(view)
+    consumer._render_lock = asyncio.Lock()
+    mgr = view._upload_manager
+    _register(mgr, "r1")
+    item = {"mgr": mgr, "ref": "r1"}
+
+    # Early (time left): nothing expires, a new timer is armed for the rest.
+    await consumer._upload_deadline_turn(item)
+    assert "r1" in mgr._entries and "r1" in mgr._deadline_handles
+
+    # Overdue, but a handler holds the render lock: the turn waits for it.
+    mgr._entries["r1"]._started -= 10
+    await consumer._render_lock.acquire()
+    turn = asyncio.ensure_future(consumer._upload_deadline_turn(item))
+    await asyncio.sleep(0.01)
+    assert not turn.done() and "r1" in mgr._entries
+    consumer._render_lock.release()
+    await turn
+    assert "r1" not in mgr._entries
+    assert consumer.send_json.await_args.args[0]["status"] == "cancelled"
+    mgr.cleanup()
 
 
 # ---------------------------------------------------------------------------
@@ -370,6 +470,7 @@ class LimitsPage(UploadMixin, LiveView):
 
     def mount(self, request, **kwargs):
         self.allow_upload("doc", accept=".txt", writer=RecordingWriter, timeout=0.3)
+        self.allow_upload("slow", accept=".txt", writer=RecordingWriter, timeout=600)
         self.allow_upload("img", accept=".txt", writer=RefusingWriter)
 
     @event_handler
@@ -470,14 +571,15 @@ async def test_socket_stalled_upload_times_out(limits_site):
 async def test_socket_upload_finished_in_time_is_not_cancelled(limits_site):
     page = await sync_to_async(open_live_page)("/t/limits/")
     socket = await page.connect()
-    ref = await _start(socket, "doc")
+    # A long timeout: what this pins is that finishing is not cancelled, not
+    # the timer's precision (the stall test covers the timer).
+    ref = await _start(socket, "slow")
     await socket.communicator.send_to(bytes_data=_chunk(ref, 0, b"0" * 40))
     await socket.communicator.send_to(bytes_data=_complete(ref))
     answer = await socket.receive(("upload_progress",))
     while answer.get("status") == "uploading":
         answer = await socket.receive(("upload_progress",))
     assert answer["status"] == "complete"
-    await asyncio.sleep(0.5)
     await socket.receive_nothing(("upload_progress",), within=0.1)
-    assert ("abort", "TimeoutError") not in EVENTS[ref]
+    assert EVENTS[ref][-1] == "close"
     await socket.disconnect()

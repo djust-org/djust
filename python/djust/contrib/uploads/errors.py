@@ -30,12 +30,12 @@ class UploadError(Exception):
     this taxonomy only narrows the shape so callers can ``except
     UploadCredentialError`` without importing ``botocore``.
 
-    Raised from a writer's ``open()`` / ``write_chunk()`` / ``close()``, it is
-    a refusal (#4118): logged at WARNING without a traceback, and ``message``
-    (only that) is sent to the browser as the upload's error.
+    These are operator faults: the upload manager logs them with a traceback
+    and the browser gets fixed text. A refusal meant for the user is
+    :class:`UploadRefused` (#4118).
 
     Attributes:
-        message: Human-readable, safe-to-log summary, shown to the user. Never contains
+        message: Human-readable, safe-to-log summary. Never contains
             secrets — backends strip credentials / signed URLs before
             populating this. See ``from_sdk_exc`` in each backend.
         sdk_exc: The underlying vendor exception, for debugging. Do not
@@ -50,6 +50,22 @@ class UploadError(Exception):
 
     def __repr__(self) -> str:  # pragma: no cover — trivial
         return f"{type(self).__name__}({self.message!r})"
+
+
+class UploadRefused(UploadError):
+    """A writer's deliberate refusal, whose ``message`` is for the user (#4118).
+
+    Raise it from ``open()``, ``write_chunk()`` or ``close()`` to refuse an
+    upload with a reason the user should see (a size or content policy, a
+    per-user quota). The upload manager logs it at WARNING without a traceback,
+    aborts the writer and sends ``message`` (only that, flattened to one line
+    of at most 200 characters) to the browser as the upload's error. Write it
+    for the user: no bucket names, ARNs, URLs or other internal detail.
+
+    Every other exception, including the other ``UploadError`` subclasses, is
+    a fault: logged at ERROR with its traceback, with fixed text for the
+    browser.
+    """
 
 
 class UploadNetworkError(UploadError):
