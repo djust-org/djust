@@ -33,6 +33,25 @@ SIGTERM uvicorn closes each socket, and the close saves.
 The HTTP fallback is unchanged: each request rebuilds the view from storage
 and saves before it answers.
 
+## What it saves a turn
+
+Measured with `tests/benchmarks/test_explicit_turn_cost_3997.py` (median
+milliseconds per WebSocket turn, 100 rounds, in-process, the `db` session on
+SQLite; a shared 4-CPU machine, so read the ratios, not the digits):
+
+| Shape | Saved before the reply | No automatic save | Interval set |
+|-------|-----------------------:|------------------:|-------------:|
+| counter | 5.2 | 3.5 | 3.4 |
+| dashboard | 7.9 | 5.0 | 5.0 |
+| table, 500 rows | 26.6 | 17.3 | 18.6 |
+
+With an interval set, a turn costs about what a turn with no automatic save
+costs: the save was 30 to 38 per cent of the turn. What remains is the
+exposure and render work (#3997 measured the turn without the save; that is
+the cost still to cut). The gain is the same for any interval above 0: the
+value only decides how much a killed process can lose and how often a busy
+connection writes (at most once per interval).
+
 ## Turns that are always saved before their reply
 
 - every turn of a view with a declared `persist="server"` or
@@ -164,8 +183,22 @@ What it does not catch:
   can even put its own token back, so that the NEWER holder is refused next.
   With real threads racing 300 times per engine this happened (roughly, it
   varies by run): `cache` 0, `file` 9 to 22, `cached_db` 42 to 46, `db` on
-  SQLite 32 to 38. On `db` and `cached_db` with a database that locks rows
-  (PostgreSQL, MySQL) the check runs under the row lock.
+  SQLite 32 to 38. With the writer paused on purpose between its read and its
+  write, it lands every time on SQLite (`db` and `cached_db`).
+- On `db` and `cached_db` with a database that locks rows, the read is
+  `SELECT ... FOR UPDATE` inside the save's transaction, so the newer
+  holder's save waits for the late one and is written after it. Measured on
+  PostgreSQL 16 with the same paused writer: in the database, 0 late writes
+  in 300 rounds, for `db` and for `cached_db`; the newer save waited out the
+  pause each time (`python/djust/tests/test_holder_fence_row_lock_4164.py`,
+  run with `DJUST_PG_RACE_DATABASE` set). MySQL (InnoDB) takes the same
+  `FOR UPDATE` path but has not been run.
+- `cached_db` writes its cache after the transaction, outside the lock, so a
+  slow cache never holds the row. The late writer's cache write can then land
+  after the newer one's, and the cache keeps the older copy until its next
+  write or expiry, while the database is right. Seen once in 600 PostgreSQL
+  rounds with the writer paused before its write; every time when the cache
+  write itself is delayed.
 
 ## When the page is told
 
