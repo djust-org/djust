@@ -317,7 +317,10 @@ def test_all_change_detection_paths_share_one_fingerprint():
     rust_bridge = modules[-1]
     for module in modules:
         src = inspect.getsource(module)
-        assert "deep_fingerprint(" in src, f"{module.__name__} must use deep_fingerprint"
+        # ``deep_digest`` is ``deep_fingerprint`` plus the digest kept (#3998).
+        assert "deep_fingerprint(" in src or "deep_digest(" in src, (
+            f"{module.__name__} must use deep_fingerprint"
+        )
     assert "_prev_context_containers" not in inspect.getsource(rust_bridge), (
         "rust_bridge must not keep an aliased container for value comparison (#1039)"
     )

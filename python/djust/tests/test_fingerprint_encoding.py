@@ -17,7 +17,9 @@ here over the same values, in one process, and compared:
 * the budget runs out at the same node;
 * a fingerprint taken before an in-place change does not change with it, per
   shape, and is not equal to one taken after;
-* ``share_structure`` returns an equal fingerprint built from the other's rows.
+* the 16-byte digest a view keeps in place of a fingerprint (``fingerprint_digest``)
+  is equal for two values exactly when their fingerprints are, over the same
+  corpus and sweep (the one finer case, ``0.0`` against ``-0.0``, is named).
 
 Nothing here reads a clock or a resident size: sizes are ``sys.getsizeof``
 sums over the tuples.
@@ -35,7 +37,7 @@ from typing import Any, List
 import pytest
 
 from djust import _per_turn, change_detection
-from djust.change_detection import deep_fingerprint, share_structure
+from djust.change_detection import deep_digest, deep_fingerprint, fingerprint_digest
 from djust.state_pass import fingerprint_and_convert
 from djust.tests import _per_turn_harness as harness
 from djust.tests import _view_memory
@@ -283,7 +285,7 @@ def test_a_captured_fingerprint_does_not_follow_a_later_change(
     assert after != captured, "the change is invisible to the fingerprint"
 
 
-# --- one tree where there were two ----------------------------------------------------
+# --- a digest where there was a tree (#3998) ------------------------------------------
 
 
 def _rows(n: int) -> List[Any]:
@@ -292,70 +294,150 @@ def _rows(n: int) -> List[Any]:
     ]
 
 
-def test_share_structure_returns_an_equal_fingerprint_made_of_the_held_rows():
-    held_rows = _rows(50)
-    held = deep_fingerprint(held_rows)[0]
-    rows = copy.deepcopy(held_rows)
-    rows[7]["name"] += "!"
-    fresh = deep_fingerprint(rows)[0]
-    shared = share_structure(fresh, held)
-    assert shared == fresh and shared != held
-    same_object = [a is b for a, b in zip(shared[1], held[1])]
-    assert same_object.count(False) == 1 and not same_object[7]
-    assert all(a is not b for a, b in zip(fresh[1], held[1]))
+def _signed_zero_only(a: Any, b: Any) -> bool:
+    """Do fingerprints *a* and *b* differ only in the sign of a zero?"""
+    return repr(a).replace("-0.0", "0.0") == repr(b).replace("-0.0", "0.0") and repr(a) != repr(b)
 
 
-def test_share_structure_reaches_the_lists_inside_a_dict():
-    board = {"todo": _rows(10), "done": _rows(10)}
-    held = deep_fingerprint(board)[0]
-    board["done"][3]["qty"] += 1
-    fresh = deep_fingerprint(board)[0]
-    shared = share_structure(fresh, held)
-    assert shared == fresh
-    # flat dict items: key, value, key, value
-    assert shared[1][1] is held[1][1], "the untouched column is the held object"
-    assert shared[1][3] is not held[1][3]
-    assert sum(a is b for a, b in zip(shared[1][3][1], held[1][3][1])) == 9
+def _digest_disagreements(values: List[Any]) -> List[Any]:
+    fingerprints = [deep_fingerprint(value)[0] for value in values]
+    digests = [fingerprint_digest(fp) for fp in fingerprints]
+    out = []
+    for i, j in itertools.combinations(range(len(values)), 2):
+        same_fp = fingerprints[i] == fingerprints[j]
+        same_digest = digests[i] == digests[j]
+        if same_digest and not same_fp:
+            out.append(("MISSED CHANGE", values[i], values[j]))
+        elif (
+            same_fp and not same_digest and not _signed_zero_only(fingerprints[i], fingerprints[j])
+        ):
+            out.append(("extra render", values[i], values[j]))
+    return out
 
 
-@pytest.mark.parametrize(
-    "change",
-    [
-        lambda rows: rows.insert(0, {"id": -1}),
-        lambda rows: rows.pop(),
-        lambda rows: rows.clear(),
-        lambda rows: rows.reverse(),
-        lambda rows: rows.__setitem__(0, "a row that became a string"),
-        lambda rows: rows.__setitem__(0, [1, 2]),
-        lambda rows: None,
-    ],
-)
-def test_share_structure_never_changes_what_a_fingerprint_is_equal_to(change):
-    held_rows = _rows(12)
-    held = deep_fingerprint(held_rows)[0]
-    rows = copy.deepcopy(held_rows)
-    change(rows)
-    fresh = deep_fingerprint(rows)[0]
-    frozen = copy.deepcopy(fresh)
-    shared = share_structure(fresh, held)
-    assert shared == frozen
-    assert fresh == frozen, "the fingerprint passed in was changed"
-    assert held == deep_fingerprint(held_rows)[0], "the held fingerprint was changed"
+@pytest.mark.parametrize("encoding", ["compact", "wide"])
+def test_the_digest_is_equal_exactly_when_the_fingerprint_is(monkeypatch, encoding):
+    """The corpus built to collide: ``1`` / ``True`` / ``1.0`` / ``"1"`` /
+    ``b"1"``, a dict against the flat list of its items, a ``str`` subclass,
+    an ``IntEnum``, sets, values spelled like the tags. A digest that is equal
+    where the fingerprints differ would skip a render; that never happens. The
+    other way round only ``0.0`` / ``-0.0`` (equal floats that render
+    differently), where the digest is the more exact of the two."""
+    off = () if encoding == "compact" else ("compact_fingerprints",)
+    with harness.shortcuts(monkeypatch, *off):
+        values = corpus()
+        assert _digest_disagreements(values) == []
+        digests = {fingerprint_digest(deep_fingerprint(value)[0]) for value in values}
+    # Not vacuous: the corpus has equal pairs, and most are different.
+    assert 1 < len(digests) < len(values)
+    assert fingerprint_digest(deep_fingerprint([0.0])[0]) != fingerprint_digest(
+        deep_fingerprint([-0.0])[0]
+    )
 
 
-@pytest.mark.parametrize("other", [None, object(), "text", 5, ("x", 1), ("L", "not a tuple")])
-def test_share_structure_leaves_a_fingerprint_alone_beside_anything_else(other):
-    fresh = deep_fingerprint(_rows(3))[0]
-    assert share_structure(fresh, other) is fresh
-    assert share_structure(other, fresh) is other
+def test_generated_values_have_equal_digests_exactly_when_equal_fingerprints():
+    rng = random.Random(39980)
+    values = [_random_value(rng) for _ in range(400)]
+    assert _digest_disagreements(values) == []
 
 
-def test_a_list_against_a_tuple_of_the_same_rows_shares_nothing():
-    rows = _rows(4)
-    as_list = deep_fingerprint(rows)[0]
-    as_tuple = deep_fingerprint(tuple(rows))[0]
-    assert as_list != as_tuple
-    assert share_structure(as_list, as_tuple) is as_list
+def test_a_digest_is_sixteen_bytes_whatever_the_size_of_the_value():
+    for value in ([], _rows(1), _rows(1000), {"rows": _rows(200), "title": "x" * 10_000}):
+        digest, truncated = deep_digest(value)
+        assert not truncated
+        assert type(digest) is bytes and len(digest) == change_detection.DIGEST_SIZE == 16
+
+
+def test_a_truncated_value_has_no_digest_and_equals_nothing():
+    rows = _rows(50)
+    first, truncated = deep_digest(rows, budget=10)
+    second, _ = deep_digest(rows, budget=10)
+    assert truncated
+    assert type(first) is not bytes and first != second
+
+
+@pytest.mark.parametrize("label,make,mutate", SHAPES, ids=[shape[0] for shape in SHAPES])
+def test_a_kept_digest_sees_every_in_place_change(label, make, mutate):
+    """#1039 for the digest: what the socket keeps is bytes, so a later
+    in-place edit cannot reach it, and the next digest differs."""
+    value = make()
+    kept, _ = deep_digest(value)
+    frozen = bytes(kept)
+    mutate(value)
+    after, _ = deep_digest(value)
+    assert kept == frozen
+    assert after != kept, label
+
+
+def test_a_kept_digest_sees_a_change_deep_in_nested_containers():
+    board = {"columns": {"todo": _rows(20), "done": _rows(20)}, "meta": ({"n": [1, [2, [3]]]},)}
+    kept, _ = deep_digest(board)
+    board["meta"][0]["n"][1][1].append(4)
+    assert deep_digest(board)[0] != kept
+    kept, _ = deep_digest(board)
+    board["columns"]["done"][19]["tags"][1] = "moved"
+    assert deep_digest(board)[0] != kept
+    kept, _ = deep_digest(board)
+    board["columns"]["todo"], board["columns"]["done"] = (
+        board["columns"]["done"],
+        board["columns"]["todo"],
+    )
+    assert deep_digest(board)[0] != kept
+    # Equal content built again from scratch: the same digest.
+    assert deep_digest(copy.deepcopy(board))[0] == deep_digest(board)[0]
+
+
+def test_two_equal_sets_have_one_digest_whatever_their_history():
+    """A set's iteration order follows its insertions and deletions; its
+    fingerprint (and so its digest) must follow only its members."""
+    grown = set()
+    for i in range(200):
+        grown.add(f"k{i}")
+    for i in range(0, 200, 3):
+        grown.discard(f"k{i}")
+    fresh = {f"k{i}" for i in reversed(range(200)) if i % 3}
+    assert grown == fresh
+    assert deep_fingerprint(grown)[0] == deep_fingerprint(fresh)[0]
+    assert deep_digest(grown)[0] == deep_digest(fresh)[0]
+
+
+def test_a_subclass_with_its_own_repr_cannot_hide_a_change():
+    """The digest hashes ``repr``; a ``str`` subclass whose ``repr`` is a
+    constant must still be told apart by value."""
+
+    class Opaque(str):
+        def __repr__(self) -> str:
+            return "Opaque()"
+
+    class Same(int):
+        def __repr__(self) -> str:
+            return "0"
+
+        def __eq__(self, other: object) -> bool:
+            return True
+
+        __hash__ = int.__hash__
+
+    assert deep_digest([Opaque("a")])[0] != deep_digest([Opaque("b")])[0]
+    assert deep_digest({"n": Same(1)})[0] != deep_digest({"n": Same(2)})[0]
+    assert deep_digest([Opaque("a")])[0] != deep_digest(["a"])[0]
+
+
+def test_a_model_instance_and_a_queryset_are_kept_by_identity():
+    """What the comparison did for a model or a queryset (``id()``, the
+    Phoenix contract) is what the digest does: reassigning one is a change,
+    and the same object is not."""
+    from django.contrib.auth.models import User
+
+    first = User(username="a")
+    second = User(username="a")
+    kept, _ = deep_digest([first])
+    assert deep_digest([first])[0] == kept
+    assert deep_digest([second])[0] != kept
+    queryset = User.objects.none()
+    kept, _ = deep_digest({"qs": queryset})
+    assert deep_digest({"qs": queryset})[0] == kept
+    assert deep_digest({"qs": User.objects.none()})[0] != kept
 
 
 # --- what it saves --------------------------------------------------------------------

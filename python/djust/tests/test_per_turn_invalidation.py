@@ -650,8 +650,10 @@ class TestRequestScopedChanges:
 
 
 def _leaves_are_values(fingerprints: Dict[str, Any]) -> bool:
-    """A fingerprint tree holds tags, types and exact scalar values: no object."""
-    allowed = (str, int, float, bool, type(None), type)
+    """A fingerprint tree holds tags, types and exact scalar values: no object.
+
+    What is kept is a digest of one (``bytes``, #3998), which holds less still."""
+    allowed = (str, int, float, bool, type(None), type, bytes)
 
     def walk(node: Any) -> bool:
         if isinstance(node, tuple):

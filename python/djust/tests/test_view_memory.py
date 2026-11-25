@@ -14,7 +14,9 @@ bytes to most objects, and the published numbers are stated for 3.12.
 * the attribution: every owner, for a counter, a 50 KB static page, a
   1,000-row list, 20 components and a form;
 * the reductions, each against the same view with its switch turned off
-  (``_per_turn``): the compact fingerprint and the one shared tree;
+  (``_per_turn``): the digest kept in place of the fingerprint trees, and the
+  compact encoding of the trees that are still built within a turn;
+* the ceilings: what one view of a 100 KB page may hold;
 * what is shared between two users' sockets (the template source text, and
   nothing that holds a value of either user), and what a change made outside
   a turn does to a fingerprint the socket kept;
@@ -143,40 +145,45 @@ def fingerprints(report: Dict[str, int]) -> int:
     return report["py.dirty_baseline"] + report["py.context_fingerprints"]
 
 
-async def test_the_fingerprints_of_a_list_are_a_seventh_of_what_they_were(monkeypatch):
-    """Both reductions together, on the issue's shape: the rows changed once
-    since mount, so the baseline and the last render differ by one row."""
+async def test_the_fingerprints_of_a_list_are_two_digests_not_two_trees(monkeypatch):
+    """The issue's shape (#3998): the rows changed once since mount, so the
+    baseline and the last render differ by one row. Kept as trees, each is
+    nearly the size of the rows; kept as digests, both are a constant."""
     view_class = scenarios.row_list(500)
-    before = await with_switch_off(
-        monkeypatch, view_class, ("touch", None), "compact_fingerprints", "shared_fingerprints"
-    )
+    trees = await with_switch_off(monkeypatch, view_class, ("touch", None), "digest_fingerprints")
     after = await measured(view_class, ("touch", None))
-    assert fingerprints(after) * 6 < fingerprints(before)
-    # Two equal trees before, each larger than the rows themselves (the issue).
-    assert 0.9 < before["py.dirty_baseline"] / before["py.context_fingerprints"] < 1.1
-    assert before["py.dirty_baseline"] > 2 * before["py.state"]
+    # Two equal-sized trees, together larger than the rows themselves.
+    assert 0.9 < trees["py.dirty_baseline"] / trees["py.context_fingerprints"] < 1.1
+    assert fingerprints(trees) > 1.5 * trees["py.state"]
+    # Digests: a few entries of a few dozen bytes, whatever the rows.
+    assert fingerprints(after) < 2 * KB, fingerprints(after)
+    assert fingerprints(trees) > 100 * fingerprints(after)
     # Nothing else moved.
     for owner in vm.OWNERS:
         if owner not in ("py.dirty_baseline", "py.context_fingerprints"):
-            assert after[owner] == pytest.approx(before[owner], rel=0.01, abs=64), owner
+            assert after[owner] == pytest.approx(trees[owner], rel=0.01, abs=64), owner
 
 
-async def test_compact_alone_and_shared_alone(monkeypatch):
+async def test_the_compact_encoding_still_shrinks_the_trees_a_turn_builds(monkeypatch):
+    """With digests kept, the encoding no longer changes what the socket holds;
+    it still sizes the trees each turn builds and drops, which the switch off
+    shows by keeping them."""
     view_class = scenarios.row_list(500)
-    neither = await with_switch_off(
-        monkeypatch, view_class, ("touch", None), "compact_fingerprints", "shared_fingerprints"
+    wide_trees = await with_switch_off(
+        monkeypatch, view_class, ("touch", None), "compact_fingerprints", "digest_fingerprints"
     )
-    wide = await with_switch_off(monkeypatch, view_class, ("touch", None), "compact_fingerprints")
-    apart = await with_switch_off(monkeypatch, view_class, ("touch", None), "shared_fingerprints")
+    compact_trees = await with_switch_off(
+        monkeypatch, view_class, ("touch", None), "digest_fingerprints"
+    )
+    wide_digests = await with_switch_off(
+        monkeypatch, view_class, ("touch", None), "compact_fingerprints"
+    )
     both = await measured(view_class, ("touch", None))
-    # Shared, still wide: one wide tree. Compact, not shared: two compact trees.
-    assert fingerprints(wide) < 0.55 * fingerprints(neither)
-    assert fingerprints(apart) < 0.34 * fingerprints(neither)
-    assert fingerprints(both) < 0.55 * fingerprints(apart)
-    assert fingerprints(both) < 0.34 * fingerprints(wide)
+    assert fingerprints(compact_trees) < 0.4 * fingerprints(wide_trees)
+    assert fingerprints(wide_digests) == fingerprints(both)
 
 
-async def test_an_unchanged_list_is_one_tree_and_the_same_object(monkeypatch):
+async def test_an_unchanged_list_keeps_an_equal_digest(monkeypatch):
     recorded = vm.Recorded()
     key = await harness.new_session_key_async()
     with harness.ws_settings(scenarios.MODULE):
@@ -187,17 +194,16 @@ async def test_an_unchanged_list_is_one_tree_and_the_same_object(monkeypatch):
                 await harness.event(comm, "retitle")
                 baseline = view._dirty_baseline["items"]
                 held = view._prev_context_fingerprints["items"]
-                assert baseline[0] == "c" and baseline[2] is held
+                assert baseline[0] == "c" and baseline[2] == held
+                assert type(held) is bytes and len(held) == 16
             await harness.event(comm, "touch")
             baseline = view._dirty_baseline["items"]
             held = view._prev_context_fingerprints["items"]
-            assert baseline[2] is not held and baseline[2] != held
-            same = [a is b for a, b in zip(held[1], baseline[2][1])]
-            assert same.count(False) == 1 and not same[0], "all rows but the changed one"
+            assert type(held) is bytes and baseline[2] != held
             assert "items" in view.changed_fields and view.is_dirty
-            # mark_clean takes a new baseline: equal to the held one, so it IS it.
+            # mark_clean takes a new baseline: the digest of the rows as they are.
             view.mark_clean()
-            assert view._dirty_baseline["items"][2] is view._prev_context_fingerprints["items"]
+            assert view._dirty_baseline["items"][2] == view._prev_context_fingerprints["items"]
             assert "items" not in view.changed_fields
         finally:
             await comm.disconnect()
@@ -205,8 +211,8 @@ async def test_an_unchanged_list_is_one_tree_and_the_same_object(monkeypatch):
 
 async def test_a_baseline_taken_mid_turn_is_of_the_state_as_it_is_now():
     """``mark_clean()`` in a handler runs before the turn's render, so the
-    fingerprint the last render left describes the rows BEFORE the handler
-    changed them. The new baseline takes that object only when it is equal."""
+    digest the last render left describes the rows BEFORE the handler changed
+    them. The new baseline is of the rows as they are."""
     recorded = vm.Recorded()
     key = await harness.new_session_key_async()
     with harness.ws_settings(scenarios.MODULE):
@@ -217,13 +223,47 @@ async def test_a_baseline_taken_mid_turn_is_of_the_state_as_it_is_now():
             stale = view._prev_context_fingerprints["items"]
             view.items[0]["name"] = "changed, then saved"
             view.mark_clean()
-            assert view._dirty_baseline["items"][2] is not stale
             assert view._dirty_baseline["items"][2] != stale
             assert "items" not in view.changed_fields
             view.items[0]["name"] = "changed again"
             assert "items" in view.changed_fields
         finally:
             await comm.disconnect()
+
+
+# --- the ceilings (#3998) -------------------------------------------------------------
+
+#: What one connected view of a ~100 KB page may hold, all owners, Python
+#: side as CPython 3.12 sizes it, in bytes (the guide's MB are 10**6 bytes).
+#: The guide and the 2.0 acceptance matrix state the same numbers.
+CEILING_MARKUP_100KB = 2_000_000
+#: A ~100 KB page that is a dense table of rows held in state: the Rust tree
+#: and the Rust copy of the rows are most of it (the guide's table). This
+#: misses the 2 MB first proposed in #3998; it is the ceiling in force.
+CEILING_TABLE_100KB = 4_500_000
+#: What change detection keeps, whatever the size of the state.
+CEILING_FINGERPRINTS = 4 * KB
+
+
+async def test_a_view_of_a_100_kb_page_retains_under_2_mb():
+    report = await measured(scenarios.static_page(100), ("inc", None))
+    assert 100_000 < report["page_bytes"] < 110_000, report["page_bytes"]
+    assert report["total"] < CEILING_MARKUP_100KB, report["total"]
+
+
+async def test_a_view_of_a_100_kb_table_retains_under_its_ceiling():
+    """880 rows render a ~100 KB table. Under the ceiling, and of what it
+    holds, change detection keeps a constant."""
+    report = await measured(scenarios.row_list(880), ("touch", None))
+    assert 95_000 < report["page_bytes"] < 105_000, report["page_bytes"]
+    assert report["total"] < CEILING_TABLE_100KB, report["total"]
+    assert fingerprints(report) < CEILING_FINGERPRINTS, fingerprints(report)
+
+
+async def test_change_detection_keeps_a_constant_whatever_the_rows():
+    small = await measured(scenarios.row_list(125), ("touch", None))
+    large = await measured(scenarios.row_list(1000), ("touch", None))
+    assert fingerprints(small) == fingerprints(large) < CEILING_FINGERPRINTS
 
 
 # --- a change made outside a turn, per shape ------------------------------------------
@@ -273,10 +313,9 @@ async def test_a_change_between_turns_reaches_the_next_frame(monkeypatch, switch
     """A timer, a signal handler or a careless helper changes state while no
     turn is running. The next turn's snapshots are both taken after it, so the
     only thing that can see it is the fingerprint the socket kept from the
-    last render. That fingerprint is now built from the baseline's rows, so
-    this is where a shared tree that followed the state would show: the frame
-    would be missing the change."""
-    off = () if switches == "on" else ("compact_fingerprints", "shared_fingerprints")
+    last render, now a digest: a digest that missed an in-place change, or
+    that matched the baseline's, would show here as a frame missing it."""
+    off = () if switches == "on" else ("compact_fingerprints", "digest_fingerprints")
     recorded = vm.Recorded()
     key = await harness.new_session_key_async()
     with harness.shortcuts(monkeypatch, *off), harness.ws_settings(scenarios.MODULE):
@@ -411,13 +450,13 @@ async def test_a_list_costs_a_fixed_number_of_bytes_per_row():
     rows, reports = await row_series()
     intercept, slope, worst = vm.fit(rows, [r["total"] for r in reports])
     assert worst < 0.03, (worst, [r["total"] for r in reports])
-    for owner in ("rust.vdom", "rust.state", "py.state", "py.dirty_baseline"):
+    for owner in ("rust.vdom", "rust.state", "py.state"):
         _i, _s, owner_worst = vm.fit(rows, [r[owner] for r in reports])
         assert owner_worst < 0.03, (owner, owner_worst)
-    # The second tree does not grow with the rows any more: one row and a
-    # tuple of references (8 bytes a row).
-    _i, per_row, _w = vm.fit(rows, [r["py.context_fingerprints"] for r in reports])
-    assert per_row < 16, per_row
+    # Change detection does not grow with the rows at all (#3998): a digest.
+    for owner in ("py.dirty_baseline", "py.context_fingerprints"):
+        _i, per_row, _w = vm.fit(rows, [r[owner] for r in reports])
+        assert abs(per_row) < 1, (owner, per_row)
 
 
 # --- the published model --------------------------------------------------------------

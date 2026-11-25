@@ -32,7 +32,7 @@ from .._accumulating_containers import view_accumulating_container_ids
 from ..change_detection import (
     deep_fingerprint,
     fingerprints_by_content,
-    share_structure,
+    retained_fingerprint,
     warn_fingerprint_truncated,
 )
 from ..serialization import holds_form, normalize_django_value
@@ -469,8 +469,9 @@ def _request_scoped_fingerprint(key: str, value: Any) -> Tuple[bool, Any, Any]:
       it is never reported as a changed key (#1786).
     * otherwise the value is plain data that ``update_state`` stores. When it is
       made only of exact builtin containers and exact leaf types (what
-      ``state_pass`` converts), ``fingerprint`` is its structural fingerprint,
-      which holds values and no reference to the object, and ``converted`` is
+      ``state_pass`` converts), ``fingerprint`` is what is kept of its
+      structural fingerprint (``retained_fingerprint``: a digest, #3998),
+      which holds no reference to the object, and ``converted`` is
       the ``(safe paths, rendered value)`` pair of the same walk. A value of any
       other type that still counts as serialisable (a ``SimpleLazyObject`` over
       a string, a ``str`` subclass, an ``IntEnum``) gets ``_NO_FINGERPRINT``:
@@ -492,34 +493,8 @@ def _request_scoped_fingerprint(key: str, value: Any) -> Tuple[bool, Any, Any]:
         return False, _NO_FINGERPRINT, None
     if truncated:
         # An incomplete fingerprint cannot prove equality: equal to nothing.
-        fingerprint = object()
-    return False, fingerprint, converted
-
-
-def _reuse_fingerprint(fp: Any, held: Any, baseline_entry: Any) -> Tuple[Any, bool]:
-    """``(fingerprint to store, is it unchanged since the last sync)`` (#3998).
-
-    One tree per attribute, not two or three. A fingerprint is an immutable
-    value that shares nothing with the state, so an EQUAL one can stand in
-    for it:
-
-    * *held* is what the last sync stored for the key (``_MISSING`` if
-      nothing). Equal: the key is unchanged and keeps the object it had, so
-      the caller's comparison is this one and does not run again.
-    * otherwise *baseline_entry* is the dirty baseline's entry for the
-      attribute of the same name (``("c", id, fingerprint)`` for a
-      container). Equal: the baseline's object is stored. Not equal: the new
-      fingerprint is rebuilt from the baseline's rows wherever those are
-      equal (``share_structure``), so one changed row costs one row.
-
-    Never returns a fingerprint that is not equal to *fp*.
-    """
-    if held is not _MISSING and held == fp:
-        return held, True
-    if type(baseline_entry) is tuple and len(baseline_entry) == 3 and baseline_entry[0] == "c":
-        base = baseline_entry[2]
-        return (base if base == fp else share_structure(fp, base)), False
-    return fp, False
+        return False, object(), converted
+    return False, retained_fingerprint(fingerprint), converted
 
 
 def _trusted_request_scoped_fingerprints(view: Any, prev_refs: Any) -> Optional[Dict[str, Any]]:
@@ -1509,8 +1484,9 @@ class RustBridgeMixin:
             # `completed_count = sum(...)` that change without their source
             # name appearing in `_changed_keys`.
             prev_immutables = getattr(self, "_prev_context_immutables", {})
-            # Structural fingerprints of the previous render's containers
-            # (#2664). Computed at most once per key per sync (compare + store).
+            # What the previous render kept of its containers' structural
+            # fingerprints (#2664): a 16-byte digest each (#3998). Computed at
+            # most once per key per sync (compare + store).
             prev_fps = getattr(self, "_prev_context_fingerprints", {})
             new_fps: Dict[str, Any] = {}
             # Safe-key paths + rendered value of a key whose fingerprint was
@@ -1528,16 +1504,9 @@ class RustBridgeMixin:
             def _is_structural(value: Any) -> bool:
                 return isinstance(value, (dict, list, tuple)) or fingerprints_by_content(value)
 
-            share_fps = _per_turn.on("shared_fingerprints")
-            fp_same: Set[str] = set()
-            dirty_baseline = (self.__dict__.get("_dirty_baseline") or {}) if share_fps else {}
-
             def _fp_differs(key: str, value: Any) -> bool:
                 """Did *key*'s fingerprint change since the last sync?"""
-                fp = _fp_of(key, value)
-                if share_fps:
-                    return key not in fp_same
-                return bool(prev_fps.get(key, _MISSING) != fp)
+                return bool(prev_fps.get(key, _MISSING) != _fp_of(key, value))
 
             def _fp_of(key: str, value: Any, convert: bool = False) -> Any:
                 fp = new_fps.get(key, _MISSING)
@@ -1551,15 +1520,12 @@ class RustBridgeMixin:
                     if truncated:
                         # An incomplete fingerprint cannot prove equality.
                         fp = object()
-                    elif share_fps:
-                        fp, same = _reuse_fingerprint(
-                            fp, prev_fps.get(key, _MISSING), dirty_baseline.get(key)
-                        )
-                        if same:
-                            fp_same.add(key)
-                    new_fps[key] = fp
-                    if truncated:
                         warn_fingerprint_truncated(type(self), key, value)
+                    else:
+                        # The tree is dropped here; the digest is what is
+                        # compared and kept (#3998).
+                        fp = retained_fingerprint(fp)
+                    new_fps[key] = fp
                 return fp
 
             # _force_full_html: bypass ALL change tracking and send everything.
