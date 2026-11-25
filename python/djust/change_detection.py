@@ -46,6 +46,7 @@ from __future__ import annotations
 import hashlib
 import marshal
 import weakref
+from math import copysign as _copysign
 from typing import Any, Dict, Hashable, List, Optional, Tuple
 
 from . import _per_turn
@@ -154,7 +155,11 @@ def _tagged_scalar(value: Any) -> Hashable:
     """
     t = type(value)
     if t in _EXACT_SCALARS:
-        return (_TAG_VALUE, _TYPE_CODE[t], value)
+        return (
+            _TAG_VALUE,
+            _TYPE_CODE[t] if value or t is not float or _copysign(1.0, value) > 0 else _NEG_ZERO,
+            value,
+        )
     base: Any
     if issubclass(t, str):
         base = str.__str__(value)
@@ -162,6 +167,9 @@ def _tagged_scalar(value: Any) -> Hashable:
         base = bytes.__getitem__(value, slice(None))
     elif issubclass(t, float):
         base = float.__float__(value)
+        if not base and _copysign(1.0, base) < 0:
+            # Distinct from the same subclass's 0.0 (see ``_NEG_ZERO``).
+            return (_TAG_VALUE, "%s.%s-" % (t.__module__, t.__qualname__), base)
     elif issubclass(t, int):
         base = int.__int__(value)
     else:
@@ -213,7 +221,11 @@ def deep_fingerprint(
             plain.append(True)
         if budget < 1:
             return (_TAG_TRUNCATED, id(value)), True
-        return (_TAG_VALUE, _TYPE_CODE[t], value), False
+        return (
+            _TAG_VALUE,
+            _TYPE_CODE[t] if value or t is not float or _copysign(1.0, value) > 0 else _NEG_ZERO,
+            value,
+        ), False
     counter: List[Any] = [budget, _BARE if _per_turn.on("compact_fingerprints") else _NO_BARE]
     if plain is not None:
         counter.append(True)
@@ -249,11 +261,11 @@ def fingerprint_digest(fp: Hashable) -> bytes:
     encodings, so equal digests mean equal fingerprints, but for a hash
     collision.
 
-    Two equal fingerprints can still have different digests, which costs one
-    extra sync and never a missed change: ``0.0`` / ``-0.0`` (equal as floats,
-    but they render differently, so the digest is the more exact of the two),
-    and two distinct NaN objects, which a tuple comparison calls unequal
-    (identity) and the digest calls equal; NaN renders the same either way.
+    A fingerprint comparison and a digest comparison can still disagree on
+    two distinct NaN objects (a tuple comparison calls them unequal, the
+    digest equal); NaN renders the same either way, so that costs at most one
+    extra sync, never a missed change. ``-0.0`` has its own leaf code
+    (``_NEG_ZERO``), so it differs from ``0.0`` in both.
     """
     return hashlib.blake2b(_encode(fp), digest_size=DIGEST_SIZE).digest()
 
@@ -360,6 +372,12 @@ _EXACT_SCALARS = frozenset(_IMMUTABLE_LEAVES)
 #: never equals a code.
 _TYPE_CODE = {str: "s", int: "n", float: "f", bool: "b", bytes: "y", type(None): "0"}
 
+#: The code of a ``-0.0`` leaf (#4325). ``0.0 == -0.0``, but the two render
+#: differently, so a tree comparison must not call them equal: the per-row
+#: pick of a list delta compares row trees, and with one code for both it
+#: kept Rust's old ``0.0`` after a handler stored ``-0.0``.
+_NEG_ZERO = "f-"
+
 #: The compact encoding (#3998). A fingerprint tree is built several times per
 #: turn (the event snapshot, the Rust sync, dirty tracking), so its size is
 #: allocation per turn; with ``digest_fingerprints`` off it is also what a
@@ -407,7 +425,17 @@ def _walk(value: Any, counter: List[Any], depth: int, path_ids: Tuple[int, ...])
         counter[0] -= 1
         if counter[0] < 0:
             return (_TAG_TRUNCATED, id(value))
-        return value if t in bare else (_TAG_VALUE, _TYPE_CODE[t], value)
+        return (
+            value
+            if t in bare
+            else (
+                _TAG_VALUE,
+                _TYPE_CODE[t]
+                if value or t is not float or _copysign(1.0, value) > 0
+                else _NEG_ZERO,
+                value,
+            )
+        )
     if t is not dict and t is not list and t is not tuple:
         return _walk_general(value, counter, depth, path_ids)
     counter[0] -= 1
@@ -427,7 +455,17 @@ def _walk(value: Any, counter: List[Any], depth: int, path_ids: Tuple[int, ...])
             tk = type(k)
             if tk in _EXACT_SCALARS:
                 counter[0] -= 1
-                kf: Hashable = k if tk in bare else (_TAG_VALUE, _TYPE_CODE[tk], k)
+                kf: Hashable = (
+                    k
+                    if tk in bare
+                    else (
+                        _TAG_VALUE,
+                        _TYPE_CODE[tk]
+                        if k or tk is not float or _copysign(1.0, k) > 0
+                        else _NEG_ZERO,
+                        k,
+                    )
+                )
             else:
                 kf = _walk(k, counter, child_depth, inner)
             if counter[0] < 0:
@@ -435,7 +473,17 @@ def _walk(value: Any, counter: List[Any], depth: int, path_ids: Tuple[int, ...])
             tv = type(v)
             if tv in _EXACT_SCALARS:
                 counter[0] -= 1
-                vf: Hashable = v if tv in bare else (_TAG_VALUE, _TYPE_CODE[tv], v)
+                vf: Hashable = (
+                    v
+                    if tv in bare
+                    else (
+                        _TAG_VALUE,
+                        _TYPE_CODE[tv]
+                        if v or tv is not float or _copysign(1.0, v) > 0
+                        else _NEG_ZERO,
+                        v,
+                    )
+                )
             else:
                 vf = _walk(v, counter, child_depth, inner)
             if counter[0] < 0:
@@ -452,7 +500,15 @@ def _walk(value: Any, counter: List[Any], depth: int, path_ids: Tuple[int, ...])
             counter[0] -= 1
             if counter[0] < 0:
                 return (_TAG_TRUNCATED, vid)
-            append(v if tv in bare else (_TAG_VALUE, _TYPE_CODE[tv], v))
+            append(
+                v
+                if tv in bare
+                else (
+                    _TAG_VALUE,
+                    _TYPE_CODE[tv] if v or tv is not float or _copysign(1.0, v) > 0 else _NEG_ZERO,
+                    v,
+                )
+            )
         else:
             append(_walk(v, counter, child_depth, inner))
             if counter[0] < 0:

@@ -1398,6 +1398,34 @@ class LateGrid(Grid):
         self.rows[2]["label"] = "early " + value
 
 
+class SignedZeros(LiveView):
+    """Rows whose floats go from ``0.0`` to ``-0.0`` (#4325 review): equal as
+    floats, different on the page."""
+
+    __module__ = MODULE
+    exposure_policy = "explicit"
+    template = (
+        "<div dj-root><ul>{% for r in rows %}"
+        '<li id="r{{ r.id }}">{{ r.v }}|{{ r.n.v }}|{{ r.label }}</li>'
+        "{% endfor %}</ul></div>"
+    )
+    rows = state(default_factory=list)
+
+    def mount(self, request, **kwargs):
+        self.rows = [{"id": i, "v": 0.0, "n": {"v": 0.0}, "label": "r%d" % i} for i in range(20)]
+
+    def _get_context_processors(self):
+        return []
+
+    @event_handler()
+    def flip(self, nested: bool = False, **kwargs):
+        if nested:
+            self.rows[0]["n"]["v"] = -0.0
+        else:
+            self.rows[0]["v"] = -0.0
+        self.rows[1]["label"] = "changed"
+
+
 async def _grid_run(view_class: type, events: List[Any], monkeypatch: Any, *off: str):
     """Frames for *events*, the page HTML Rust holds after them, and the counts."""
     with monkeypatch.context() as spies:
@@ -1438,6 +1466,14 @@ class TestListItemDeltas:
         assert now[2]["update_state_items.rows"] == 2
         assert off[2].get("update_state_items.calls", 0) == 0
         assert now[2]["update_state.bytes"] < off[2]["update_state.bytes"]
+
+    @pytest.mark.parametrize("nested", [False, True], ids=["field", "nested"])
+    async def test_a_float_turned_negative_zero_is_a_row_change(self, monkeypatch, nested):
+        """``-0.0 == 0.0``, but it renders ``-0.0``: the row holding it must
+        be sent too, or Rust keeps ``0.0`` (#4325 review)."""
+        now, _off = await self._both(SignedZeros, [("flip", {"nested": nested})], monkeypatch)
+        assert "-0.0" in now[1]
+        assert now[2]["update_state_items.rows"] == 2
 
     async def test_a_replaced_row_object_is_a_row_change(self, monkeypatch):
         now, _off = await self._both(Grid, [("replace_row", {"i": 7, "label": "s"})], monkeypatch)
