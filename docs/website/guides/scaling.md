@@ -165,9 +165,9 @@ Two shortcuts that follow from it:
 | Python: the view's state | 11,588 | 11,544 | 398,326 | 29,324 | 18,602 |
 | Python: change-detection fingerprints | 1,298 | 1,298 | 369,964 | 9,750 | 3,682 |
 | Python: recovery HTML | 116 | 53,007 | 112,919 | 1,993 | 312 |
-| Python: view and consumer, everything else | 25,246 | 25,099 | 35,016 | 24,275 | 26,083 |
+| Python: view and consumer, everything else | 25,246 | 25,099 | 35,016 | 29,400 | 26,083 |
 | Rust: everything else | 3,251 | 3,251 | 3,251 | 5,489 | 3,251 |
-| **Total** | **45 KB** | **0.77 MB** | **5.2 MB** | **120 KB** | **60 KB** |
+| **Total** | **45 KB** | **0.77 MB** | **5.2 MB** | **125 KB** | **60 KB** |
 
 Read it this way:
 
