@@ -146,12 +146,28 @@ def is_internal_path(path: str) -> bool:
     )
 
 
+#: A relation's ``all`` read only for its length (``groups.all.__len__``,
+#: ``djust_templates::parser::LENGTH_PATH``, #3862 item 3).
+LENGTH_PATH = "__len__"
+
+
+def _public_path(path: str) -> str:
+    """``path`` as the template spells the read (#3862): a length read is a read of
+    the ``all`` (``groups.all``), and an index the serializers keep to slice by
+    (``groups.all.0.name``) names the same field as before (``groups.all.name``)."""
+    if path.endswith("." + LENGTH_PATH):
+        path = path[: -len(LENGTH_PATH) - 1]
+    if any(part.isdigit() for part in path.split(".")):
+        path = ".".join(part for part in path.split(".") if not part.isdigit())
+    return path
+
+
 def public_template_paths(found: Optional[dict]) -> Dict[str, List[str]]:
     """The extraction map with the JIT's internal paths taken out, for every reader
     that wants the names and paths a template reads (``template_paths``,
     ``djust_audit``). Every name stays, the ``"*"`` wildcard included."""
     return {
-        name: [path for path in paths if not is_internal_path(path)]
+        name: sorted({_public_path(path) for path in paths if not is_internal_path(path)})
         for name, paths in (found or {}).items()
     }
 

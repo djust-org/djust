@@ -3118,13 +3118,110 @@ pub fn extract_template_variables(
 /// chokepoint every producer flows through, so the for-loop transfer and the
 /// tag-operand walk cannot drift from it (#1646).
 fn settle_paths(paths: &mut Vec<String>) {
-    drop_index_segments(paths);
+    settle_index_segments(paths);
     // After the index segments are gone, so that `rows.0.items` and
     // `rows.items` are the same iterable when a key is matched to it.
     resolve_item_key_paths(paths);
+    // Before the whole reads: a length read the rows are read beside settles
+    // into the plain list path, which those rules then see (#3862).
+    resolve_length_reads(paths);
     resolve_whole_reads(paths);
     paths.sort();
     paths.dedup();
+}
+
+/// [`drop_index_segments`], except for an index read off a related manager's
+/// `all` that is ONLY ever read by index (#3862 item 1).
+///
+/// `{{ u.groups.all.0.name }}` reads one row. Erased to `groups.all.name` it
+/// was the same path as `{% for g in u.groups.all %}{{ g.name }}`, so the
+/// serializers built every row of the relation for one name. Kept, the path
+/// `groups.all.0.name` tells them to read `all()[:1]` (a `LIMIT`, or a slice of
+/// a prefetched cache), and the largest index read is the slice's bound.
+///
+/// The index is kept only where it is the WHOLE story of that `all`: every path
+/// through it reads an index and then a field of the row there. Any other read
+/// of the same `all` (a loop over it, `|length`, `.count`, an item key, or the
+/// indexed row printed whole, `{{ u.groups.all.0 }}`) needs the rows as a list,
+/// and a list and an indexed read cannot share one path-tree node, so the
+/// index is dropped there as before. Not for an `all` read straight off the
+/// root (`{{ qs.all.0.name }}`): a top-level QuerySet's own `all` is answered
+/// from its serialized rows (#4270), which already are the list.
+fn settle_index_segments(paths: &mut Vec<String>) {
+    // Every index that does not directly follow a relation's `all` goes, as
+    // before; the ones that do are candidates.
+    let after_all = |segments: &[&str], at: usize| {
+        at >= 2 && segments[at - 1] == "all" && is_index_segment(segments[at])
+    };
+    for path in paths.iter_mut() {
+        if !path.split('.').any(is_index_segment) {
+            continue;
+        }
+        let segments: Vec<&str> = path.split('.').collect();
+        *path = segments
+            .iter()
+            .enumerate()
+            .filter(|(at, segment)| !is_index_segment(segment) || after_all(&segments, *at))
+            .map(|(_, segment)| *segment)
+            .collect::<Vec<_>>()
+            .join(".");
+    }
+    paths.retain(|path| !path.is_empty());
+    // Drop the candidates a non-indexed read of the same `all` refuses, until
+    // none is left: dropping an outer index can merge an inner `all` with
+    // another read of it.
+    loop {
+        let mut refused: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for path in paths.iter() {
+            let segments: Vec<&str> = path.split('.').collect();
+            for at in 0..segments.len() {
+                if !after_all(&segments, at) {
+                    continue;
+                }
+                let prefix = segments[..at].join(".");
+                if paths
+                    .iter()
+                    .any(|other| reads_all_unindexed(other, &prefix))
+                {
+                    refused.insert(prefix);
+                }
+            }
+        }
+        if refused.is_empty() {
+            return;
+        }
+        for path in paths.iter_mut() {
+            let segments: Vec<&str> = path.split('.').collect();
+            let rebuilt: Vec<&str> = segments
+                .iter()
+                .enumerate()
+                .filter(|(at, _)| {
+                    !(after_all(&segments, *at) && refused.contains(&segments[..*at].join(".")))
+                })
+                .map(|(_, segment)| *segment)
+                .collect();
+            if rebuilt.len() != segments.len() {
+                *path = rebuilt.join(".");
+            }
+        }
+    }
+}
+
+/// Does `path` read the `all` at `prefix` other than as "an index, then a field
+/// of the row there"? (See [`settle_index_segments`].)
+fn reads_all_unindexed(path: &str, prefix: &str) -> bool {
+    if path == prefix {
+        return true;
+    }
+    let Some(rest) = path
+        .strip_prefix(prefix)
+        .and_then(|rest| rest.strip_prefix('.'))
+    else {
+        return false;
+    };
+    let mut segments = rest.split('.');
+    let indexed = segments.next().is_some_and(is_index_segment);
+    !indexed || segments.next().is_none()
 }
 
 fn drop_index_segments(paths: &mut Vec<String>) {
@@ -3591,8 +3688,22 @@ fn extract_from_nodes(
         match node {
             Node::Located { nodes, .. } => extract_from_nodes(nodes, variables),
             Node::Variable(var_expr, filters, _in_attr) => {
-                // Extract from variable: {{ variable.path }}
-                extract_from_operand(var_expr, variables);
+                // Extract from variable: {{ variable.path }}. A relation's
+                // `all` piped straight into `length` is read for its row count
+                // only (#3862 item 3).
+                let head = var_expr.trim();
+                if filters.first().is_some_and(|(name, _)| name == "length")
+                    && is_relation_all_head(head)
+                {
+                    let mut local = std::collections::HashMap::new();
+                    extract_from_operand(head, &mut local);
+                    file_length_read(head, &mut local);
+                    for (root, paths) in local {
+                        variables.entry(root).or_default().extend(paths);
+                    }
+                } else {
+                    extract_from_operand(var_expr, variables);
+                }
                 // Extract from filter args: {{ a|default:fallback }} — `fallback`
                 // must be tracked as a dependency too, otherwise a nested
                 // {% if %}{{ x|default:dynamic }}{% endif %} silently drops
@@ -4311,14 +4422,30 @@ const ITERATED_MARK_STR: &str = "\u{4}";
 /// time (`dictsort:key`, #3910). Followed by the context VARIABLE that names it.
 const WHOLE_ROW_MARK: char = '\u{5}';
 
+/// A related manager's `all` is read for its LENGTH or truthiness only
+/// (`{{ u.groups.all|length }}`, `{% if u.groups.all %}`, #3862 item 3).
+/// Settled by [`resolve_length_reads`].
+const LENGTH_READ_MARK: char = '\u{6}';
+const LENGTH_READ_MARK_STR: &str = "\u{6}";
+
 /// Every mark this extractor files in the path channel; none is a path.
-const PATH_MARKS: [char; 5] = [
+const PATH_MARKS: [char; 6] = [
     ITEM_KEY_MARK,
     WHOLE_READ_MARK,
     ITEM_WHOLE_MARK,
     ITERATED_MARK,
     WHOLE_ROW_MARK,
+    LENGTH_READ_MARK,
 ];
+
+/// The path a related manager's `all` files when the template reads only how
+/// many rows it has (`groups.all.__len__`, #3862 item 3). The serializers
+/// (`serialize_queryset`, the Python codegen) answer it with a list of that
+/// many `None`s, counted by the QuerySet (`count()`, which a prefetched cache
+/// answers without a query), so no row is built into text: `str(row)` per row
+/// was the cost, and a `__str__` that reads a relation ran a query per row.
+/// Never an attribute read.
+pub const LENGTH_PATH: &str = "__len__";
 
 /// The path a row's TEXT is read through: a row read whole AND by field is
 /// serialized with `__str__` beside its fields, the key a serialized model
@@ -4512,6 +4639,88 @@ fn resolve_whole_reads(paths: &mut Vec<String>) {
     *paths = plain;
 }
 
+/// Settle the length reads in one root's paths (see [`LENGTH_READ_MARK`]).
+///
+/// A length read of `P` (`P` ends in `all`) becomes `P.__len__` ([`LENGTH_PATH`])
+/// when nothing else reads `P`: no loop over it, no field of its rows, no
+/// method of it, no item key. Otherwise the rows are serialized anyway and the
+/// list they make answers `|length` and `{% if %}` as well, so the read is the
+/// plain path `P` it always was.
+fn resolve_length_reads(paths: &mut Vec<String>) {
+    if !paths.iter().any(|path| path.ends_with(LENGTH_READ_MARK)) {
+        return;
+    }
+    let (marked, mut rest): (Vec<String>, Vec<String>) = std::mem::take(paths)
+        .into_iter()
+        .partition(|path| path.ends_with(LENGTH_READ_MARK));
+    let mut settled = Vec::with_capacity(marked.len());
+    for path in &marked {
+        // `groups.all.<mark>`: the prefix keeps its trailing dot.
+        let prefix = &path[..path.len() - LENGTH_READ_MARK.len_utf8()];
+        let Some(list) = prefix.strip_suffix('.') else {
+            continue;
+        };
+        let read_otherwise = rest
+            .iter()
+            .any(|other| other == list || other.starts_with(prefix));
+        settled.push(if read_otherwise {
+            list.to_string()
+        } else {
+            format!("{prefix}{LENGTH_PATH}")
+        });
+    }
+    rest.extend(settled);
+    *paths = rest;
+}
+
+/// Is `head` a relation's `all` read off a value (`u.groups.all`): three or
+/// more plain name segments, the last `all`? Only such a read is a candidate
+/// for [`LENGTH_READ_MARK`]: a top-level QuerySet's own `all` (`qs.all`) is
+/// answered from its serialized rows (#4270).
+fn is_relation_all_head(head: &str) -> bool {
+    let segments: Vec<&str> = head.split('.').collect();
+    segments.len() >= 3
+        && segments.last() == Some(&"all")
+        && segments.iter().all(|segment| {
+            !segment.is_empty()
+                && (is_index_segment(segment)
+                    || (!segment.starts_with('_')
+                        && segment.chars().all(|c| c.is_alphanumeric() || c == '_')))
+        })
+        && !is_index_segment(segments[0])
+}
+
+/// The tokens [`extract_from_expression`] reads names from.
+fn condition_tokens(expr: &str) -> Vec<&str> {
+    expr.split(|c: char| c.is_whitespace() || "()[]{}=!<>&+-*/%,".contains(c))
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// Does a condition only TEST its operands (`and` / `or` / `not`), so that a
+/// bare operand is read for its truthiness? A comparison, `in` or `is` reads
+/// the value itself. Conservative: any `=`, `<`, `>` or `!` anywhere, quoted or
+/// not, says no.
+fn condition_tests_truthiness_only(expr: &str) -> bool {
+    !expr.contains(['=', '<', '>', '!'])
+        && !expr
+            .split(|c: char| c.is_whitespace() || c == '(' || c == ')')
+            .any(|word| word == "in" || word == "is")
+}
+
+/// File a length read of `head` in place of the plain read of it that
+/// [`extract_from_operand`] filed into `local` (one occurrence).
+fn file_length_read(head: &str, local: &mut std::collections::HashMap<String, Vec<String>>) {
+    if let Some((root, path)) = head.split_once('.') {
+        if let Some(paths) = local.get_mut(root) {
+            if let Some(at) = paths.iter().position(|p| p == path) {
+                paths.remove(at);
+            }
+        }
+    }
+    record_marked_read(head, LENGTH_READ_MARK_STR, local);
+}
+
 /// Settle the item-key reads in one root's paths (see [`ITEM_KEY_MARK`]).
 ///
 /// A key is kept only when the same iterable's items are read by field
@@ -4556,6 +4765,25 @@ fn extract_from_condition(
 ) {
     let mut local = std::collections::HashMap::new();
     extract_from_expression(expr, &mut local);
+    // `{% if u.groups.all %}` and `{% if u.groups.all|length > 1 %}` read how
+    // many rows there are, not the rows (#3862 item 3).
+    let truthiness_only = condition_tests_truthiness_only(expr);
+    for token in condition_tokens(expr) {
+        let parts = crate::filter_lexer::split_pipes(token);
+        let Some(head) = parts.first().map(|part| part.trim()) else {
+            continue;
+        };
+        if !is_relation_all_head(head) {
+            continue;
+        }
+        let length_read = match parts.get(1) {
+            None => truthiness_only,
+            Some(spec) => crate::filter_lexer::scan_filter_spec(spec.trim()).0 == "length",
+        };
+        if length_read {
+            file_length_read(head, &mut local);
+        }
+    }
     merge_without_whole_reads(local, variables);
 }
 
@@ -4590,12 +4818,7 @@ fn extract_from_expression(
     // half was entered as a context name spelled `default:b` while the real
     // dependency `b` was never recorded at all. Keeping the operand whole lets
     // `extract_from_operand` split it the way the RENDERER does.
-    let tokens: Vec<&str> = expr
-        .split(|c: char| c.is_whitespace() || "()[]{}=!<>&+-*/%,".contains(c))
-        .filter(|s| !s.is_empty())
-        .collect();
-
-    for token in tokens {
+    for token in condition_tokens(expr) {
         // Check if this looks like a variable path (contains dots)
         if token.contains('.') && !token.starts_with('"') && !token.starts_with('\'') {
             extract_from_operand(token, variables);
@@ -8069,5 +8292,147 @@ mod own_reads_tests_4258 {
                 "content_type.model"
             ]))
         );
+    }
+
+    // #3862 item 1: an index read off a relation's `all` survives extraction
+    // when every read of that `all` is an index and then a field of the row.
+    #[test]
+    fn an_index_off_a_relation_all_survives_when_it_is_the_only_read_3862() {
+        let t = "{% for u in users %}{{ u.groups.all.0.name }}{% endfor %}";
+        assert_eq!(full_paths(t, "users"), strs(&["groups.all.0.name"]));
+        assert_eq!(
+            full_paths("{{ u.groups.all.0.name }}{{ u.groups.all.2.id }}", "u"),
+            strs(&["groups.all.0.name", "groups.all.2.id"])
+        );
+        // Reached through a list index and a container: only the `all` index stays.
+        assert_eq!(
+            full_paths("{{ d.users.0.groups.all.1.name }}", "d"),
+            strs(&["users.groups.all.1.name"])
+        );
+        // A nested relation's `all`, both indexed.
+        assert_eq!(
+            full_paths("{{ u.groups.all.0.permissions.all.1.codename }}", "u"),
+            strs(&["groups.all.0.permissions.all.1.codename"])
+        );
+    }
+
+    #[test]
+    fn an_index_off_a_relation_all_is_dropped_beside_any_other_read_3862() {
+        // A loop over the same `all` needs every row: the index goes, as before.
+        assert_eq!(
+            full_paths(
+                "{{ u.groups.all.0.name }}{% for g in u.groups.all %}{{ g.id }}{% endfor %}",
+                "u"
+            ),
+            strs(&["groups.all", "groups.all.id", "groups.all.name"])
+        );
+        // The row at the index printed whole.
+        assert_eq!(
+            full_paths("{{ u.groups.all.0 }}{{ u.groups.all.0.name }}", "u"),
+            strs(&["groups.all", "groups.all.name"])
+        );
+        assert_eq!(
+            full_paths("{{ u.groups.all.0 }}", "u"),
+            strs(&["groups.all"])
+        );
+        // A method or a length read of the same `all`.
+        assert_eq!(
+            full_paths("{{ u.groups.all.0.name }}{{ u.groups.all.count }}", "u"),
+            strs(&["groups.all.count", "groups.all.name"])
+        );
+        assert_eq!(
+            full_paths("{{ u.groups.all.0.name }}{{ u.groups.all|length }}", "u"),
+            strs(&["groups.all", "groups.all.name"])
+        );
+        // An index that does not follow `all`, or a top-level `all`, is dropped.
+        assert_eq!(full_paths("{{ rows.0.name }}", "rows"), strs(&["name"]));
+        assert_eq!(full_paths("{{ qs.all.0.name }}", "qs"), strs(&["all.name"]));
+        // An outer index refused, the inner one merged with a loop is refused too.
+        assert_eq!(
+            full_paths(
+                "{{ u.a.all.0.b.all.1.c }}{% for x in u.a.all %}{% for y in x.b.all %}{{ y.d }}{% endfor %}{% endfor %}",
+                "u"
+            ),
+            strs(&["a.all", "a.all.b.all", "a.all.b.all.c", "a.all.b.all.d"])
+        );
+    }
+
+    // #3862 item 3: a relation's `all` read only for its length or truthiness.
+    #[test]
+    fn a_length_only_read_of_a_relation_all_files_the_length_path_3862() {
+        for t in [
+            "{% for u in users %}{{ u.groups.all|length }}{% endfor %}",
+            "{% for u in users %}{% if u.groups.all %}Y{% endif %}{% endfor %}",
+            "{% for u in users %}{% if not u.groups.all %}N{% endif %}{% endfor %}",
+            "{% for u in users %}{% if u.groups.all and u.is_active %}Y{% endif %}{% endfor %}",
+            "{% for u in users %}{% if u.groups.all|length > 1 %}Y{% endif %}{% endfor %}",
+            "{% for u in users %}{{ u.groups.all|length|add:1 }}{% endfor %}",
+        ] {
+            let paths = full_paths(t, "users");
+            assert!(
+                paths.contains(&"groups.all.__len__".to_string())
+                    && !paths.contains(&"groups.all".to_string()),
+                "{t}: {paths:?}"
+            );
+        }
+        assert_eq!(
+            full_paths(
+                "{% if u.groups.all %}{{ u.groups.all|length }}{% endif %}",
+                "u"
+            ),
+            strs(&["groups.all.__len__"])
+        );
+        // Through a container.
+        assert_eq!(
+            full_paths(
+                "{% for x in d.users %}{{ x.groups.all|length }}{% endfor %}",
+                "d"
+            ),
+            strs(&["users", "users.groups.all.__len__"])
+        );
+    }
+
+    #[test]
+    fn a_length_read_beside_a_row_read_stays_the_plain_list_3862() {
+        // The rows are serialized anyway: the list answers `|length` too.
+        for (t, want) in [
+            (
+                "{{ u.groups.all|length }}{% for g in u.groups.all %}{{ g }}{% endfor %}",
+                vec!["groups.all"],
+            ),
+            (
+                "{% if u.groups.all %}{% for g in u.groups.all %}{{ g.name }}{% endfor %}{% endif %}",
+                vec!["groups.all", "groups.all.name"],
+            ),
+            (
+                "{{ u.groups.all|length }}{{ u.groups.all.count }}",
+                vec!["groups.all", "groups.all.count"],
+            ),
+            ("{{ u.groups.all|length }}{{ u.groups.all|join:',' }}", vec!["groups.all"]),
+        ] {
+            assert_eq!(full_paths(t, "u"), strs(&want), "{t}");
+        }
+        // Not a length read: the rows (or their text) are read.
+        for t in [
+            "{{ u.groups.all|join:',' }}",
+            "{{ u.groups.all|first }}",
+            "{% if g in u.groups.all %}Y{% endif %}",
+            "{% if u.groups.all == x %}Y{% endif %}",
+            "{% if u.groups.all|first %}Y{% endif %}",
+            "{{ u.groups.all }}",
+        ] {
+            let paths = full_paths(t, "u");
+            assert!(paths.contains(&"groups.all".to_string()), "{t}: {paths:?}");
+            assert!(
+                !paths.iter().any(|p| p.contains("__len__")),
+                "{t}: {paths:?}"
+            );
+        }
+        // A top-level QuerySet's own `all` (two segments) is left alone.
+        assert_eq!(full_paths("{{ qs.all|length }}", "qs"), strs(&["all"]));
+        // The mark never reaches the item-key or own-read maps as a mark.
+        let t = "{{ u.groups.all|length }}";
+        assert!(extract_item_key_only_reads(t).unwrap().is_empty());
+        assert_eq!(paths(t, "u"), Some(strs(&["groups.all.__len__"])));
     }
 }

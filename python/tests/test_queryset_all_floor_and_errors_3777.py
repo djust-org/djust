@@ -408,10 +408,15 @@ class _HolderOf:
 
 
 class TestPlainDataRowsAreKept3777:
-    @pytest.mark.parametrize("paths", [["m.all.x"], ["m.all.0.x"]], ids=["object", "indexed"])
-    def test_dict_rows_keep_their_data(self, paths) -> None:
+    @pytest.mark.parametrize(
+        ("paths", "rows"),
+        [(["m.all.x"], 2), (["m.all.1.x"], 2), (["m.all.0.x"], 1)],
+        ids=["object", "indexed", "indexed-slice"],
+    )
+    def test_dict_rows_keep_their_data(self, paths, rows) -> None:
+        # An indexed read is ``all()[:index + 1]`` (#3862 item 1).
         out = _rust.serialize_queryset([_HolderOf([{"x": 1}, {"x": 2}])], paths)
-        assert out[0]["m"]["all"] == [{"x": 1}, {"x": 2}]
+        assert out[0]["m"]["all"] == [{"x": 1}, {"x": 2}][:rows]
 
     def test_list_and_tuple_rows_keep_their_data(self) -> None:
         out = _rust.serialize_queryset([_HolderOf([[1, 2], (3, 4)])], ["m.all.x"])

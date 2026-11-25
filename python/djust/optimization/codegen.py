@@ -192,6 +192,21 @@ ALL_WHOLE_KEY = "__djust_whole__"
 #: is ``ROW_TEXT_KEY`` in ``serialize_object_with_paths``.
 ROW_TEXT_KEY = "__str__"
 
+#: The path a template reads only the LENGTH of a relation's ``all`` through
+#: (``groups.all.__len__``: ``{{ u.groups.all|length }}``, ``{% if u.groups.all %}``,
+#: #3862 item 3). The extractor files it (``djust_templates::parser::LENGTH_PATH``)
+#: and the ``all`` ships as that many ``None``s (:func:`all_length_placeholders`).
+#: Never an attribute read. The Rust twin is ``LENGTH_KEY``.
+LENGTH_KEY = "__len__"
+
+#: The key an ``all`` node read only by index (``groups.all.0.name``, #3862 item 1)
+#: holds its slice bound under: one past the largest index read, an ``int``, not a
+#: subtree. Set by :func:`_build_path_tree`; never an attribute read.
+ALL_UPTO_KEY = "__djust_upto__"
+
+#: Path-tree keys that are markers, never attribute names.
+_TREE_MARKERS = ("__list_item__", ALL_WHOLE_KEY, ROW_TEXT_KEY, LENGTH_KEY, ALL_UPTO_KEY)
+
 
 def add_row_text(value: Any, row: Dict[str, Any]) -> None:
     """Give *row* what a serialized model carries for a whole read (#3911).
@@ -274,23 +289,67 @@ def capped_all_rows(rows: Any) -> Any:
         window = rows
     taken = list(itertools.islice(window, cap + 1))
     if len(taken) > cap:
-        logger.warning(
-            "A related manager's .all read by the queryset serializer has more than %s rows; "
-            "only the first %s are sent. Raise LIVEVIEW_CONFIG['queryset_all_row_cap'] "
-            "(0 disables it), read .count / .first / .exists, or paginate.",
-            cap,
-            cap,
-        )
+        _warn_rows_capped(cap)
         del taken[cap:]
     return taken
 
 
+def _warn_rows_capped(cap: int) -> None:
+    logger.warning(
+        "A related manager's .all read by the queryset serializer has more than %s rows; "
+        "only the first %s are sent. Raise LIVEVIEW_CONFIG['queryset_all_row_cap'] "
+        "(0 disables it), read .count / .first / .exists, or paginate.",
+        cap,
+        cap,
+    )
+
+
+def all_rows_upto(queryset: Any, upto: int) -> List[Any]:
+    """The rows ``all()[:upto]`` yields, for an ``all`` the template reads only by
+    index (``{{ u.groups.all.0.name }}``, #3862 item 1).
+
+    A SQL ``LIMIT`` on an unevaluated QuerySet, a slice of the result cache on a
+    prefetched one: the cost is the index read, not the relation. Never past the
+    row cap, and nothing is logged, since no row past ``upto`` is read. The Rust
+    twin is ``called_all_rows_upto``.
+    """
+    cap = all_row_cap()
+    bound = upto if cap is None else min(upto, cap)
+    try:
+        window = queryset[:bound]
+    except TypeError:
+        window = queryset
+    return list(itertools.islice(window, bound))
+
+
+def all_length_placeholders(queryset: Any) -> List[None]:
+    """``[None] * n`` for an ``all`` read only for its length or truthiness (#3862 item 3).
+
+    ``n`` is the QuerySet's ``count()``, which a prefetched relation answers from
+    its cache with no query, so no row is turned into text (``str(row)`` per row
+    was the cost, and a ``__str__`` that reads a relation ran a query per row).
+    Bounded by the row cap like every other ``all`` read. An ``all`` that is not a
+    QuerySet is counted by its rows. The Rust twin is ``all_length_placeholders``.
+    """
+    from django.db.models import QuerySet
+
+    if isinstance(queryset, QuerySet):
+        count = queryset.count()
+    else:
+        count = len(capped_all_rows(queryset))
+    cap = all_row_cap()
+    if cap is not None and count > cap:
+        _warn_rows_capped(cap)
+        count = cap
+    return [None] * count
+
+
 def tree_names(tree: Dict[str, Any]) -> List[str]:
     """The attribute names a path tree node asks for (no markers)."""
-    return [name for name in tree if name not in ("__list_item__", ALL_WHOLE_KEY, ROW_TEXT_KEY)]
+    return [name for name in tree if name not in _TREE_MARKERS]
 
 
-def all_methods_value(queryset: Any, subtree: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def all_methods_value(queryset: Any, subtree: Dict[str, Any]) -> Optional[Any]:
     """``{"count": 2, "exists": True, "first": {...}}`` for an ``all`` the template
     reads ONLY through QuerySet methods -- ``u.groups.all.count``,
     ``.all.first.name``, ``.all.exists`` -- or ``None`` when it reads rows (#3788).
@@ -306,8 +365,22 @@ def all_methods_value(queryset: Any, subtree: Dict[str, Any]) -> Optional[Dict[s
     ``all`` itself does, and a ``first`` / ``last`` row goes through the
     serialization gate. The Rust twin is ``serialize_all_methods`` in
     ``crates/djust_live/src/lib.rs``.
+
+    Two other shapes are answered here too, as lists (#3862): an ``all`` read only
+    for its length (:data:`LENGTH_KEY`) and one read only by index
+    (:data:`ALL_UPTO_KEY`).
     """
     from django.db.models import QuerySet
+
+    # The two shapes the extractor files for an ``all`` that is not read as rows
+    # (#3862): its length only, and rows read only by index.
+    if set(subtree) == {LENGTH_KEY}:
+        return all_length_placeholders(queryset)
+    if "__list_item__" in subtree and isinstance(subtree.get(ALL_UPTO_KEY), int):
+        item_tree = subtree["__list_item__"]
+        return [
+            take_by_tree(row, item_tree) for row in all_rows_upto(queryset, subtree[ALL_UPTO_KEY])
+        ]
 
     names = tree_names(subtree)
     if (
@@ -613,6 +686,10 @@ def _build_path_tree(paths: List[str]) -> Dict:
 
                 if "__list_item__" not in current[part]:
                     current[part]["__list_item__"] = {}
+                if part == "all":
+                    # A relation's ``all`` read by index: the slice bound (#3862).
+                    upto = int(parts[i + 1]) + 1
+                    current[part][ALL_UPTO_KEY] = max(current[part].get(ALL_UPTO_KEY, 0), upto)
 
                 # Skip the numeric index and continue with remaining parts
                 current = current[part]["__list_item__"]
@@ -768,7 +845,7 @@ def _generate_nested_access(
         lines.append(_gate_line(indent, gate_var, obj_var, gateable))
 
     for attr_name, subtree in tree.items():
-        if attr_name == ALL_WHOLE_KEY:
+        if attr_name in (ALL_WHOLE_KEY, LENGTH_KEY, ALL_UPTO_KEY):
             continue
         if attr_name == ROW_TEXT_KEY:
             _row_text_line(lines, indent, obj_var, _build_dict_path(result_var, current_path))
@@ -827,8 +904,9 @@ def _generate_nested_access(
         )
 
         if subtree:
-            # Check if subtree contains list iteration marker
-            if "__list_item__" in subtree:
+            # Check if subtree contains list iteration marker. A relation's
+            # ``all`` read by index is the ``all`` branch's (#3862).
+            if "__list_item__" in subtree and attr_name != "all":
                 # This is a list/queryset attribute - handle specially
                 dict_path = _build_dict_path(result_var, current_path)
                 lines.append(f"{ind}    # List iteration for {attr_name}")
@@ -880,7 +958,7 @@ def _generate_nested_access(
                     lines.append(_gate_line(indent + 5, all_gate, list_var, all_names))
 
                 for nested_attr, nested_subtree in subtree.items():
-                    if nested_attr == ALL_WHOLE_KEY:
+                    if nested_attr in ("__list_item__", ALL_WHOLE_KEY, LENGTH_KEY, ALL_UPTO_KEY):
                         continue
                     _generate_nested_access(
                         lines,

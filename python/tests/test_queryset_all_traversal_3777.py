@@ -204,13 +204,17 @@ class TestSerializeQuerysetKeepsTheRows3777:
         ]
 
     def test_an_indexed_all_path_is_a_list_of_row_dicts(self, world) -> None:
-        """The List arm: ``serialize_queryset`` is public, and a caller's path
-        may spell the step with an index. The template extractor never emits
-        one for ``u.groups.all.0.name`` (it extracts ``groups.all.name``;
-        measured), so only a direct call reaches this arm — which is why the
-        template cases above cannot pin it (a gate-off of the arm left them
-        green)."""
+        """The List arm: a path that spells the step with an index. Since #3862
+        the extractor keeps the index for ``u.groups.all.0.name`` (when nothing
+        else reads that ``all``), and the arm reads ``all()[:index + 1]``: the
+        rows up to the largest index named, in the relation's order."""
         out = _rust.serialize_queryset(list(User.objects.order_by("pk")), ["groups.all.0.name"])
+        assert [[g["name"] for g in row["groups"]["all"]] for row in out] == [
+            ["staff"],
+            ["staff"],
+            [],
+        ]
+        out = _rust.serialize_queryset(list(User.objects.order_by("pk")), ["groups.all.1.name"])
         assert [[g["name"] for g in row["groups"]["all"]] for row in out] == [
             ["staff", "ops"],
             ["staff"],

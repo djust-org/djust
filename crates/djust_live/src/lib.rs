@@ -4741,7 +4741,10 @@ impl RenderEnvPy {
 enum PathNode {
     Leaf,
     Object(std::collections::HashMap<String, PathNode>),
-    List(std::collections::HashMap<String, PathNode>),
+    /// The item paths, and one past the largest index any path names: a
+    /// related manager's `all` read only by index is read as `all()[:upto]`
+    /// (#3862 item 1).
+    List(std::collections::HashMap<String, PathNode>, usize),
 }
 
 /// Convert serde_json::Value to Python object using PyO3
@@ -5236,14 +5239,16 @@ fn build_field_tree(paths: &[String]) -> std::collections::HashMap<String, PathN
             let part = parts[i];
 
             // Check if next part is numeric index (list access)
-            if i + 1 < parts.len() && parts[i + 1].parse::<usize>().is_ok() {
+            if let Some(index) = parts.get(i + 1).and_then(|next| next.parse::<usize>().ok()) {
+                let upto = index.saturating_add(1);
                 // This is a list attribute
                 let entry = current
                     .entry(part.to_string())
-                    .or_insert_with(|| PathNode::List(HashMap::new()));
+                    .or_insert_with(|| PathNode::List(HashMap::new(), upto));
 
                 match entry {
-                    PathNode::List(nested_map) => {
+                    PathNode::List(nested_map, bound) => {
+                        *bound = (*bound).max(upto);
                         // Skip the numeric index and continue with remaining parts
                         i += 2;
                         if i < parts.len() {
@@ -5260,8 +5265,8 @@ fn build_field_tree(paths: &[String]) -> std::collections::HashMap<String, PathN
                     }
                     PathNode::Leaf => {
                         // Convert Leaf to List (handles case where 'active_leases' was inserted before 'active_leases.0.property.name')
-                        *entry = PathNode::List(HashMap::new());
-                        if let PathNode::List(nested_map) = entry {
+                        *entry = PathNode::List(HashMap::new(), upto);
+                        if let PathNode::List(nested_map, _) = entry {
                             // Skip the numeric index and continue with remaining parts
                             i += 2;
                             if i < parts.len() {
@@ -5381,7 +5386,7 @@ fn gated_names(
     let names: Vec<&str> = tree
         .keys()
         .map(|k| k.as_str())
-        .filter(|k| *k != WHOLE_MARK && *k != ROW_TEXT_KEY)
+        .filter(|k| *k != WHOLE_MARK && *k != ROW_TEXT_KEY && *k != LENGTH_KEY)
         .collect();
     permitted_among(py, obj, &names, gate)
 }
@@ -5530,16 +5535,82 @@ fn warn_rows_capped(py: Python<'_>, cap: usize) {
     drop(logged);
 }
 
-/// `None` when the call guard refused; an empty list for a swallowed error.
-fn called_all_rows<'py>(
+/// The rows `all()[:upto]` yields, for an `all` the template reads only by
+/// index (`{{ u.groups.all.0.name }}`, #3862 item 1): a SQL `LIMIT` on an
+/// unevaluated QuerySet, a slice of the result cache on a prefetched one, so
+/// the cost is the index read, not the relation. Never past the row cap, and
+/// nothing is logged: the template reads no row past `upto`. `None` when the
+/// call guard refused; errors as in [`call_all`].
+fn called_all_rows_upto<'py>(
     value: &Bound<'py, PyAny>,
+    upto: usize,
     cap: Option<usize>,
 ) -> PyResult<Option<Vec<Bound<'py, PyAny>>>> {
-    match call_all(value)? {
-        CalledAll::Refused => Ok(None),
-        CalledAll::Empty => Ok(Some(Vec::new())),
-        CalledAll::Called(queryset) => capped_rows_or_empty(&queryset, cap).map(Some),
+    let queryset = match call_all(value)? {
+        CalledAll::Refused => return Ok(None),
+        CalledAll::Empty => return Ok(Some(Vec::new())),
+        CalledAll::Called(queryset) => queryset,
+    };
+    let py = queryset.py();
+    let bound = cap.map_or(upto, |cap| upto.min(cap));
+    let window = queryset
+        .get_item(pyo3::types::PySlice::new(
+            py,
+            0,
+            isize::try_from(bound).unwrap_or(isize::MAX),
+            1,
+        ))
+        .unwrap_or_else(|_| queryset.clone());
+    match window
+        .try_iter()
+        .and_then(|iterator| iterator.take(bound).collect::<PyResult<Vec<_>>>())
+    {
+        Err(err) if codegen_swallows(py, &err) => Ok(Some(Vec::new())),
+        other => other.map(Some),
     }
+}
+
+/// `[None] * n` for an `all` the template reads only for its length or
+/// truthiness (`{{ u.groups.all|length }}`, `{% if u.groups.all %}`; the
+/// extractor files `groups.all.__len__`, #3862 item 3). `n` is the QuerySet's
+/// `count()`, which a prefetched relation answers from its cache with no query,
+/// so no row is turned into text: `str(row)` per row was the cost before, and a
+/// `__str__` that reads a relation ran a query per row. Bounded by the row cap
+/// like every other `all` read (logged when it bites). An `all` that is not a
+/// QuerySet (a model method returning a list) is counted by its rows. Errors as
+/// in [`call_all`].
+fn all_length_placeholders(
+    py: Python,
+    queryset: &Bound<'_, PyAny>,
+    cap: Option<usize>,
+) -> PyResult<Py<PyAny>> {
+    let count = if is_django_queryset(queryset) {
+        match queryset
+            .call_method0("count")
+            .and_then(|count| count.extract::<usize>())
+        {
+            Ok(count) => count,
+            Err(err) if codegen_swallows(py, &err) => 0,
+            Err(err) => return Err(err),
+        }
+    } else {
+        capped_rows_or_empty(queryset, cap)?.len()
+    };
+    let shipped = match cap {
+        Some(cap) if count > cap => {
+            warn_rows_capped(py, cap);
+            cap
+        }
+        _ => count,
+    };
+    Ok(PyList::new(py, (0..shipped).map(|_| py.None()))?
+        .into_any()
+        .unbind())
+}
+
+/// Is the `all` node read for its length only (its one child is [`LENGTH_KEY`])?
+fn all_is_read_for_length(nested: &std::collections::HashMap<String, PathNode>) -> bool {
+    nested.len() == 1 && nested.contains_key(LENGTH_KEY)
 }
 
 /// The exceptions the Python codegen twin swallows around a `.all()` step.
@@ -5617,6 +5688,12 @@ const WHOLE_MARK: &str = "__djust_whole__";
 /// under it, the key the renderer prints a serialized object by. Never an
 /// attribute read: [`gated_names`] drops it.
 const ROW_TEXT_KEY: &str = djust_templates::parser::ROW_TEXT_PATH;
+
+/// The path a template reads only the LENGTH of a relation's `all` through
+/// (`groups.all.__len__`, #3862 item 3): the extractor files
+/// `djust_templates::parser::LENGTH_PATH`, and the `all` ships as that many
+/// `None`s ([`all_length_placeholders`]). Never an attribute read.
+const LENGTH_KEY: &str = djust_templates::parser::LENGTH_PATH;
 
 /// The QuerySet methods a template can chain after `.all`.
 const ALL_CHAIN_METHODS: [&str; 4] = ["count", "exists", "first", "last"];
@@ -5885,6 +5962,13 @@ fn serialize_object_with_paths(
                     let rows = match call_all(&attr_value)? {
                         CalledAll::Refused => continue,
                         CalledAll::Empty => Vec::new(),
+                        CalledAll::Called(queryset) if all_is_read_for_length(nested_tree) => {
+                            result.set_item(
+                                attr_name,
+                                all_length_placeholders(py, &queryset, cap)?,
+                            )?;
+                            continue;
+                        }
                         CalledAll::Called(queryset) => {
                             // `u.groups.all.count` / `.first.name` / `.exists`
                             // (#3788): the template asks the QuerySet, not its
@@ -5918,7 +6002,7 @@ fn serialize_object_with_paths(
                 };
                 result.set_item(attr_name, nested_result)?;
             }
-            PathNode::List(nested_tree) => {
+            PathNode::List(nested_tree, upto) => {
                 // Iterate over list and serialize each item
                 let mut list_results = Vec::new();
 
@@ -5935,7 +6019,9 @@ fn serialize_object_with_paths(
                 // index reads (#3777).
                 let rows_are_called_all = attr_name == "all" && attr_value.is_callable();
                 let iterable = if rows_are_called_all {
-                    let Some(rows) = called_all_rows(&attr_value, cap)? else {
+                    // The index read (`all.0.name`) is the whole read of this
+                    // `all`: the extractor keeps the index only then (#3862).
+                    let Some(rows) = called_all_rows_upto(&attr_value, *upto, cap)? else {
                         continue;
                     };
                     PyList::new(py, rows)?.into_any()
