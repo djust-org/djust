@@ -611,28 +611,6 @@ def _resolve_skip_render(view_instance: Any) -> bool:
     return bool(skip_render) and not force_full_html
 
 
-def _build_context_snapshot(context: Dict[str, Any], max_value_len: int = 100) -> Dict[str, Any]:
-    """Build a JSON-safe snapshot of template context for diagnostics.
-
-    Truncates long values, converts non-serializable types to repr strings,
-    and limits to 20 keys to keep the payload small.
-    """
-    snapshot: Dict[str, Any] = {}
-    for key, value in list(context.items())[:20]:
-        if isinstance(value, (str, int, float, bool, type(None))):
-            if isinstance(value, str) and len(value) > max_value_len:
-                snapshot[key] = value[:max_value_len] + "..."
-            else:
-                snapshot[key] = value
-        elif isinstance(value, (list, tuple)):
-            snapshot[key] = f"[{type(value).__name__}, len={len(value)}]"
-        elif isinstance(value, dict):
-            snapshot[key] = f"[dict, {len(value)} keys]"
-        else:
-            snapshot[key] = f"[{type(value).__name__}]"
-    return snapshot
-
-
 def _emit_liveview_server_error(view_instance: Any, error: str, context: Dict[str, Any]) -> None:
     """Emit the liveview_server_error signal from send_error()."""
     if view_instance is not None:

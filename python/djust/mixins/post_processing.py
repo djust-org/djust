@@ -5,9 +5,7 @@ PostProcessingMixin - Debug info and client script injection for LiveView.
 import json
 import logging
 import re
-import sys
 from typing import TYPE_CHECKING, Any, Dict, List, cast
-from .._class_snapshot import attribute_names
 
 logger = logging.getLogger(__name__)
 
@@ -70,58 +68,6 @@ def _find_html_close(masked: str) -> int:
     return found
 
 
-_MISSING = object()
-
-
-def _property_types() -> tuple:
-    import functools
-
-    from django.utils.functional import cached_property as django_cached_property
-
-    return (property, functools.cached_property, django_cached_property)
-
-
-def _read_debug_attr(view: Any, name: str) -> "tuple[Any, Dict[str, Any] | None]":
-    """Read one attribute for the legacy debug panel (#3103).
-
-    Returns ``(value, None)`` for a readable attribute, ``(_MISSING, None)``
-    when it does not exist, or ``(_MISSING, placeholder)`` when the panel lists
-    the name without a value. A property is code, not state: running it could
-    raise anything or query the database on every debug render, so it is
-    listed as not evaluated (a cached property already computed is state and
-    is read from the instance). Any other descriptor that raises is reported
-    as unavailable with its exception type, and the rest of the panel renders.
-    """
-    import inspect
-
-    instance_dict = getattr(view, "__dict__", {})
-    if name not in instance_dict:
-        try:
-            static = inspect.getattr_static(view, name)
-        except AttributeError:
-            static = _MISSING
-        if isinstance(static, _property_types()) or getattr(
-            static, "_djust_framework_derived", False
-        ):
-            return _MISSING, {
-                "name": name,
-                "type": "property",
-                "value": "<property: not evaluated>",
-                "size_bytes": 0,
-            }
-    try:
-        return getattr(view, name), None
-    except AttributeError:
-        return _MISSING, None
-    except Exception as exc:  # noqa: BLE001 -- any descriptor may raise; report it, keep going
-        return _MISSING, {
-            "name": name,
-            "type": "unavailable",
-            "value": "<unavailable: %s>" % type(exc).__name__,
-            "size_bytes": 0,
-        }
-
-
 def bug_capture_scrub() -> List[str]:
     """``LIVEVIEW_CONFIG['bug_capture_default_scrub']`` as a clean list of names.
 
@@ -161,134 +107,28 @@ class PostProcessingMixin:
             Dict with debug information
         """
         from .._exposure import explicit_debug_projection
-
-        explicit = explicit_debug_projection(self)
-        if explicit is not None:
-            # Do not inspect arbitrary descriptors or handler default values.
-            # Typed public handler metadata will be supplied by ADR-036/037.
-            from ..config import config
-
-            return {
-                **self._explicit_debug_update(explicit),
-                "handlers": {},
-                "template": None,
-                "config": {
-                    "maxHistory": config.get("debug_panel_max_history", 50),
-                    "bugCaptureScrub": bug_capture_scrub(),
-                },
-            }
-        from .._parameter_metadata import _event_methods
-        from ..validation import get_handler_signature_info
-
-        handlers = {}
-        variables = {}
-
-        # Exactly the handlers dispatch resolves (ADR-037 D1), never a second
-        # discovery: only @event_handler-decorated methods are callable.
-        decorators = self._extract_handler_metadata()
-        for name, method in sorted(_event_methods(self).items()):
-            sig_info = get_handler_signature_info(method)
-            handlers[name] = {
-                "name": name,
-                "params": sig_info["params"],
-                "description": sig_info["description"],
-                "accepts_kwargs": sig_info["accepts_kwargs"],
-                "decorators": decorators.get(name, {}),
-            }
-
-        for name in attribute_names(self):  # dir() races class writes (#3151)
-            if name.startswith("_") or name in handlers:
-                continue
-
-            attr, placeholder = _read_debug_attr(self, name)
-            if placeholder is not None:
-                variables[name] = placeholder
-                continue
-            if attr is _MISSING:
-                continue
-
-            if callable(attr) and hasattr(attr, "__func__"):
-                continue  # A method, not a state variable.
-
-            elif (
-                not callable(attr)
-                and not isinstance(attr, type)
-                and not hasattr(attr, "__module__")
-            ):
-                try:
-                    from django import forms
-
-                    if isinstance(attr, forms.Form):
-                        continue
-
-                    type_name = type(attr).__name__
-
-                    try:
-                        serialized = json.dumps(attr, default=str)
-                        size_bytes = len(serialized.encode("utf-8"))
-                    except (TypeError, ValueError):
-                        size_bytes = sys.getsizeof(attr)
-
-                    value_repr = repr(attr)
-                    if len(value_repr) > 100:
-                        value_repr = value_repr[:100] + "..."
-
-                    variables[name] = {
-                        "name": name,
-                        "type": type_name,
-                        "value": value_repr,
-                        "size_bytes": size_bytes,
-                    }
-                except Exception:
-                    logger.debug("Failed to collect debug panel variable '%s'", name)
-
         from ..config import config
 
-        max_history = config.get("debug_panel_max_history", 50)
-
+        # Do not inspect arbitrary descriptors or handler default values.
+        # Typed public handler metadata will be supplied by ADR-036/037.
         return {
-            "view_class": self.__class__.__name__,
-            "handlers": handlers,
-            "variables": variables,
-            "state_sizes": self._debug_state_sizes(),
-            "template": self.template_name if hasattr(self, "template_name") else None,
-            "config": {"maxHistory": max_history, "bugCaptureScrub": bug_capture_scrub()},
+            **self._explicit_debug_update(explicit_debug_projection(self)),
+            "handlers": {},
+            "template": None,
+            "config": {
+                "maxHistory": config.get("debug_panel_max_history", 50),
+                "bugCaptureScrub": bug_capture_scrub(),
+            },
         }
 
     def _debug_state_sizes(self) -> Dict[str, Dict[str, Any]]:
         """Return size breakdown of public state variables for debug toolbar."""
         from .._exposure import explicit_debug_projection
 
-        explicit = explicit_debug_projection(self)
-        if explicit is not None:
-            return cast(
-                Dict[str, Dict[str, Any]], self._explicit_debug_update(explicit)["state_sizes"]
-            )
-        # #762: Filter framework-internal attrs from the observability payload
-        # so state_sizes reflects user-owned reactive state, not framework config.
-        from ..live_view import _FRAMEWORK_INTERNAL_ATTRS
-
-        sizes: Dict[str, Dict[str, Any]] = {}
-        for attr_name in sorted(vars(self)):
-            if attr_name.startswith("_"):
-                continue
-            if attr_name in _FRAMEWORK_INTERNAL_ATTRS:
-                continue
-            value = getattr(self, attr_name)
-            if callable(value):
-                continue
-            try:
-                serialized = json.dumps(value, default=str)
-                sizes[attr_name] = {
-                    "memory": sys.getsizeof(value),
-                    "serialized": len(serialized.encode("utf-8")),
-                }
-            except (TypeError, ValueError):
-                sizes[attr_name] = {
-                    "memory": sys.getsizeof(value),
-                    "serialized": None,
-                }
-        return sizes
+        return cast(
+            Dict[str, Dict[str, Any]],
+            self._explicit_debug_update(explicit_debug_projection(self))["state_sizes"],
+        )
 
     def get_debug_update(self) -> Dict[str, Any]:
         """
@@ -300,64 +140,7 @@ class PostProcessingMixin:
         """
         from .._exposure import explicit_debug_projection
 
-        explicit = explicit_debug_projection(self)
-        if explicit is not None:
-            return self._explicit_debug_update(explicit)
-        # #762: Filter framework-internal attrs from the observability payload.
-        from ..live_view import _FRAMEWORK_INTERNAL_ATTRS
-
-        variables = {}
-
-        for name in attribute_names(self):  # dir() races class writes (#3151)
-            if name.startswith("_"):
-                continue
-            if name in _FRAMEWORK_INTERNAL_ATTRS:
-                continue
-
-            attr, placeholder = _read_debug_attr(self, name)
-            if placeholder is not None:
-                variables[name] = placeholder
-                continue
-            if attr is _MISSING:
-                continue
-
-            if callable(attr):
-                continue
-            if isinstance(attr, type) or hasattr(attr, "__module__"):
-                continue
-
-            try:
-                from django import forms
-
-                if isinstance(attr, forms.Form):
-                    continue
-
-                type_name = type(attr).__name__
-
-                try:
-                    serialized = json.dumps(attr, default=str)
-                    size_bytes = len(serialized.encode("utf-8"))
-                except (TypeError, ValueError):
-                    size_bytes = sys.getsizeof(attr)
-
-                value_repr = repr(attr)
-                if len(value_repr) > 100:
-                    value_repr = value_repr[:100] + "..."
-
-                variables[name] = {
-                    "name": name,
-                    "type": type_name,
-                    "value": value_repr,
-                    "size_bytes": size_bytes,
-                }
-            except Exception:
-                logger.debug("Failed to collect debug panel variable '%s'", name)
-
-        return {
-            "view_class": self.__class__.__name__,
-            "variables": variables,
-            "state_sizes": self._debug_state_sizes(),
-        }
+        return self._explicit_debug_update(explicit_debug_projection(self))
 
     def _explicit_debug_update(self, projection: Dict[str, Any]) -> Dict[str, Any]:
         """Format already-bounded debug primitives, never inspect the view again."""

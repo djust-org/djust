@@ -63,7 +63,6 @@ def test_policy_descriptor_is_refused_without_evaluating_it(error_type):
 
 def test_broken_policy_descriptor_cannot_enable_legacy_debug_fallback():
     from djust._exposure import explicit_debug_projection, uses_legacy_exposure
-    from djust.observability.views import _lenient_assigns
 
     class BrokenPolicy:
         @property
@@ -74,7 +73,6 @@ def test_broken_policy_descriptor_cannot_enable_legacy_debug_fallback():
     view.public_note = "UNDECLARED_SECRET_SENTINEL"
     assert not uses_legacy_exposure(view)
     assert explicit_debug_projection(view) == {"_djust_projection_error": "State unavailable"}
-    assert "SENTINEL" not in json.dumps(_lenient_assigns(view))
     # Genuinely undeclared: reads as the default policy, which is explicit, so
     # an object that never asked for the legacy export is not given it.
     assert not uses_legacy_exposure(object())

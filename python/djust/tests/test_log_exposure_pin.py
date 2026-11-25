@@ -138,17 +138,7 @@ MIXIN_TABLES = {
         },
     ),
     "mixins/context.py": (
-        {
-            ("get_context_data", "Descriptor resolution failed for %s: %s"): (
-                "get_context_data returns _get_explicit_context_data for a nonlegacy view before this"
-            ),
-            ("get_context_data", "JIT auto-serialization failed: %s"): (
-                "get_context_data returns _get_explicit_context_data for a nonlegacy view before this"
-            ),
-            ("_apply_context_processors", "Failed to apply context processor %s: %s"): (
-                "the explicit branch runs processors without this catch and returns first"
-            ),
-        },
+        {},
         {
             ("_get_resolved_processors", "Failed to import context processor %s: %s"): (
                 "processor import path from settings"

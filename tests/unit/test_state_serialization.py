@@ -1,13 +1,8 @@
 """
 Tests for LiveView state serialization validation.
 
-Verifies that _is_serializable() correctly identifies safe vs unsafe values,
-and that an explicit view's get_state() returns only its ``client=True`` fields.
+Verifies that an explicit view's get_state() returns only its ``client=True`` fields.
 """
-
-import io
-import socket
-import threading
 
 import pytest
 
@@ -48,73 +43,6 @@ class ApiSession:
 # ---------------------------------------------------------------------------
 # _is_serializable tests
 # ---------------------------------------------------------------------------
-
-
-class TestIsSerializable:
-    """Test the _is_serializable static method."""
-
-    @pytest.mark.parametrize(
-        "value",
-        [
-            None,
-            True,
-            False,
-            0,
-            42,
-            3.14,
-            "",
-            "hello",
-            [],
-            [1, 2, 3],
-            {},
-            {"key": "value"},
-            (),
-            (1, 2),
-        ],
-    )
-    def test_primitives_and_collections_are_serializable(self, value):
-        assert LiveView._is_serializable(value) is True
-
-    def test_nested_list_is_serializable(self):
-        assert LiveView._is_serializable([1, [2, [3]]]) is True
-
-    def test_nested_dict_is_serializable(self):
-        assert LiveView._is_serializable({"a": {"b": "c"}}) is True
-
-    def test_file_handle_not_serializable(self):
-        f = io.StringIO("test")
-        assert LiveView._is_serializable(f) is False
-        f.close()
-
-    def test_thread_not_serializable(self):
-        t = threading.Thread(target=lambda: None)
-        assert LiveView._is_serializable(t) is False
-
-    def test_lock_not_serializable(self):
-        lock = threading.Lock()
-        assert LiveView._is_serializable(lock) is False
-
-    def test_socket_not_serializable(self):
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            assert LiveView._is_serializable(s) is False
-        finally:
-            s.close()
-
-    def test_service_instance_not_serializable(self):
-        assert LiveView._is_serializable(FakeS3Client()) is False
-
-    def test_client_instance_not_serializable(self):
-        assert LiveView._is_serializable(FakeS3Client()) is False
-
-    def test_payment_service_not_serializable(self):
-        assert LiveView._is_serializable(PaymentService()) is False
-
-    def test_database_connection_not_serializable(self):
-        assert LiveView._is_serializable(DatabaseConnection()) is False
-
-    def test_api_session_not_serializable(self):
-        assert LiveView._is_serializable(ApiSession()) is False
 
 
 # ---------------------------------------------------------------------------

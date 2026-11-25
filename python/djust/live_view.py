@@ -2,11 +2,7 @@
 LiveView base class and decorator for reactive Django views
 """
 
-import io
-import json
 import logging
-import socket
-import threading
 import weakref
 from functools import wraps
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, Optional, Set, Union, cast
@@ -177,21 +173,15 @@ def is_protected_http_entry(callback: Any) -> bool:
 
 
 def _protect_http_entry(cls: type, view: Callable[..., Any]) -> Callable[..., Any]:
-    """ADR-038 D-a: a nonlegacy class's HTTP entry fails with a value-free 500.
+    """ADR-038 D-a: a class's HTTP entry fails with a value-free 500.
 
     The constructor, ``setup``, ``on_mount`` hooks, ``mount``, ``handle_params``,
     ``get_context_data`` and render all run under Django's view callable with no
     protected scope, so under ``DEBUG`` Django's technical 500 page would show
     the exception and its frames' locals. The class owns the policy before an
-    instance exists. A legacy class keeps Django's callable itself, unchanged;
-    a class that became legacy after ``as_view`` re-raises as before.
+    instance exists.
     """
     from asgiref.sync import iscoroutinefunction, markcoroutinefunction
-
-    from ._exposure import uses_legacy_exposure
-
-    if uses_legacy_exposure(cls):
-        return view
 
     from ._exposure_diagnostics import (
         diagnostic_scope,
@@ -1125,136 +1115,20 @@ class LiveView(
         """
         pass
 
-    # ============================================================================
-    # STATE SERIALIZATION VALIDATION
-    # ============================================================================
-
-    @staticmethod
-    def _is_serializable(value: Any) -> bool:
-        """Check if a value can be safely serialized to JSON for state transfer.
-
-        Returns True for primitives, collections, Django models/QuerySets, and
-        any value that json.dumps can handle. Returns False for service instances,
-        connections, file handles, threads, and other non-serializable objects.
-        """
-        # Primitives are always fine
-        if value is None or isinstance(value, (str, int, float, bool)):
-            return True
-
-        # Collections: check recursively would be expensive; allow them and
-        # let actual serialization catch nested issues
-        if isinstance(value, (list, tuple, set, frozenset)):
-            return True
-
-        if isinstance(value, dict):
-            return True
-
-        # Django models and QuerySets are serialized by JIT pipeline
-        try:
-            from django.db import models
-            from django.db.models import QuerySet
-
-            if isinstance(value, (models.Model, QuerySet)):
-                return True
-        except ImportError:
-            pass  # Django ORM not available; skip model/queryset check
-
-        # ADR-033 D6: a plain component is its state, and the state round
-        # trip carries it (``component_for_state_roundtrip``).
-        from .components.base import Component
-
-        if isinstance(value, Component):
-            return True
-
-        # Non-serializable types: file handles, threads, locks, sockets
-        _non_serializable: tuple[type, ...] = (io.IOBase, threading.Thread, socket.socket)
-        try:
-            # threading.Lock() returns _thread.lock which isn't directly a type
-            import _thread
-
-            _non_serializable = _non_serializable + (_thread.LockType,)
-        except (ImportError, AttributeError):
-            pass  # _thread.LockType unavailable on some platforms; skip lock detection
-        if isinstance(value, _non_serializable):
-            return False
-
-        # Detect common service/client patterns by type name
-        type_name = type(value).__name__.lower()
-        _suspect_names = ("service", "client", "session", "connection", "api")
-        if any(name in type_name for name in _suspect_names):
-            return False
-
-        # Detect objects with generic repr like '<ClassName object at 0x...>'
-        try:
-            obj_repr = repr(value)
-            if " object at 0x" in obj_repr:
-                return False
-        except Exception:
-            return False
-
-        # Final check: try to actually serialize it
-        try:
-            json.dumps(value, cls=DjangoJSONEncoder)
-            return True
-        except (TypeError, ValueError, OverflowError):
-            return False
-
     def get_state(self) -> Dict[str, Any]:
-        """Get serializable state from this LiveView instance.
+        """Get the client-visible state of this LiveView instance.
 
-        Explicit policy exports only declared ``client=True`` fields using the
-        bounded JSON contract. Rendering context and server-only state are not
-        inputs. Returned values are detached; failures never use legacy fallback.
-
-        Legacy policy iterates over public (non-underscore) instance attributes and validates
-        that each value can be serialized. In DEBUG mode, raises TypeError with
-        a helpful message for non-serializable values. In production, logs an
-        error and skips the attribute.
+        Exports only declared ``client=True`` fields using the bounded JSON
+        contract. Rendering context and server-only state are not inputs.
+        Returned values are detached; a failure raises ``ExposureError``
+        without the offending value.
 
         Returns:
-            Client-permitted declared values under explicit policy; serializable
-            public state under legacy policy.
+            The client-permitted declared values.
         """
-        from ._exposure import explicit_state_projection, uses_legacy_exposure
+        from ._exposure import explicit_state_projection
 
-        if not uses_legacy_exposure(self):
-            return explicit_state_projection(self, "client")
-
-        from django.conf import settings
-
-        state = {}
-        for key, value in self.__dict__.items():
-            if type(key) is not str or key.startswith("_"):  # #4143
-                continue
-
-            # #762: Skip framework-internal attrs so they don't pollute
-            # user-facing reactive state.
-            if key in _FRAMEWORK_INTERNAL_ATTRS:
-                continue
-
-            if callable(value):
-                continue
-
-            if not self._is_serializable(value):
-                class_name = self.__class__.__name__
-                value_type = type(value).__name__
-                msg = (
-                    f"Non-serializable value in {class_name}.{key}: "
-                    f"{value_type} cannot be stored in LiveView state. "
-                    f"Service instances, connections, and file handles must "
-                    f"be created in event handlers or accessed via utility "
-                    f"functions — not stored as instance attributes. "
-                    f"See: https://djust.org/docs/guides/services.md"
-                )
-                if getattr(settings, "DEBUG", False):
-                    raise TypeError(msg)
-                else:
-                    logger.error(msg)
-                    continue
-
-            state[key] = value
-
-        return state
+        return explicit_state_projection(self, "client")
 
     # ============================================================================
     # TEMPORARY ASSIGNS - Memory optimization for large collections

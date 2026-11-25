@@ -265,19 +265,6 @@ class TenantMixin:
         provide_context(self, context, "djust.tenants", context_name, self._tenant)
         return context
 
-    def _djust_render_only_context_keys(self) -> frozenset:
-        """The tenant key renders but is never saved state.
-
-        A legacy session save drops these keys. Without this the saved
-        ``tenant`` value was restored through the ``tenant`` property setter,
-        so the first HTTP fallback POST or snapshot reconnect after a save
-        replaced ``self.tenant`` with its serialized form.
-        """
-        parent = getattr(super(), "_djust_render_only_context_keys", None)
-        keys = set(parent()) if callable(parent) else set()
-        keys.add(_tenant_context_name(type(self)))
-        return frozenset(keys)
-
     def get_presence_key(self) -> str:
         """
         Override presence key to be tenant-scoped.

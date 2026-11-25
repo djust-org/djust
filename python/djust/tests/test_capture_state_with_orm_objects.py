@@ -3,8 +3,7 @@
 ``test_state_snapshot_orm_early_validation`` was about the ``strict=`` capture
 of the legacy signed snapshot, removed in 2.0. The cases that pin code that
 stays are kept here (the time-travel capture case went with time-travel
-debugging, #4184): the render path is untouched: ``_is_serializable`` accepts
-a model, and the context an explicit view supplies renders the fields of that live instance the template reads.
+debugging, #4184): the render path is untouched: the context an explicit view supplies renders the fields of that live instance the template reads.
 """
 
 from __future__ import annotations
@@ -41,10 +40,6 @@ class _PublicOrmStateView(LiveView):
 
 
 class TestRenderingJitPipelineUnaffected:
-    @override_settings(DEBUG=True)
-    def test_is_serializable_still_true_for_model(self):
-        assert LiveView._is_serializable(_make_user()) is True
-
     @override_settings(DEBUG=True)
     def test_rendered_state_renders_the_models_fields_the_template_reads(self):
         view = _PublicOrmStateView()

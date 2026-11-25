@@ -918,7 +918,7 @@ HOOKS: Dict[str, str] = {
     "Component.get_context_data": "inside:render@components/base.py::Component.render",
     "Component._render_custom": "inside:render@components/base.py::Component.render",
     "ContextMixin.get_render_only_context": (
-        "inside:render@mixins/context.py::ContextMixin.get_context_data"
+        "inside:render@mixins/context.py::ContextMixin._get_explicit_context_data"
     ),
     "JITMixin.serialize_for_template": (
         "unwrapped:not-threaded:an app helper for get_context_data; the framework never calls it, "

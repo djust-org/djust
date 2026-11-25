@@ -461,8 +461,8 @@ def service_worker_cache_eligible(view: Any) -> bool:
         return False
 
 
-def explicit_debug_projection(view: Any) -> dict[str, Any] | None:
-    """Return bounded explicit debug data, or None only for the legacy policy.
+def explicit_debug_projection(view: Any) -> dict[str, Any]:
+    """Return bounded explicit debug data, or a projection-error marker.
 
     Diagnostic failures must not retry using reflection, repr, or context. Even
     a permitted field's factory can raise an exception containing secrets, so
@@ -472,8 +472,6 @@ def explicit_debug_projection(view: Any) -> dict[str, Any] | None:
     """
     try:
         policy = _read_exposure_policy(view)
-        if type(policy) is str and policy == "legacy":
-            return None
         if type(policy) is str and policy == "explicit":
             return ExposureContract.from_view_class(type(view)).project_view(view, "debug")
     except Exception:  # noqa: BLE001 — diagnostic boundary; never expose exception values
