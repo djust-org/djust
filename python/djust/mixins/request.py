@@ -2470,6 +2470,11 @@ class RequestMixin:
                         **contract_fields,
                         **response_fields,
                     }
+                    if baseline_matched and patch_count > PATCH_THRESHOLD:
+                        # The digest matched: the whole page was chosen for
+                        # its size, so the client does not count it as a
+                        # digest miss (#4229).
+                        response_data["whole_page"] = "size"
                     if cache_request_id:
                         response_data["cache_request_id"] = cache_request_id
                     _inject_side_channels(response_data)

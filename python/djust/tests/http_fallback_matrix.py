@@ -378,7 +378,7 @@ class DigestEcho:
             self.digest = None
         if not sent or not changed:
             return
-        if not whole:
+        if not whole or answer.get("whole_page") == "size":
             self.misses = 0
         else:
             self.misses += 1

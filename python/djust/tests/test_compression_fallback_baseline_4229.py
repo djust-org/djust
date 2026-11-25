@@ -273,6 +273,20 @@ def test_http_page_post_patches_after_a_compression_whole_page():
 
     whole = send("shift", {}, digest)
     assert "patches" not in whole and ">1149</li>" in whole["html"]
+    # The token matched: the client must not count this answer as a miss.
+    assert whole["whole_page"] == "size"
     after = send("touch", {"value": "after"}, whole["render_digest"])
     assert "html" not in after, after
     assert [p["text"] for p in after["patches"]] == ["after"], after["patches"]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_http_a_whole_page_for_a_refused_token_is_not_marked_as_chosen_for_size():
+    """Gate-off: without a matching token the whole page is a real miss."""
+    client = Client()
+    assert client.get("/grid-4229/").status_code == 200
+    response = post_event(client, "/grid-4229/", "shift", {}, None)
+    answer = json.loads(response.content)
+    assert ">1149</li>" in answer["html"] and "whole_page" not in answer
+    response = post_event(client, "/grid-4229/", "touch", {"value": "x"}, "A" * 22 + "." + "0" * 16)
+    assert "whole_page" not in json.loads(response.content)

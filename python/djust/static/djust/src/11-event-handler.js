@@ -87,7 +87,8 @@ function _noteRenderDigest(data, sent) {
         _setRenderToken(data.render_digest);
     }
     if (!sent || !changed) return;
-    if (!whole) {
+    // A whole page chosen for its size (#4229) answered a token that matched.
+    if (!whole || data.whole_page === 'size') {
         _httpDigestMisses = 0;
     } else if (++_httpDigestMisses >= 2) {
         _httpDigestHold = _HTTP_DIGEST_HOLD;
