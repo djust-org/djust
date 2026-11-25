@@ -29,9 +29,6 @@ from djust.tests.http_fallback_matrix import PAGE, answer_kind, meta_digest, pos
 
 pytestmark = [
     pytest.mark.django_db(transaction=True),
-    # These tests compare answers across page loads; the strict default adds a
-    # per-view contract snapshot to each (#4189).
-    pytest.mark.usefixtures("legacy_project_policy"),
 ]
 
 #: Today a view's saved state is shared by every tab of a session on a route,
@@ -1008,13 +1005,6 @@ def test_a_whole_page_answer_is_gzipped_for_a_client_that_accepts_it(renders):
     assert not plain.has_header("Content-Encoding")
     # The point of it: the page with 150 rows goes out several times smaller.
     assert len(response.content) * 3 < len(plain.content)
-
-
-def test_a_small_patch_answer_is_sent_as_it_is(renders):
-    client, digest = _open("/m/counter/")
-    response = _post_accepting_gzip(client, "/m/counter/", "increment", digest)
-    assert not response.has_header("Content-Encoding")
-    assert answer_kind(json.loads(response.content)) == "patches"
 
 
 def test_compression_can_be_left_to_the_deployment(renders):

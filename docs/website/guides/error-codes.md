@@ -516,13 +516,11 @@ Retired in 2.0 with the `view_state_in_session` setting it validated: no view st
 
 ---
 
-### C045: a setting djust 2.0.0 removes is still set
+### C045: a setting djust 2.0.0 removes is still set (removed in 2.0)
 
-**Severity**: Warning
+Retired in 2.0 (#4199). Nothing reports it; djust refuses the keys at startup. Delete them; see the [2.0 migration guide](migrating-to-2.0.md).
 
-**What causes it**: `LIVEVIEW_CONFIG` or `DJUST_CONFIG` has `event_parameter_policy`, `reauth_on_event` or `reauth_server_turn_interval`. Strict event parameters are the only policy in 2.0.0, and an explicit-exposure view authorizes every event and server turn itself. djust 2.0.0 refuses the keys at startup (#4199); until then they are accepted and this check reports them. Message: 'LIVEVIEW_CONFIG['reauth_on_event'] is set; djust 2.0.0 removes the key and refuses it at startup: ...'
-
-**Fix**: delete the key. For `event_parameter_policy`, annotate every handler parameter first (`djust.V016` and `djust.V033` report what strict refuses). Suppress with `DJUST_CONFIG = {"suppress_checks": ["C045"]}`.
+---
 
 ### C301: Invalid VDOM cache TTL
 
@@ -970,13 +968,11 @@ On an explicit view the same declaration is refused when the class is created, w
 
 **Fix**: Rename the field (for example `selected_user`), or declare it `state(..., render=False)` if no template reads it. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V027"]}`.
 
-### V028: A class states `exposure_policy = "legacy"`
+### V028: A class states `exposure_policy = "legacy"` (removed in 2.0)
 
-**Severity**: Warning
+Retired in 2.0 (#4199). Nothing reports it; the class statement itself is refused. See the [2.0 migration guide](migrating-to-2.0.md).
 
-**What causes it**: an application class states `exposure_policy = "legacy"` in its own body. Explicit exposure is the default since djust 2.0 and `"legacy"` is removed before 2.0.0 ([#4047](https://github.com/djust-org/djust/issues/4047)). Reported once per stating class; the message names the views that inherit it. Message: '<class> states exposure_policy = "legacy", which is deprecated and is removed before djust 2.0.0: ...'
-
-**Fix**: Move the view to explicit exposure and delete the line; `python manage.py djust_exposure_inventory --fix` deletes the line and supplies what the template reads from `get_context_data()`; without `--fix` it lists what each view exposes today. See the [2.0 migration guide](migrating-to-2.0.md#1-move-each-view-to-explicit-exposure). Suppress with `DJUST_CONFIG = {"suppress_checks": ["V028"]}`.
+---
 
 ### V029: a handler changes a `persist=False` field a later event reads
 
@@ -1002,13 +998,11 @@ On an explicit view the same declaration is refused when the class is created, w
 
 **Fix**: Declare `form_values: dict[str, Any]` and `data_attrs: dict[str, str]` and run the handler under the strict policy. See the [reconnection guide](reconnection.md#custom-recovery-with-dj-auto-recover). Suppress with `DJUST_CONFIG = {"suppress_checks": ["V031"]}`.
 
-### V032: an admin widget states `exposure_policy = "legacy"`
+### V032: an admin widget states `exposure_policy = "legacy"` (removed in 2.0)
 
-**Severity**: Error
+Retired in 2.0 (#4199). Nothing reports it; the widget's class statement itself is refused. See the [admin widgets guide](admin-widgets.md).
 
-**What causes it**: A `DjustModelAdmin`'s `change_list_widgets` or `change_form_widgets` lists a widget class that states `exposure_policy = "legacy"`. The admin pages are explicit and cannot embed a legacy view, so the page fails to render. Message: '<admin>.change_form_widgets lists <widget>, which states exposure_policy = "legacy". The djust admin change form uses explicit exposure and cannot embed a legacy view, so that admin page fails to render (HTTP 500).'
-
-**Fix**: Set `exposure_policy = "explicit"` on the widget and return what its template reads from `get_context_data()`. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V032"]}`.
+---
 
 ### V033: a legacy-policy handler strict dispatch would refuse
 
@@ -1034,13 +1028,11 @@ On an explicit view the same declaration is refused when the class is created, w
 
 **Fix**: name the inputs the hook takes with `sticky_update_inputs = ("title",)` (a change to those reuses the child and calls the hook), or delete the hook and read the inputs in `mount()`. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V035"]}`.
 
-### V036: a view or handler uses an attribute or decorator argument djust 2.0.0 removes
+### V036: a view or handler uses an attribute or decorator argument djust 2.0.0 removes (removed in 2.0)
 
-**Severity**: Warning
+Retired in 2.0 (#4199). Nothing reports it; the class or decorator is refused. See the [2.0 migration guide](migrating-to-2.0.md).
 
-**What causes it**: a `LiveView` whose own body sets `cancel_async_on_disconnect`, or an `@event_handler` / `@server_function` with `parameter_policy="legacy"`. djust 2.0.0 refuses both when the class or decorator is created (#4199); until then they still work and this check lists them. Message: '<handler>: @event_handler(parameter_policy="legacy"), which djust 2.0.0 removes: annotate the handler's parameters ... and delete parameter_policy="legacy".'
-
-**Fix**: delete `cancel_async_on_disconnect` (an explicit view's background work is cancelled when its connection closes; work that must finish belongs in a task queue), and annotate the handler's parameters (`djust.V033` lists what the strict policy would refuse) before deleting `parameter_policy="legacy"`. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V036"]}`.
+---
 
 ### V037: `sw_cacheable = True` on a per-visitor page
 

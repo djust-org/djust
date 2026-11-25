@@ -149,14 +149,11 @@ async def test_background_batch_acknowledges_only_after_all_child_tasks(monkeypa
 
 
 @pytest.mark.parametrize("shape", ["sync", "async", "returned-coroutine"])
-@pytest.mark.parametrize("strict", [False, True])
-async def test_child_event_runs_its_queue_and_persists_a_scoped_completion(
-    monkeypatch, shape, strict, legacy_project_policy
-):
+async def test_child_event_runs_its_queue_and_persists_a_scoped_completion(monkeypatch, shape):
     calls = []
     root_calls = []
 
-    @event_handler(parameter_policy="strict" if strict else "legacy")
+    @event_handler
     def begin(self):
         def finish():
             calls.append(self)
@@ -190,16 +187,13 @@ async def test_child_event_runs_its_queue_and_persists_a_scoped_completion(
         assert "Count=4" in frames[0]["html"]
         assert "SERVER_SENTINEL" not in str(frames)
         assert not transport.errors
-        if strict:
-            owner = next(
-                owner
-                for owner in frames[0]["parameter_contracts"]["owners"]
-                if owner["view_id"] == "menu"
-            )
-            assert owner["handlers"]["begin"]["policy"] == "strict"
-            assert frames[0]["parameter_contract_view"] == runtime._parameter_contract_view
-        else:
-            assert "parameter_contracts" not in frames[0]
+        owner = next(
+            owner
+            for owner in frames[0]["parameter_contracts"]["owners"]
+            if owner["view_id"] == "menu"
+        )
+        assert owner["handlers"]["begin"]["policy"] == "strict"
+        assert frames[0]["parameter_contract_view"] == runtime._parameter_contract_view
         stored = await sync_to_async(SessionStore(request.session.session_key).load)()
         assert stored[child_state_key(request.path, ("menu",))]["state"]["values"]["count"] == 4
     finally:

@@ -14,7 +14,6 @@ from django.test import override_settings
 from django.urls import path
 
 from djust import LiveView
-from djust.config import config
 from djust.decorators import event_handler, state
 from djust.testing import open_live_page
 from djust.validation import get_project_parameter_policy
@@ -52,7 +51,6 @@ def _routes():
 
 
 def test_the_project_default_is_strict():
-    assert config.get("event_parameter_policy") == "strict"
     assert get_project_parameter_policy() == "strict"
 
 

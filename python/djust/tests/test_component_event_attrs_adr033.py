@@ -114,19 +114,6 @@ class TestEventAttrs:
         with pytest.raises(TypeError, match="reserved"):
             Chip(state={"a": 1})
 
-    def test_a_str_annotated_handler_still_receives_text(self):
-        """Compat: a handler written for the untyped wire keeps working."""
-
-        @event_handler(parameter_policy="legacy")  # legacy params until #4192-#4198 (#4189)
-        def pick(self: Any, value: str) -> None:
-            pass
-
-        result = validate_handler_params(pick, {"value": 4}, "pick")
-        assert result["valid"], result
-        assert result["coerced_params"] == {"value": "4"}
-        result = validate_handler_params(pick, {"value": True}, "pick")
-        assert result["coerced_params"] == {"value": "true"}
-
     def test_an_int_id_written_back_still_opens_the_item(self):
         """Review 🔴2: ``str(id) == self.active`` never matched an int."""
         from djust.components.components.accordion import Accordion
@@ -141,11 +128,14 @@ class TestEventAttrs:
         assert r.name == "service"
 
     def test_the_handler_convention_accepts_the_typed_params(self):
-        @event_handler(parameter_policy="legacy")  # legacy params until #4192-#4198 (#4189)
-        def set_rating(self: Any, value: int, name: str | None = None, **kwargs: Any) -> None:
-            pass
+        class Owner:
+            @event_handler
+            def set_rating(self, value: int, name: str | None = None, **kwargs: Any) -> None:
+                pass
 
-        result = validate_handler_params(set_rating, {"value": 4, "name": "service"}, "set_rating")
+        result = validate_handler_params(
+            Owner().set_rating, {"value": 4, "name": "service"}, "set_rating"
+        )
         assert result["valid"], result
         assert result["coerced_params"] == {"value": 4, "name": "service"}
 

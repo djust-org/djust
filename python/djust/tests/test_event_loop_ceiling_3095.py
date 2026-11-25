@@ -325,14 +325,14 @@ def test_the_handler_signature_is_computed_once_per_function(monkeypatch):
         return real(obj, *a, **k)
 
     class _V:
-        @event_handler(parameter_policy="legacy")  # legacy params until #4192-#4198 (#4189)
+        @event_handler
         def handler(self, amount: int = 0, **kwargs):
             pass
 
     monkeypatch.setattr(validation.inspect, "signature", counting)
     a, b = _V(), _V()
     for v in (a, b, a):
-        result = validation.validate_handler_params(v.handler, {"amount": "3"}, "handler")
+        result = validation.validate_handler_params(v.handler, {"amount": 3}, "handler")
         assert result["valid"], result
     assert len(calls) == 1, "one signature per function, shared by instances"
     bound = validation._handler_signature(a.handler)
@@ -519,24 +519,6 @@ def test_type_hints_are_resolved_once_and_failures_are_not_cached(monkeypatch):
         # Unresolvable: params come back unchanged, and it is retried each time.
         assert validation.coerce_parameter_types(v.broken, {"x": "1"}) == {"x": "1"}
     assert len(calls) == 2
-
-
-def test_the_near_miss_warning_still_fires_once_with_the_fast_key_path(
-    caplog, legacy_project_policy
-):
-    # The near-miss warning belongs to the legacy binder (#2144); strict
-    # sends only generated keys, so it has no silent-mismatch to report.
-    from djust import validation
-
-    class _V:
-        def handler(self, field_name: str = "", **kwargs):
-            pass
-
-    validation._NEAR_MISS_WARNED.clear()
-    with caplog.at_level("WARNING", logger="djust.validation"):
-        for _ in range(3):
-            validation.validate_handler_params(_V().handler, {"fieldname": "x"}, "handler")
-    assert caplog.text.count("similarly-named 'field_name'") == 1
 
 
 # ---------------------------------------------------------------------------

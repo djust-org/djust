@@ -324,36 +324,6 @@ def test_coercion_disabled_in_strict_policy(decorator):
     assert validate_handler_params(handler, {"value": 2}, "handler")["valid"]
 
 
-def test_global_policy_and_explicit_legacy_override():
-    from djust.config import config
-
-    @event_handler()
-    def inherited(value: bool):
-        pass
-
-    @event_handler(parameter_policy="legacy")
-    def legacy(value: bool):
-        pass
-
-    old = config.get("event_parameter_policy", "legacy")
-    try:
-        config.set("event_parameter_policy", "strict")
-        assert not validate_handler_params(inherited, {"value": "invalid"}, "inherited")["valid"]
-        assert validate_handler_params(legacy, {"value": "invalid"}, "legacy")["valid"]
-    finally:
-        config.set("event_parameter_policy", old)
-
-
-def test_legacy_invocation_result_remains_compatible():
-    @event_handler(parameter_policy="legacy")
-    def handler(value: int):
-        return value
-
-    result = validate_handler_params(handler, {"value": "2"}, "handler")
-    args, kwargs = validated_call_arguments(result)
-    assert handler(*args, **kwargs) == 2
-
-
 def test_invalid_result_cannot_be_invoked():
     with pytest.raises(ValueError):
         validated_call_arguments({"valid": False, "coerced_params": {}})

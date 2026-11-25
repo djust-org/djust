@@ -15,6 +15,7 @@ push that must NOT arrive is followed by one that must, and the channel layer
 delivers a channel's messages in order.
 """
 
+from typing import Any
 import asyncio
 import json
 import threading
@@ -56,12 +57,12 @@ class GroupPage(LiveView):
         self.log.append(n)
         self.n = n
 
-    @event_handler(parameter_policy="legacy")  # legacy params until #4192-#4198 (#4189)
-    def join_room(self, room="", **kwargs):
+    @event_handler
+    def join_room(self, room: str = "", **kwargs: Any):
         self.push_scope = room
 
-    @event_handler(parameter_policy="legacy")  # legacy params until #4192-#4198 (#4189)
-    def push_to_my_class(self, n=0, **kwargs):
+    @event_handler
+    def push_to_my_class(self, n: int = 0, **kwargs: Any):
         """A handler that pushes to its own class: the sender skips its own echo (#1677)."""
         from djust import push_to_view
 

@@ -20,33 +20,22 @@ def _pair(old_body, new_body, name="SwapView"):
     return old, new
 
 
-@pytest.mark.parametrize("old_policy,new_policy", [("legacy", "explicit"), ("explicit", "legacy")])
-def test_policy_change_falls_back_to_full_reload(old_policy, new_policy):
-    old, new = _pair({"exposure_policy": old_policy}, {"exposure_policy": new_policy})
+@pytest.mark.parametrize("assigned", ["legacy", "nonsense"])
+def test_a_policy_assigned_after_the_class_statement_falls_back(assigned):
+    """The class statement refuses any value but ``"explicit"``; one assigned
+    to the class afterwards is caught by the swap, not carried into the view."""
+    old, new = _pair({"exposure_policy": "explicit"}, {"exposure_policy": "explicit"})
+    new.exposure_policy = assigned
     view = old()
     ok, reason = apply_class_swap(view, [(old, new)])
     assert not ok and "exposure" in reason
     assert type(view) is old
 
 
-def test_swap_to_an_invalid_configuration_falls_back():
-    old, new = _pair(
-        {"exposure_policy": "explicit"},
-        {"exposure_policy": "nonsense"},
-    )
+def test_swap_within_the_policy_still_applies():
+    body = {"exposure_policy": "explicit", "count": state(0, persist="server")}
+    old, new = _pair(body, dict(body))
     view = old()
     ok, reason = apply_class_swap(view, [(old, new)])
-    assert not ok and "exposure" in reason
-    assert type(view) is old
-
-
-def test_swap_within_a_policy_still_applies():
-    for policy in ("legacy", "explicit"):
-        body = {"exposure_policy": policy}
-        if policy == "explicit":
-            body["count"] = state(0, persist="server")
-        old, new = _pair(body, dict(body))
-        view = old()
-        ok, reason = apply_class_swap(view, [(old, new)])
-        assert ok, reason
-        assert type(view) is new
+    assert ok, reason
+    assert type(view) is new

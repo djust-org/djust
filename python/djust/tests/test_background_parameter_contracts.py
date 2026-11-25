@@ -14,14 +14,12 @@ from djust.tests.test_background_html_fallback import BackgroundView
 from djust.websocket import LiveViewConsumer
 
 pytestmark = [
-    # The project parameter policy is the legacy one here (#4205 removes it).
-    pytest.mark.usefixtures("legacy_project_policy"),
     pytest.mark.django_db(transaction=True),
 ]
 
 
 class PlainBackgroundView(BackgroundView):
-    """``test_background_html_fallback.BackgroundView`` with no strict handler."""
+    """``test_background_html_fallback.BackgroundView``, without ``choose``."""
 
     exposure_policy = "explicit"
 
@@ -108,33 +106,6 @@ async def test_background_frame_and_recovery_share_render_contract(source, full_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("source", SOURCES)
-async def test_legacy_background_frames_keep_legacy_shape(source):
-    consumer, _, _ = await setup(view_class=PlainBackgroundView)
-    if source.startswith("async"):
-        consumer.view_instance.handle_async_result = lambda *args, **kwargs: None
-    await produce(consumer, source)
-    frame = consumer.send_json.call_args.args[0]
-    assert "parameter_contracts" not in frame
-    assert "parameter_contract_view" not in frame
-    assert consumer._recovery_contracts is None
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("source", SOURCES)
-async def test_last_strict_handler_removal_keeps_emitting_explicit_clear(source):
-    consumer, view, _ = await setup()
-    await produce(consumer, source)
-    view.choose = None
-    for _ in range(2):
-        await produce(consumer, source)
-        assert consumer.send_json.call_args.args[0]["parameter_contracts"] is None
-        assert (
-            json.loads(zlib.decompress(consumer._recovery_contracts))["parameter_contracts"] is None
-        )
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("source", SOURCES)
 async def test_contract_failure_withholds_frame_and_resets_unsent_baseline(source, monkeypatch):
     consumer, view, _ = await setup()
 
@@ -159,22 +130,6 @@ async def test_contract_failure_withholds_frame_and_resets_unsent_baseline(sourc
     assert frame["version"] == 1
     assert frame["parameter_contracts"] is not None
     assert view._force_full_html is False
-
-
-@pytest.mark.asyncio
-async def test_snapshot_is_captured_after_render_declares_owners():
-    consumer, view, runtime = await setup()
-    runtime._parameter_contracts_active = True
-    original = view.render_with_diff
-
-    def render():
-        result = original()
-        view.choose = None
-        return result
-
-    view.render_with_diff = render
-    await produce(consumer, "tick")
-    assert consumer.send_json.call_args.args[0]["parameter_contracts"] is None
 
 
 @pytest.mark.asyncio

@@ -21,9 +21,7 @@ How explicit views meet that today, pinned here over the real runtime:
   same walk sees them, and the provider's rendered keys are re-derived.
 * ``set_changed_keys()`` is the documented invalidation mechanism for what no
   snapshot can see (an attribute write on an opaque object, an external/DB
-  change). It works the same under both policies.
-
-Every explicit case has a legacy control that must produce the same frames.
+  change).
 """
 
 import json
@@ -102,8 +100,6 @@ def _body(policy):
 
 
 ExplicitDerived = type("ExplicitDerived", (LiveView,), {"__module__": MODULE, **_body("explicit")})
-LegacyDerived = type("LegacyDerived", (LiveView,), {"__module__": MODULE, **_body("legacy")})
-DERIVED = {"explicit": ExplicitDerived, "legacy": LegacyDerived}
 
 
 class StepOne(forms.Form):
@@ -129,8 +125,6 @@ def _wizard_body(policy):
 
 
 ExplicitWizard = type("ExplicitWizard", (WizardMixin, LiveView), _wizard_body("explicit"))
-LegacyWizard = type("LegacyWizard", (WizardMixin, LiveView), _wizard_body("legacy"))
-WIZARDS = {"explicit": ExplicitWizard, "legacy": LegacyWizard}
 
 
 @pytest.fixture(autouse=True)
@@ -154,11 +148,6 @@ async def mount(view_class):
         )
     assert not transport.errors, transport.errors
     assert any(frame.get("type") == "mount" for frame in transport.sent), transport.sent
-    policy = "explicit" if view_class.exposure_policy == "explicit" else "legacy"
-    from djust._exposure import uses_legacy_exposure
-
-    # The policy is fixed from mount (never flipped mid-session).
-    assert uses_legacy_exposure(runtime.view_instance) is (policy == "legacy")
     transport.sent.clear()
     return runtime, transport
 
@@ -179,9 +168,8 @@ def _render_types(types):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
-async def test_derived_context_rerenders_when_its_declared_state_changes(policy):
-    runtime, transport = await mount(DERIVED[policy])
+async def test_derived_context_rerenders_when_its_declared_state_changes():
+    runtime, transport = await mount(ExplicitDerived)
     types, frames = await event(runtime, transport, "bump")
     assert _render_types(types), types
     assert "DOUBLED_4" in frames
@@ -206,76 +194,46 @@ async def test_declared_state_change_is_detected_under_its_storage_name():
     assert "doubled" not in changed
 
 
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
-async def test_opaque_attribute_dependency_rerenders_conservatively(policy):
+async def test_opaque_attribute_dependency_rerenders_conservatively():
     """A plain attribute read in ``get_context_data`` is not declared anywhere.
 
     The explicit detector keeps walking ``__dict__`` so its reassignment still
     renders; narrowing the walk to declared fields would drop this update.
     """
-    runtime, transport = await mount(DERIVED[policy])
+    runtime, transport = await mount(ExplicitDerived)
     types, frames = await event(runtime, transport, "swap_service")
     assert _render_types(types), types
     assert "LABEL_OPAQUE_B" in frames
 
 
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
 @pytest.mark.parametrize("hatch", ["zero", "named"])
-async def test_set_changed_keys_is_the_invalidation_mechanism(policy, hatch):
-    runtime, transport = await mount(DERIVED[policy])
+async def test_set_changed_keys_is_the_invalidation_mechanism(hatch):
+    runtime, transport = await mount(ExplicitDerived)
     types, frames = await event(runtime, transport, "write_in_place", hatch=hatch)
     assert _render_types(types), types
     assert "LABEL_OPAQUE_C" in frames
     assert not runtime.view_instance._force_full_html  # consumed by the render
 
 
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
-async def test_in_place_opaque_write_without_hatch_is_the_documented_limit(policy):
+async def test_in_place_opaque_write_without_hatch_is_the_documented_limit():
     """Identity comparison cannot see an attribute write on an opaque object
-    under either policy (the documented case ``set_changed_keys`` exists for).
-    Explicit mode must not be worse than legacy: the next render carries it."""
-    runtime, transport = await mount(DERIVED[policy])
+    (the documented case ``set_changed_keys`` exists for).
+    The next render carries it."""
+    runtime, transport = await mount(ExplicitDerived)
     types, frames = await event(runtime, transport, "write_in_place")
     assert types == ["noop"], types
     types, frames = await event(runtime, transport, "bump")
     assert "LABEL_OPAQUE_C" in frames and "DOUBLED_4" in frames
 
 
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
-async def test_noop_turn_stays_a_noop(policy):
-    runtime, transport = await mount(DERIVED[policy])
+async def test_noop_turn_stays_a_noop():
+    runtime, transport = await mount(ExplicitDerived)
     types, _ = await event(runtime, transport, "nothing")
     assert types == ["noop"], types
     # Also after a real render, so the derived-value baseline is warm.
     await event(runtime, transport, "bump")
     types, _ = await event(runtime, transport, "nothing")
     assert types == ["noop"], types
-
-
-async def test_policies_produce_identical_render_frames():
-    """Same change, same frames: the explicit detector is no coarser and no
-    finer than legacy for any turn above."""
-    results = {}
-    for policy, view_class in DERIVED.items():
-        runtime, transport = await mount(view_class)
-        seen = []
-        for name, params in (
-            ("nothing", {}),
-            ("bump", {}),
-            ("swap_service", {}),
-            ("write_in_place", {}),
-            ("write_in_place", {"hatch": "zero"}),
-            ("nothing", {}),
-        ):
-            types, _ = await event(runtime, transport, name, **params)
-            patches = [
-                frame.get("patches") or frame.get("html")
-                for frame in transport.sent
-                if frame.get("type") in RENDER_FRAMES
-            ]
-            seen.append((types, patches))
-        results[policy] = seen
-    assert results["explicit"] == results["legacy"]
 
 
 # ---------------------------------------------------------------------------
@@ -299,17 +257,15 @@ async def test_provider_tracked_keys_are_inside_the_change_detector():
     assert "_explicit_context_provider_keys" not in watched
 
 
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
-async def test_provider_tracked_key_change_rerenders_its_keys(policy):
-    runtime, transport = await mount(WIZARDS[policy])
+async def test_provider_tracked_key_change_rerenders_its_keys():
+    runtime, transport = await mount(ExplicitWizard)
     types, frames = await event(runtime, transport, "next_step")
     assert _render_types(types), types
     assert "STEP_TWO_SENTINEL" in frames
 
 
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
-async def test_provider_tracked_key_in_place_mutation_rerenders(policy):
-    runtime, transport = await mount(WIZARDS[policy])
+async def test_provider_tracked_key_in_place_mutation_rerenders():
+    runtime, transport = await mount(ExplicitWizard)
     types, frames = await event(
         runtime, transport, "update_step_field", field="answer", value="ANSWER_SENTINEL"
     )
@@ -356,7 +312,6 @@ def _child_body(policy):
 
 
 ExplicitChild = type("ExplicitChild", (LiveView,), _child_body("explicit"))
-LegacyChild = type("LegacyChild", (LiveView,), _child_body("legacy"))
 
 
 def _parent(name, policy, child):
@@ -375,8 +330,6 @@ def _parent(name, policy, child):
 
 
 ExplicitParent = _parent("ExplicitParent", "explicit", ExplicitChild)
-LegacyParent = _parent("LegacyParent", "legacy", LegacyChild)
-PARENTS = {"explicit": ExplicitParent, "legacy": LegacyParent}
 
 
 @pytest.fixture
@@ -384,11 +337,10 @@ def children(settings):
     settings.DJUST_LIVE_RENDER_ALLOWED_MODULES = [MODULE]
 
 
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
-async def test_child_derived_context_rerenders_on_the_django_path(children, policy):
+async def test_child_derived_context_rerenders_on_the_django_path(children):
     """Each successive child change reaches its ``embedded_update``: a declared
     field (``bump``) and an opaque plain attribute (``swap_service``)."""
-    runtime, transport = await mount(PARENTS[policy])
+    runtime, transport = await mount(ExplicitParent)
     for name, sentinel in (
         ("bump", "DOUBLED_4"),
         ("swap_service", "LABEL_CHILD_B"),
@@ -402,18 +354,14 @@ async def test_child_derived_context_rerenders_on_the_django_path(children, poli
 async def test_django_and_rust_render_the_same_change_identically(children):
     """Where both engines apply (an embedded child's own template), the same
     change renders the same markup through Django (the embedded_update frame)
-    and through the Rust template engine, under both policies."""
+    and through the Rust template engine."""
     from djust._rust import render_template
 
-    html = {}
-    for policy, parent in PARENTS.items():
-        runtime, transport = await mount(parent)
-        await event(runtime, transport, "bump", view_id="menu")
-        frame = next(f for f in transport.sent if f.get("type") == "embedded_update")
-        child = runtime.view_instance._get_child_view("menu")
-        context = {k: child.get_context_data()[k] for k in ("doubled", "label")}
-        rust = render_template(child.template, context)
-        assert frame["html"] == rust, (policy, frame["html"], rust)
-        html[policy] = frame["html"]
-    assert "DOUBLED_4" in html["explicit"]
-    assert html["explicit"] == html["legacy"]
+    runtime, transport = await mount(ExplicitParent)
+    await event(runtime, transport, "bump", view_id="menu")
+    frame = next(f for f in transport.sent if f.get("type") == "embedded_update")
+    child = runtime.view_instance._get_child_view("menu")
+    context = {k: child.get_context_data()[k] for k in ("doubled", "label")}
+    rust = render_template(child.template, context)
+    assert frame["html"] == rust, (frame["html"], rust)
+    assert "DOUBLED_4" in frame["html"]

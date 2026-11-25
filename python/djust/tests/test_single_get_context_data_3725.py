@@ -9,7 +9,7 @@ evaluate it again. The cache short-circuit lives inside the stock
 happened twice on first paint, and a query budget read double.
 
 The render path now takes the context the request path already computed
-(``ContextMixin._context_for_render``), for both exposure policies.
+(``ContextMixin._context_for_render``).
 
 What is pinned here, each by running the real thing:
 
@@ -80,35 +80,19 @@ def _make(name: str, policy: str, use_super: bool, shell: bool):
             "template": '<div dj-root dj-view="' + MOD + "." + name + '">{{ n }}-{{ stamp }}</div>'
         }
     body: dict = {"exposure_policy": policy, **tpl}
-    if policy == "explicit":
-        body["n"] = state(1, persist="server")
+    body["n"] = state(1, persist="server")
 
-        def mount(self, request, **kwargs):
-            pass
+    def mount(self, request, **kwargs):
+        pass
 
-        if use_super:
+    if use_super:
 
-            def get_context_data(self, **kwargs):
-                return super(cls, self).get_context_data(n=self.n, stamp=_stamp(self), **kwargs)
-        else:
-
-            def get_context_data(self, **kwargs):
-                return {"n": self.n, "stamp": _stamp(self)}
+        def get_context_data(self, **kwargs):
+            return super(cls, self).get_context_data(n=self.n, stamp=_stamp(self), **kwargs)
     else:
 
-        def mount(self, request, **kwargs):
-            self.n = 1
-
-        if use_super:
-
-            def get_context_data(self, **kwargs):
-                ctx = super(cls, self).get_context_data(**kwargs)
-                ctx["stamp"] = _stamp(self)
-                return ctx
-        else:
-
-            def get_context_data(self, **kwargs):
-                return {"n": self.n, "stamp": _stamp(self)}
+        def get_context_data(self, **kwargs):
+            return {"n": self.n, "stamp": _stamp(self)}
 
     body["mount"] = mount
     body["get_context_data"] = get_context_data

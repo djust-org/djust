@@ -656,9 +656,9 @@ never reach a view that failed auth.
 
 - **Test WS auth with a raw client** (`WebsocketCommunicator` / the `websockets`
   library), not just a browser.
-- For mid-session logout / permission loss, enable per-event re-check:
-  `LIVEVIEW_CONFIG['reauth_on_event'] = True` (default OFF — costs one session
-  read per event).
+- Mid-session logout / permission loss: every event and server turn is
+  re-authorized against a freshly loaded session (the 1.3 switch
+  `reauth_on_event` is refused at startup in 2.0).
 - Set `LIVEVIEW_ALLOWED_MODULES` to restrict which view classes a client may
   mount over the WebSocket.
 - Gate **non-LiveView endpoints** (plain `django.views.View`, OAuth callbacks)

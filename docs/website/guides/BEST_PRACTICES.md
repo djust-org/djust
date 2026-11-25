@@ -911,10 +911,10 @@ auth. Practices to follow:
 - **Test WebSocket auth with a raw client** (`WebsocketCommunicator` or the
   `websockets` library), not just a browser — a browser follows the redirect and
   can mask a gap in your auth setup.
-- Auth is **mount-time** by default. To also reject events after a *mid-session*
-  logout or permission change, enable a per-event re-check:
-  `LIVEVIEW_CONFIG['reauth_on_event'] = True` (default OFF — it costs one session
-  read per event).
+- Auth runs at mount and again on **every event and server turn**, against a
+  freshly loaded session, so a *mid-session* logout or permission change
+  refuses the next event. (The 1.3 opt-in `reauth_on_event` is refused at
+  startup in 2.0.)
 - Set **`LIVEVIEW_ALLOWED_MODULES`** to restrict which view classes a client may
   mount over the WebSocket; per-view `check_view_auth` remains the real gate.
 - **Non-LiveView endpoints** — a plain `django.views.View` (e.g. an OAuth

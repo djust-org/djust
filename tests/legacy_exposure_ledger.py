@@ -370,31 +370,6 @@ REMAINING_4082: dict[str, str] = {}
 #: and later tests OF the legacy policy (each statement gives its reason inline).
 OTHER_LEGACY_FILES: frozenset[str] = frozenset(
     {
-        # #4276, #4279, #4280: tests OF legacy behaviour next to the explicit fix (reason inline).
-        "python/djust/tests/test_sync_turn_render_evaluation_4276.py",
-        "python/djust/tests/test_unsupplied_names_mode_4279.py",
-        "python/tests/test_persisted_state_4280.py",
-        # #4241: qs.count / qs.exists render on the native renderer under the legacy
-        # policy too, until the legacy arm is removed.
-        "python/tests/test_queryset_count_exists_4241.py",
-        # #4255: reauth_on_event (turns.reauth) re-checks legacy views only; the SSE
-        # re-check must see the mount request's path and query like WS and HTTP do.
-        "python/djust/tests/test_sse_reauth_mount_request_4255.py",
-        # #4167: a legacy lazy child routes over the socket like an explicit one.
-        "python/djust/tests/test_lazy_child_live_transport_4167.py",
-        # #4174 mixed-policy refusal: a dj-lazy container whose policy differs
-        # from its page's is not registered on the page POST.
-        "python/djust/tests/test_lazy_attribute_explicit_http_4174.py",
-        # #3936: state models as handles run on both exposure policies (the policy is a
-        # parametrised axis of the cases), so legacy is a subject here.
-        "python/tests/test_state_models_as_handles_3936.py",
-        # #4168: legacy socket turns store their handlers' session writes.
-        "python/djust/tests/test_session_only_write_4168.py",
-        # #4112: rows a legacy view publishes refresh after a write, as explicit ones do.
-        "python/djust/tests/test_held_rows_4112.py",
-        # #4185: djust.V032 names an admin widget that states the legacy policy.
-        "python/djust/tests/test_admin_legacy_widget_v032.py",
-        "python/djust/tests/test_interactive_http_fallback_4046.py",
         # -- implementer 1: #4192, #4193, #4198 (delete lines only) --
         # -- end of implementer 1 --
         # -- implementer 2: #4194, #4195 (delete lines only) --

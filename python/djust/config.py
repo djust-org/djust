@@ -178,9 +178,6 @@ class LiveViewConfig:
         # ``event_security`` was removed in 2.0 (#4101): only @event_handler
         # methods are client events, on every transport. "open" / "warn" fail
         # startup (``djust._removed_settings``); "strict" is accepted and ignored.
-        # ADR-036: strict event parameters, the default since 2.0 (#4189). "legacy" is
-        # deprecated and removed before 2.0.0 (#4199).
-        "event_parameter_policy": "strict",
         # LiveView transport mode
         "use_websocket": True,  # Set to False to use HTTP polling instead of WebSocket
         # WebSocket per-message compression advisory flag (v0.6.0).
@@ -243,21 +240,6 @@ class LiveViewConfig:
         # strict (``components.utils.csp_strict``). Setting both to different
         # values is reported by the system check ``djust.C039``.
         "csp_strict_styles": False,
-        # Re-check auth on every WS event (#1777, threat model T3, defense-in-depth).
-        # Auth normally runs only at mount; with this OFF (default) an
-        # authenticated user who logs out / loses a permission mid-session keeps
-        # dispatching events on the open socket until they reconnect (the
-        # connect-time scope user is cached). When True, handle_event re-resolves
-        # the user from the session (channels.auth.get_user) and re-runs the
-        # view's login_required/permission_required check, closing 4403 on
-        # failure. Default OFF: it costs one session read per event — opt in for
-        # high-security apps that want mid-session deauth enforced on the live path.
-        "reauth_on_event": False,
-        # Seconds a passed reauth_on_event check also covers server-originated
-        # turns (tick, server_push, db_notify, presence, async results) on one
-        # socket, so ticking views do not read the session store every tick.
-        # 0 re-checks every turn. Only used when reauth_on_event is on.
-        "reauth_server_turn_interval": 5.0,
         # Hot Reload (Development)
         "hot_reload": True,  # Enable hot reload in development (requires DEBUG=True)
         "hot_reload_watch_dirs": None,  # Directories to watch (None = auto-detect BASE_DIR)

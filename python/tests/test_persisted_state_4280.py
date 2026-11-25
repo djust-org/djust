@@ -5,8 +5,6 @@ not what it saves. ``persisted_state()`` splits the saved state by destination s
 assert that rows a page only read are in none of them.
 """
 
-import warnings
-
 import pytest
 
 from djust import LiveView, state
@@ -38,14 +36,6 @@ class NoAutomatic(LiveView):
 
     def mount(self, request, **kwargs):
         self.secret_rows = ["row"]
-
-
-with warnings.catch_warnings():
-    warnings.simplefilter("ignore", DeprecationWarning)
-
-    class Legacy(LiveView):
-        exposure_policy = "legacy"  # legacy subject: #4280 persisted_state() refuses a legacy view
-        template = "<div dj-root></div>"
 
 
 def _mounted(view_class=Page):
@@ -90,12 +80,6 @@ def test_client_method_matches_function():
 def test_client_method_needs_a_mounted_view():
     with pytest.raises(RuntimeError):
         LiveViewTestClient(Page).persisted_state()
-
-
-def test_legacy_view_raises_typeerror():
-    client = _mounted(Legacy)
-    with pytest.raises(TypeError, match="explicit exposure"):
-        client.persisted_state()
 
 
 def test_automatic_bytes_matches_saved_envelope_size():

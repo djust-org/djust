@@ -83,10 +83,6 @@ class Valid(LiveView):
     def legacy_unannotated(self, value, **kwargs):
         return value
 
-    @event_handler(parameter_policy="legacy")
-    def explicit_legacy(self, view_id, **kwargs):
-        return view_id
-
     @event_handler(parameter_policy="strict")
     async def async_ok(self, count: int):
         return count
@@ -387,14 +383,11 @@ def test_mixin_handler_is_reported_once_under_its_user_with_its_declaration(fixt
     assert not any("mixin_local" in key for key in found)
 
 
-def test_project_strict_policy_reports_inheriting_handlers_but_not_legacy_overrides(
-    fixture_module,
-):
+def test_project_strict_policy_reports_inheriting_handlers(fixture_module):
     config.set("event_parameter_policy", "strict")
     found = _messages(fixture_module)
     assert found[_label("Invalid", "inherits_project_policy")] == [EXPECTED_INVALID["unannotated"]]
     assert found[_label("Valid", "legacy_unannotated")] == [EXPECTED_INVALID["unannotated"]]
-    assert _label("Valid", "explicit_legacy") not in found
     assert _label("AsyncView", "async_legacy") in found  # unannotated under strict
 
 
@@ -418,7 +411,7 @@ def test_invalid_project_policy_is_one_configuration_error(fixture_module):
 
 @pytest.mark.parametrize("policy", [None, "legacy", "strict"])
 def test_valid_project_policy_has_no_configuration_error(policy):
-    old = config.get("event_parameter_policy", "legacy")
+    old = config.get("event_parameter_policy", "strict")
     try:
         config.set("event_parameter_policy", policy)
         assert not [m for m in check_configuration(None) if m.id == "djust.C022"]

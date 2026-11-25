@@ -161,7 +161,7 @@ PROBES = (
 PROBES_BY_NAME = {name: source for name, source, _ in PROBES}
 
 
-def _measure(source: str, factory, policy: str, flag: bool, twice: bool = False) -> tuple[str, int]:
+def _measure(source: str, factory, flag: bool, twice: bool = False) -> tuple[str, int]:
     """The rendered body and the number of queries; ``twice`` renders again on the same view (a
     second sync, as after an event)."""
     from django.test import override_settings
@@ -171,11 +171,11 @@ def _measure(source: str, factory, policy: str, flag: bool, twice: bool = False)
 
     if not twice:
         with CaptureQueriesContext(connection) as ctx:
-            out = _render(source, factory, policy, flag=flag)
+            out = _render(source, factory, flag=flag)
         return out, len(ctx.captured_queries)
     with override_settings(LIVEVIEW_CONFIG=FLAG_ON if flag else FLAG_OFF):
         with CaptureQueriesContext(connection) as ctx:
-            client = LiveViewTestClient(_view(source, factory, policy))
+            client = LiveViewTestClient(_view(source, factory))
             client.mount()
             client.render()
             out = _body(client.render())
@@ -183,13 +183,10 @@ def _measure(source: str, factory, policy: str, flag: bool, twice: bool = False)
 
 
 @pytest.mark.parametrize("twice", [False, True], ids=["once", "twice"])
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
 @pytest.mark.parametrize("name,source,factory", [pytest.param(*p, id=p[0]) for p in PROBES])
-def test_the_overlay_answers_and_queries_as_flag_off_does(
-    world, policy, name, source, factory, twice
-):
-    on_out, on_queries = _measure(source, factory, policy, flag=True, twice=twice)
-    off_out, off_queries = _measure(source, factory, policy, flag=False, twice=twice)
+def test_the_overlay_answers_and_queries_as_flag_off_does(world, name, source, factory, twice):
+    on_out, on_queries = _measure(source, factory, flag=True, twice=twice)
+    off_out, off_queries = _measure(source, factory, flag=False, twice=twice)
     assert on_out == off_out, (on_out, off_out)
     assert on_queries <= off_queries, (on_queries, off_queries)
 
@@ -201,13 +198,12 @@ def _annotated() -> dict:
 
 
 @pytest.mark.parametrize("twice", [False, True], ids=["once", "twice"])
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
-def test_an_annotated_queryset_reads_its_annotation(world, policy, twice):
+def test_an_annotated_queryset_reads_its_annotation(world, twice):
     """Review S4: an annotation is read as Django reads it (explicit's flag-off dict lacks it and
     printed ``;;;``; the overlay improves that), with no added query."""
     source = "{% for u in users %}{{ u.n }};{% endfor %}"
-    on_out, on_queries = _measure(source, _annotated, policy, flag=True, twice=twice)
-    _, off_queries = _measure(source, _annotated, policy, flag=False, twice=twice)
+    on_out, on_queries = _measure(source, _annotated, flag=True, twice=twice)
+    _, off_queries = _measure(source, _annotated, flag=False, twice=twice)
     assert on_out == "2;1;0;"
     assert on_queries <= off_queries, (on_queries, off_queries)
 
@@ -239,16 +235,15 @@ DJANGO_ANSWERS = {
 
 
 @pytest.mark.parametrize("flag", [True, False], ids=["handles", "flag-off"])
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
 @pytest.mark.parametrize("name", sorted(DJANGO_ANSWERS))
-def test_the_overlay_keeps_djangos_answer(world, policy, name, flag):
+def test_the_overlay_keeps_djangos_answer(world, name, flag):
     from django.template import Context as DjangoContext
     from django.template import Template as DjangoTemplate
 
     source, factory = next((s, f) for n, s, f in PROBES if n == name)
     if "password" not in source:
         assert DjangoTemplate(source).render(DjangoContext(factory())) == DJANGO_ANSWERS[name]
-    assert _render(source, factory, policy, flag=flag) == DJANGO_ANSWERS[name]
+    assert _render(source, factory, flag=flag) == DJANGO_ANSWERS[name]
 
 
 def test_gate_off_without_all_as_a_root_method_users_all_renders_empty(world, monkeypatch):
@@ -264,16 +259,14 @@ def test_gate_off_without_all_as_a_root_method_users_all_renders_empty(world, mo
     clear_jit_cache()
     clear_render_caches()
     try:
-        for policy in ("explicit", "legacy"):
-            assert _render("{{ users.all.count }}", _qs, policy) == ""
-            assert _render(PROBES_BY_NAME["qs-top-all"], _qs, policy) == ""
+        assert _render("{{ users.all.count }}", _qs) == ""
+        assert _render(PROBES_BY_NAME["qs-top-all"], _qs) == ""
     finally:
         clear_jit_cache()
         clear_render_caches()
 
 
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
-def test_the_overlay_keeps_the_row_cap(world, policy):
+def test_the_overlay_keeps_the_row_cap(world):
     """#3788: ``queryset_all_row_cap`` bounds a walked ``.all`` on the flag-on render too."""
     from djust.config import config
 
@@ -283,8 +276,8 @@ def test_the_overlay_keeps_the_row_cap(world, policy):
     previous = config.get("queryset_all_row_cap")
     config.set("queryset_all_row_cap", 1)
     try:
-        on = _render(source, _qs, policy, flag=True)
-        off = _render(source, _qs, policy, flag=False)
+        on = _render(source, _qs, flag=True)
+        off = _render(source, _qs, flag=False)
     finally:
         config.set("queryset_all_row_cap", previous)
     assert on == off == "[staff,][staff,][]"
@@ -293,20 +286,8 @@ def test_the_overlay_keeps_the_row_cap(world, policy):
 def test_the_overlay_still_serves_a_filtered_rebinding(world):
     """Non-vacuity: the keys the overlay keeps still get their handle (the declared change)."""
     source = "{% with q=u|default:u %}{{ q.groups.count }}{% endwith %}"
-    assert _render(source, _one, "explicit", flag=True) == "2"
-    assert _render(source, _one, "explicit", flag=False) == ""
-
-
-def test_gate_off_without_the_relation_check_a_legacy_fk_loop_is_n_plus_one(world, monkeypatch):
-    """Gate-off (review B2): without ``_paths_read_a_relation`` the legacy handles walk each row's
-    forward FK lazily."""
-    from djust.mixins import rust_bridge
-
-    source = "{% for p in perms %}{{ p.content_type }};{% endfor %}"
-    monkeypatch.setattr(rust_bridge, "_paths_read_a_relation", lambda *a, **k: False)
-    _, on_queries = _measure(source, _perms_sliced, "legacy", flag=True)
-    _, off_queries = _measure(source, _perms_sliced, "legacy", flag=False)
-    assert on_queries > off_queries, (on_queries, off_queries)
+    assert _render(source, _one, flag=True) == "2"
+    assert _render(source, _one, flag=False) == ""
 
 
 def test_gate_off_restoring_the_shadow_turns_the_method_probe_red(world, monkeypatch):
@@ -315,15 +296,14 @@ def test_gate_off_restoring_the_shadow_turns_the_method_probe_red(world, monkeyp
     from djust.mixins import rust_bridge
 
     monkeypatch.setattr(rust_bridge, "_overlay_skip_keys", lambda *a, **k: frozenset())
-    assert _render("{{ users.count }}", _qs, "explicit", flag=True) == ""
-    assert _render("{{ users.count }}", _qs, "explicit", flag=False) == "3"
+    assert _render("{{ users.count }}", _qs, flag=True) == ""
+    assert _render("{{ users.count }}", _qs, flag=False) == "3"
 
 
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
-def test_a_projection_is_never_an_empty_handle(world, policy):
+def test_a_projection_is_never_an_empty_handle(world):
     """Review B1: a projection's rows render (they rendered ``''`` / ``0`` with the overlay on)."""
-    assert _render("{{ rows|length }}", _values_flat, policy, flag=True) == "3"
-    assert _render("{% for r in rows %}{{ r }};{% endfor %}", _values_flat, policy) == "u0;u1;u2;"
+    assert _render("{{ rows|length }}", _values_flat, flag=True) == "3"
+    assert _render("{% for r in rows %}{{ r }};{% endfor %}", _values_flat) == "u0;u1;u2;"
 
 
 def test_gate_off_capturing_a_projection_renders_it_empty(world, monkeypatch):
@@ -331,7 +311,7 @@ def test_gate_off_capturing_a_projection_renders_it_empty(world, monkeypatch):
     from djust.mixins import context
 
     monkeypatch.setattr(context, "_is_projection", lambda qs: False)
-    assert _render("{{ rows|length }}", _values_flat, "explicit", flag=True) == "0"
+    assert _render("{{ rows|length }}", _values_flat, flag=True) == "0"
 
 
 def test_the_world_is_what_the_answers_assume(world):
@@ -367,14 +347,13 @@ S1_CASES = [
 
 
 @pytest.mark.parametrize("flag", [True, False], ids=["handles", "flag-off"])
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
 @pytest.mark.parametrize("name,source,want", S1_CASES, ids=[c[0] for c in S1_CASES])
-def test_a_method_read_key_keeps_its_filtered_rebindings(world, policy, flag, name, source, want):
+def test_a_method_read_key_keeps_its_filtered_rebindings(world, flag, name, source, want):
     from django.template import Context as DjangoContext
     from django.template import Template as DjangoTemplate
 
     assert DjangoTemplate(source).render(DjangoContext(_qs())) == want
-    out, queries = _measure(source, _qs, policy, flag=flag)
+    out, queries = _measure(source, _qs, flag=flag)
     assert out == want
     # the outer SELECT once, the relation once (prefetched), no per-row query
     assert queries <= 3, queries
@@ -385,7 +364,7 @@ def test_gate_off_without_the_jit_an_explicit_rebinding_reads_empty(world, monke
 
     monkeypatch.setattr(rust_bridge, "_method_read_rows_take_the_jit", lambda ctx: False)
     _, source, _ = S1_CASES[1]
-    assert _render(source, _qs, "explicit") == "3|,,,"
+    assert _render(source, _qs) == "3|,,,"
 
 
 # -- review N4: an explicit QuerySet loop reading a forward FK as one segment -------------------
@@ -407,7 +386,7 @@ def test_an_explicit_fk_loop_is_one_query(world, source, flag):
     from django.template import Template as DjangoTemplate
 
     want = DjangoTemplate(source).render(DjangoContext(_perms()))
-    out, queries = _measure(source, _perms, "explicit", flag=flag)
+    out, queries = _measure(source, _perms, flag=flag)
     assert out == want
     assert queries == 1, queries
 
@@ -418,7 +397,7 @@ def test_gate_off_an_explicit_fk_loop_walks_each_row(world, monkeypatch):
     monkeypatch.setattr(rust_bridge, "_explicit_fk_rows_take_the_jit", lambda *a: False)
     # #4290 would hand the rows to the JIT as plain-column rows; its gate off too.
     monkeypatch.setattr(rust_bridge, "_plain_rows_take_the_jit", lambda *a: False)
-    _, queries = _measure(FK_ONE_SEGMENT[0], _perms_sliced, "explicit", flag=False)
+    _, queries = _measure(FK_ONE_SEGMENT[0], _perms_sliced, flag=False)
     assert queries > 5, queries
 
 
@@ -445,13 +424,12 @@ def fresh_jit():
 
 
 @pytest.mark.parametrize("flag", [True, False], ids=["handles", "flag-off"])
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
-def test_a_method_read_fk_loop_queries_as_the_loop_alone(world, fresh_jit, policy, flag):
+def test_a_method_read_fk_loop_queries_as_the_loop_alone(world, fresh_jit, flag):
     from django.template import Context as DjangoContext
     from django.template import Template as DjangoTemplate
 
-    out, queries = _measure(COUNT_AND_FK, _perms_sliced, policy, flag=flag)
-    _, alone = _measure(FK_ALONE, _perms_sliced, policy, flag=flag)
+    out, queries = _measure(COUNT_AND_FK, _perms_sliced, flag=flag)
+    _, alone = _measure(FK_ALONE, _perms_sliced, flag=flag)
     assert out == DjangoTemplate(COUNT_AND_FK).render(DjangoContext(_perms_sliced()))
     assert queries == alone == 1, (queries, alone)
 
@@ -483,8 +461,7 @@ def test_gate_off_the_codegen_leaf_ships_the_instance(world, monkeypatch):
     assert row["content_type"] is perm.content_type
 
 
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
-def test_gate_off_a_method_read_fk_loop_is_n_plus_one(world, fresh_jit, monkeypatch, policy):
+def test_gate_off_a_method_read_fk_loop_is_n_plus_one(world, fresh_jit, monkeypatch):
     """Gate-off: with neither the method paths dropped nor the leaf floored, every row takes the
     codegen fallback and auto-calls ``ContentType.get_*`` (the issue's 6 queries for 5 rows); with
     only the leaf gated off, dropping the method paths alone keeps the loop at one query."""
@@ -492,62 +469,33 @@ def test_gate_off_a_method_read_fk_loop_is_n_plus_one(world, fresh_jit, monkeypa
     from djust.optimization import codegen
 
     monkeypatch.setattr(codegen, "leaf_value", lambda value: value)
-    out, queries = _measure(COUNT_AND_FK, _perms_sliced, policy, flag=True)
+    out, queries = _measure(COUNT_AND_FK, _perms_sliced, flag=True)
     assert queries == 1, queries
     monkeypatch.setattr(jit, "_method_root_row_paths", lambda model, paths: paths)
     from djust.session_utils import clear_jit_cache
 
     clear_jit_cache()
-    out_off, queries_off = _measure(COUNT_AND_FK, _perms_sliced, policy, flag=True)
+    out_off, queries_off = _measure(COUNT_AND_FK, _perms_sliced, flag=True)
     assert out_off == out
     assert queries_off > 5, queries_off
 
 
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
 def test_gate_off_keeping_the_method_paths_sends_rows_through_codegen(
-    world, fresh_jit, monkeypatch, policy
+    world, fresh_jit, monkeypatch
 ):
     from djust.mixins import jit
 
     compiled = []
     real = jit.compile_serializer
     monkeypatch.setattr(jit, "compile_serializer", lambda *a: compiled.append(a) or real(*a))
-    _measure(COUNT_AND_FK, _perms_sliced, policy, flag=True)
+    _measure(COUNT_AND_FK, _perms_sliced, flag=True)
     assert compiled == []
     monkeypatch.setattr(jit, "_method_root_row_paths", lambda model, paths: paths)
     from djust.session_utils import clear_jit_cache
 
     clear_jit_cache()
-    _measure(COUNT_AND_FK, _perms_sliced, policy, flag=True)
+    _measure(COUNT_AND_FK, _perms_sliced, flag=True)
     assert compiled
-
-
-# -- #4271: a legacy view reads a projection's rows as Django does ------------------------------
-
-
-def test_a_legacy_projection_keeps_its_count_key(world):
-    """The legacy ``<name>_count`` key still counts a projection the JIT now leaves alone, with the
-    one query the loop already runs."""
-    source = "{{ rows_count }}|{% for r in rows %}{{ r.username }};{% endfor %}"
-    assert _measure(source, _values, "legacy", flag=True) == ("3|u0;u1;u2;", 1)
-
-
-@pytest.mark.parametrize("flag", [True, False], ids=["handles", "flag-off"])
-def test_gate_off_a_legacy_projection_through_the_jit_reads_empty(world, monkeypatch, flag):
-    from djust._render_caches import clear_render_caches
-    from djust.mixins import context
-    from djust.session_utils import clear_jit_cache
-
-    monkeypatch.setattr(context, "_projection_skips_the_jit", lambda qs: False)
-    clear_jit_cache()
-    clear_render_caches()
-    try:
-        source = PROBES_BY_NAME["values-loop"]
-        assert _render(source, _values, "legacy", flag=flag) == ";;;"
-        assert _render(source, _values, "explicit", flag=flag) == "u0;u1;u2;"
-    finally:
-        clear_jit_cache()
-        clear_render_caches()
 
 
 # -- #4269: a related object printed whole beside a field read off it -------------------------
@@ -563,22 +511,16 @@ def _perms_list() -> dict:
 
 @pytest.mark.parametrize("factory", [_perms_sliced, _perms_list], ids=["queryset", "list"])
 @pytest.mark.parametrize("flag", [True, False], ids=["handles", "flag-off"])
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
-def test_a_related_object_read_whole_and_by_field_prints_its_text(
-    world, fresh_jit, policy, flag, factory
-):
+def test_a_related_object_read_whole_and_by_field_prints_its_text(world, fresh_jit, flag, factory):
     from django.template import Context as DjangoContext
     from django.template import Template as DjangoTemplate
 
     want = DjangoTemplate(FK_WHOLE_AND_DOTTED).render(DjangoContext(factory()))
     assert want.startswith("Administration | log entry logentry;"), want
-    assert _render(FK_WHOLE_AND_DOTTED, factory, policy, flag=flag) == want
+    assert _render(FK_WHOLE_AND_DOTTED, factory, flag=flag) == want
 
 
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
-def test_gate_off_without_the_nested_text_path_the_row_prints_a_dict(
-    world, fresh_jit, monkeypatch, policy
-):
+def test_gate_off_without_the_nested_text_path_the_row_prints_a_dict(world, fresh_jit, monkeypatch):
     """Gate-off: with the extractor's nested ``__str__`` paths stripped, the nested dict holds only
     ``model`` and prints as one, the issue's ``{'model': 'logentry'}``."""
     from djust.mixins import jit
@@ -595,7 +537,7 @@ def test_gate_off_without_the_nested_text_path_the_row_prints_a_dict(
         }
 
     monkeypatch.setattr(jit, "_cached_extract_template_variables", without_nested_text)
-    assert "{'model': 'logentry'}" in _render(FK_WHOLE_AND_DOTTED, _perms_sliced, policy)
+    assert "{'model': 'logentry'}" in _render(FK_WHOLE_AND_DOTTED, _perms_sliced)
 
 
 # -- review (#4270): ``users.all`` answers from the rows the JIT fetched ------------------------
@@ -621,13 +563,12 @@ ALL_QUERY_COUNTS = [
 ]
 
 
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
 @pytest.mark.parametrize("name,source,want", ALL_QUERY_COUNTS, ids=[c[0] for c in ALL_QUERY_COUNTS])
-def test_users_all_queries_as_users_does(world, fresh_jit, policy, name, source, want):
+def test_users_all_queries_as_users_does(world, fresh_jit, name, source, want):
     from django.template import Context as DjangoContext
     from django.template import Template as DjangoTemplate
 
-    out, queries = _measure(source, _qs, policy, flag=True)
+    out, queries = _measure(source, _qs, flag=True)
     assert out == DjangoTemplate(source).render(DjangoContext(_qs()))
     assert queries == want, queries
 
@@ -644,14 +585,13 @@ def test_the_held_queryset_leaves_the_state_queryset_alone(world):
     assert state._result_cache is None
 
 
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
-def test_gate_off_a_fresh_all_re_queries(world, fresh_jit, monkeypatch, policy):
+def test_gate_off_a_fresh_all_re_queries(world, fresh_jit, monkeypatch):
     from djust.mixins import jit
 
     monkeypatch.setattr(jit, "_answers_all_from_its_rows", lambda rows: False)
     _, source, _ = ALL_QUERY_COUNTS[2]
-    assert _measure(source, _qs, policy, flag=True)[1] == 4
-    assert _measure(ALL_QUERY_COUNTS[0][1], _qs, policy, flag=True)[1] == 2
+    assert _measure(source, _qs, flag=True)[1] == 4
+    assert _measure(ALL_QUERY_COUNTS[0][1], _qs, flag=True)[1] == 2
 
 
 # -- review (#4272): a QuerySet read only through its methods builds no serializer -------------
@@ -664,11 +604,8 @@ METHODS_ONLY = [
 ]
 
 
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
 @pytest.mark.parametrize("source", METHODS_ONLY)
-def test_a_methods_only_queryset_builds_no_serializer(
-    world, fresh_jit, monkeypatch, policy, source
-):
+def test_a_methods_only_queryset_builds_no_serializer(world, fresh_jit, monkeypatch, source):
     from django.template import Context as DjangoContext
     from django.template import Template as DjangoTemplate
 
@@ -678,18 +615,17 @@ def test_a_methods_only_queryset_builds_no_serializer(
     real = jit.compile_serializer
     monkeypatch.setattr(jit, "compile_serializer", lambda *a: compiled.append(a) or real(*a))
     for twice in (False, True):
-        out, queries = _measure(source, _qs, policy, flag=True, twice=twice)
+        out, queries = _measure(source, _qs, flag=True, twice=twice)
         assert out == DjangoTemplate(source).render(DjangoContext(_qs()))
     assert compiled == []
 
 
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
-def test_gate_off_methods_only_rows_take_the_codegen(world, fresh_jit, monkeypatch, policy):
+def test_gate_off_methods_only_rows_take_the_codegen(world, fresh_jit, monkeypatch):
     from djust.mixins import jit
 
     compiled = []
     real = jit.compile_serializer
     monkeypatch.setattr(jit, "compile_serializer", lambda *a: compiled.append(a) or real(*a))
     monkeypatch.setattr(jit, "_method_root_row_paths", lambda model, paths: paths)
-    _measure("{{ users.count }}", _qs, policy, flag=True)
+    _measure("{{ users.count }}", _qs, flag=True)
     assert compiled

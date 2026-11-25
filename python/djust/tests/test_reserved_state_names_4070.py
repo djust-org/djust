@@ -92,14 +92,13 @@ def test_a_reserved_field_in_the_class_body_is_refused_naming_it_with_a_rename()
     assert "Rename" in message and "temporary_assigns_value" in message
 
 
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
 @pytest.mark.parametrize("name", ["template_name", "request", "page_title", "mount", "view"])
-def test_each_policy_and_kind_of_reserved_name_is_refused(policy, name):
+def test_each_kind_of_reserved_name_is_refused(name):
     with pytest.raises(ExposureConfigurationError, match=repr(name)):
         type(
             "Refused",
             (LiveView,),
-            {"exposure_policy": policy, "template": "<div dj-root></div>", name: state("x")},
+            {"exposure_policy": "explicit", "template": "<div dj-root></div>", name: state("x")},
         )
 
 

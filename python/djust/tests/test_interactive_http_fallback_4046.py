@@ -145,13 +145,14 @@ class Huge(LiveView):
     project_menu = DropdownMenu(label="Project", items=ITEMS)
     rows = DropdownMenu.collection()
     selected_action = state("", persist="server")
+    # Fits the 64 KB budget alone, but not with the rows' records. Padding rather
+    # than more rows: past ~90 such rows the page's strict parameter-contract
+    # manifest is over its own 64 KB limit first, and the event is refused.
+    padding = state("p" * 58000, persist="server")
 
     def mount(self, request, **kwargs):
         self.rows.sync(
-            [
-                ("k%03d" % i + "x" * 120, DropdownMenu(label="r", items=ROW_ITEMS))
-                for i in range(700)
-            ]
+            [("k%03d" % i + "x" * 120, DropdownMenu(label="r", items=ROW_ITEMS)) for i in range(80)]
         )
 
     @project_menu.on.selected
@@ -881,15 +882,9 @@ def test_a_collection_key_is_bounded_only_where_it_is_saved(routes):
         template = PAGE % ""
         rows = DropdownMenu.collection(persist=False)
 
-    class Legacy(LiveView):
-        exposure_policy = "legacy"  # legacy subject: no key limit on a legacy view
-        template = PAGE % ""
-        rows = DropdownMenu.collection()
-
-    for cls in (Unsaved, Legacy):
-        other = cls()
-        other.rows.sync([("k" * 500, DropdownMenu(label="x", items=ROW_ITEMS))])
-        assert [m.key for m in other.rows] == ["k" * 500]
+    other = Unsaved()
+    other.rows.sync([("k" * 500, DropdownMenu(label="x", items=ROW_ITEMS))])
+    assert [m.key for m in other.rows] == ["k" * 500]
 
 
 def _drop_envelope(session_key: str) -> None:
@@ -971,9 +966,7 @@ def test_a_tampered_record_rejects_the_whole_envelope(routes, change):
 
 
 @pytest.mark.django_db(transaction=True)
-def test_component_records_over_the_limit_are_left_out_without_an_error_loop(
-    routes, caplog, legacy_project_policy
-):
+def test_component_records_over_the_limit_are_left_out_without_an_error_loop(routes, caplog):
     page = FallbackPage("/huge/")
     key = page.client.session.session_key
     assert _envelope(key)["rows"] is None

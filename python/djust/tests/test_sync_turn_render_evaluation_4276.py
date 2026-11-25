@@ -58,16 +58,6 @@ class ExplicitRows(LiveView):
         return context
 
 
-class LegacyAddedAfterSuper(LiveView):
-    exposure_policy = "legacy"  # legacy subject: #4276 row 3, a QuerySet added after super()
-    template = LOOP
-
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context["users"] = get_user_model().objects.all()
-        return context
-
-
 class LoopRelationWalk(LiveView):
     exposure_policy = "explicit"
     template = (
@@ -125,12 +115,6 @@ def test_an_explicit_context_queryset_is_read_inside_the_wrapper(user):
     seen, html = _scopes_of(ExplicitRows)
     assert "<p>%s</p>" % user.pk in html
     assert seen == [True]
-
-
-def test_a_legacy_queryset_added_after_super_is_read_inside_the_wrapper(user):
-    seen, html = _scopes_of(LegacyAddedAfterSuper)
-    assert "<p>%s</p>" % user.pk in html
-    assert seen and all(seen), seen
 
 
 def test_a_loop_row_relation_walk_is_read_inside_the_wrapper(user):
@@ -262,7 +246,7 @@ def test_a_page_get_normalizes_a_model_property_inside_the_wrapper(user):
     assert all(in_scope for _, in_scope in user_reads), user_reads
 
 
-def test_a_background_render_enters_the_wrapper_once(user, legacy_project_policy):
+def test_a_background_render_enters_the_wrapper_once(user):
     """A background render (an async result, a push outside the push hop) syncs the
     state and renders as one ``"render"`` step: one wrapper entry, every query in it."""
     from types import SimpleNamespace
@@ -281,7 +265,11 @@ def test_a_background_render_enters_the_wrapper_once(user, legacy_project_policy
         client.render()
         del ENTERED[:]
         with connection.execute_wrapper(record):
-            result = render_background_sync(client.view_instance, SimpleNamespace())
+            view = client.view_instance
+            # The socket runtime this render belongs to: the strict contract
+            # manifest goes with the frame and names its owner.
+            runtime = SimpleNamespace(view_instance=view, _parameter_contract_view="v")
+            result = render_background_sync(view, runtime)
     assert result is not None
     assert ENTERED == ["render"]
     assert len(seen) >= 2 and all(seen), seen

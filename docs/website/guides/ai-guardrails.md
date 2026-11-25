@@ -330,7 +330,7 @@ Some behavior needs no command. These are the defaults when you write nothing, a
 | State exposure | `exposure_policy = "explicit"` (the default since 2.0): a value reaches the template, session or browser only when the view declares it ([explicit exposure](../state/explicit-exposure.md)). | Declare a field with `state()` (it renders), return a value from `get_context_data()`, and grant persistence or browser access per field (`persist=`, `client=True`). Views written for 1.x move as in [Migrating to djust 2.0](migrating-to-2.0.md). | No (1.3 has the explicit policy as an opt-in; the default is 2.0) |
 | Refusal codes | A refused `@permission_required` handler or object-level check sends an error frame with `code: "permission_denied"`, and the HTTP fallback answers `403` with the same code. A page can listen for `djust:error` (`detail.code`) and, for a 4401/4403 close, `djust:auth-refused` (`detail.error_code`). | Match the code in client code, not the error text ([refusal codes](authentication.md#refusal-codes)). | Partly: the uniform code and `detail.error_code` are on main only |
 | djust warnings | WARNING and ERROR records from the `djust` logger reach standard error even with no `LOGGING` setting. INFO stays quiet. | Configure `LOGGING` to send them elsewhere. A record that another handler already receives is not printed a second time. | No (main) |
-| `reauth_on_event` | Off. | Opt in with `LIVEVIEW_CONFIG = {"reauth_on_event": True}`. See the Known Limitations section of the [authentication guide](authentication.md). | Yes |
+| Re-authorization | Every event and server turn re-checks view-level auth against a freshly loaded session. | Nothing to switch on; the 1.3 key `reauth_on_event` is refused at startup. See the [authentication guide](authentication.md). | No (2.0) |
 
 ## What this does not do
 
@@ -345,7 +345,7 @@ Some behavior needs no command. These are the defaults when you write nothing, a
 - Checks can be silenced with `DJUST_CONFIG = {"suppress_checks": [...]}` or a `noqa` comment. An assistant can add one instead of fixing the finding, so read suppressions in review.
 - `LiveViewTestClient.send_event` runs the permission and object-level gates, but it does not check for `@event_handler`: a test can pass for an undecorated handler that the browser is refused on. `T019` and `V004` cover that gap, and only for bindings and names they can see.
 - `djust_ai_context` and the `docs/ai/` pages give an assistant information. They do not constrain what it writes, and the Security section in the generated file is advice, not a check.
-- `reauth_on_event` is opt-in. Explicit exposure limits where a value goes; it does not decide who may load the view.
+- Explicit exposure limits where a value goes; it does not decide who may load the view. That is `login_required`, `permission_required` and `check_permissions()`.
 
 Write tests for the behavior you care about, and review generated code before you merge it. The [testing guide](../testing/index.md) covers `LiveViewTestClient` and the smoke test.
 

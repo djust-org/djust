@@ -1,11 +1,10 @@
 """#4174: an explicit attribute-form ``dj-lazy`` view on the page-POST fallback.
 
 ``<div dj-view="..." dj-lazy>`` on an explicit page was never registered over
-HTTP: only a legacy page's legacy child was. Now a same-policy pair is: the
-explicit child is mounted with the eager ``{% live_render %}`` explicit checks
-under its lazy address, and keeps exactly its ``persist="server"`` fields
-between POSTs (its other state starts again from ``mount()``). A mixed-policy
-pair stays unregistered.
+HTTP. Now it is: the explicit child is mounted with the eager
+``{% live_render %}`` explicit checks under its lazy address, and keeps exactly
+its ``persist="server"`` fields between POSTs (its other state starts again
+from ``mount()``).
 """
 
 import json
@@ -60,23 +59,6 @@ class ObjectDeniedChild(Child):
 
     def has_object_permission(self, request, obj):
         return False
-
-
-class LegacyChild(LiveView):
-    # legacy subject: mixed-policy refusal
-    exposure_policy = "legacy"
-    template = "<div>legacy</div>"
-
-
-class LegacyPage(LiveView):
-    # legacy subject: mixed-policy refusal
-    exposure_policy = "legacy"
-    template = TAG
-
-
-class ExplicitPageLegacyChild(LiveView):
-    exposure_policy = "explicit"
-    template = '<div dj-root><div dj-view="' + MOD + '.LegacyChild" dj-lazy></div></div>'
 
 
 def request(method, session, body=None):
@@ -173,12 +155,6 @@ def test_denied_explicit_lazy_child_is_not_registered(session, view):
     else:
         assert len(ids) == 1
         assert post(session, ids[0], "djust_lazy_mount", DeniedPage).status_code == 403
-
-
-@pytest.mark.django_db
-@pytest.mark.parametrize("page", [ExplicitPageLegacyChild, LegacyPage])
-def test_mixed_policy_lazy_child_is_not_registered(session, page):
-    assert get_ids(session, page) == []
 
 
 @pytest.mark.django_db(transaction=True)

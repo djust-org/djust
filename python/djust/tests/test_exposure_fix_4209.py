@@ -16,7 +16,6 @@ import re
 import shutil
 import sys
 import types
-import warnings
 from io import StringIO
 from pathlib import Path
 
@@ -27,6 +26,7 @@ from django.core.management.base import CommandError
 from django.test import override_settings
 
 from djust import LiveView
+from djust._removed_settings import upgrade_inspection
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "upgrade13_4209"
 REPO = Path(__file__).resolve().parents[3]
@@ -51,8 +51,9 @@ def _load(path: Path, name: str) -> types.ModuleType:
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
+    # 1.3 code is refused when its classes are created (#4199); the command's
+    # own permit lets it be imported, as djust_exposure_inventory does.
+    with upgrade_inspection():
         spec.loader.exec_module(module)
     _loaded.append(module)
     return module
@@ -278,8 +279,7 @@ def _visible(html: str) -> str:
 
 
 def _render_all(module: types.ModuleType, parameter_policy: str) -> dict[str, str]:
-    """Each fixture view mounted and rendered; 1.3 code ran under the legacy parameter
-    policy (the 1.3 default), the fixed code runs under 2.0's strict default."""
+    """Each fixed fixture view mounted and rendered under 2.0's strict default."""
     from djust.config import config
     from djust.testing import LiveViewTestClient
 
@@ -295,25 +295,20 @@ def _render_each(module: types.ModuleType, client_class: type) -> dict[str, str]
     rendered = {}
     for name in VIEWS:
         client = client_class(getattr(module, name))
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", DeprecationWarning)
-            client.mount()
-            rendered[name] = client.render()
+        client.mount()
+        rendered[name] = client.render()
     return rendered
 
 
 @pytest.mark.django_db
-def test_fixed_app_passes_the_checks_and_renders_the_same(tmp_path):
-    """Gate-off: skip rewrite 1 and T027 fires and ``query`` renders empty."""
+def test_fixed_app_passes_the_checks_and_renders_what_1_3_rendered(tmp_path):
+    """Gate-off: skip rewrite 1 and T027 fires and ``query`` renders empty.
+
+    The unfixed 1.3 views cannot be mounted on 2.0 (#4199), so what they
+    rendered on 1.3 is written down here, one page per view."""
     from djust.checks.bindings import check_event_bindings
-    from djust.checks.components import check_legacy_exposure_policy
     from djust.checks.parameters import check_event_parameter_contracts
     from djust.checks.templates import check_unsupplied_template_names
-
-    before_dir, before = _app(tmp_path, "fix4209_before")
-    with override_settings(TEMPLATES=_templates(before_dir)):
-        rendered_before = _render_all(before, "legacy")
-    _unload(before)
 
     after_dir, after = _app(tmp_path, "fix4209_after")
     _fix(after_dir, after)
@@ -327,13 +322,12 @@ def test_fixed_app_passes_the_checks_and_renders_the_same(tmp_path):
                 check_unsupplied_template_names,
                 check_event_parameter_contracts,
                 check_event_bindings,
-                check_legacy_exposure_policy,
             )
             for m in check(None)
             if "fix4209_fixed" in str(m.msg) or "fix4209_after" in str(getattr(m, "file_path", ""))
         ]
-    for name in VIEWS:
-        assert _visible(rendered_after[name]) == _visible(rendered_before[name]), name
+    for name, text in RENDERED_ON_1_3.items():
+        assert _visible(rendered_after[name]) == text, name
     assert "none / 0 /" in _visible(rendered_after["SearchView"])
     assert 'dj-value-item-id="42"' in rendered_after["SearchView"]
     assert not [m for m in messages if m.level >= ERROR]
@@ -342,10 +336,20 @@ def test_fixed_app_passes_the_checks_and_renders_the_same(tmp_path):
         "djust.T027",
         "djust.V016",
         "djust.T020",
-        "djust.V028",
         "djust.V033",
         "djust.T028",
     }, [str(m) for m in messages]
+
+
+#: The visible text each fixture view rendered on 1.3, before the fix (the
+#: handler metadata script left out: the handlers are strict now).
+RENDERED_ON_1_3: dict[str, str] = {
+    "CartView": "0 items, coupon none, page 1 Add",
+    "SearchView": "Open none / 0 /",
+    "ReportView": "Report 0",
+    "ChipView": "chips",
+    "ModernView": "0 Bump",
+}
 
 
 CART_REPORT = """\
@@ -440,6 +444,7 @@ INHERITED_INLINE = '''\
 from django.utils.html import format_html
 
 from djust import LiveView
+from djust._removed_settings import upgrade_inspection
 from djust.decorators import event_handler
 
 
@@ -483,6 +488,7 @@ RUNTIME_TEMPLATES = """\
 from django.template import Context, Template
 
 from djust import LiveView
+from djust._removed_settings import upgrade_inspection
 
 
 class DynView(LiveView):

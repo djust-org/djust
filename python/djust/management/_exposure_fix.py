@@ -21,13 +21,9 @@ edits files under ``--root`` and outside djust and the installed packages, using
 ``ast`` positions and text splices (no new dependency); a ``.py`` whose result does
 not parse, or whose edits overlap, is left as it was.
 
-Note for #4199 (making ``exposure_policy = "legacy"`` an error at class creation):
-``--fix`` imports the views it rewrites, so #4199 must keep it able to import a
-module that still states the legacy policy, for example with a process-local permit
-(a ``ContextVar`` such as ``djust._exposure.permit_legacy_for_migration()``) that
-only ``djust_exposure_inventory`` enters around discovery and that turns the refusal
-back into the DeprecationWarning. Without it the command cannot see the views it is
-meant to migrate.
+2.0 refuses the 1.3 spellings when a class is created or a decorator applies (#4199);
+the command imports the views it rewrites under the upgrade permit in ``djust._removed_settings``,
+the permit that lets only it create them (constructing such a view is still refused).
 """
 
 from __future__ import annotations

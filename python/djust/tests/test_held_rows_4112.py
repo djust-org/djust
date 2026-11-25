@@ -188,24 +188,6 @@ class SnapshotInstance(_Explicit):
         return [self._row]
 
 
-class LegacyQuerySet(_Ops, LiveView):
-    exposure_policy = "legacy"  # legacy subject: rows a legacy view publishes refresh too
-    template = TEMPLATE
-
-    def mount(self, request: Any, **kwargs: Any) -> None:
-        self.rows = _rows()
-        self.n = 0
-
-
-class LegacyList(_Ops, LiveView):
-    exposure_policy = "legacy"  # legacy subject: rows a legacy view publishes refresh too
-    template = TEMPLATE
-
-    def mount(self, request: Any, **kwargs: Any) -> None:
-        self.rows = list(_rows())
-        self.n = 0
-
-
 # What the answer to each operation shows: fresh rows, or the snapshot (no change).
 FRESH = {"update": {"bob"}, "create": {"insert"}, "delete": {"remove"}}
 SNAPSHOT = {"update": set(), "create": set(), "delete": set()}
@@ -218,8 +200,6 @@ SHAPES = {
     "prefetched-instance": (Prefetched, SNAPSHOT),
     "list": (SnapshotList, SNAPSHOT),
     "instance": (SnapshotInstance, SNAPSHOT),
-    "legacy-queryset": (LegacyQuerySet, FRESH),
-    "legacy-list": (LegacyList, SNAPSHOT),
 }
 
 
@@ -980,7 +960,7 @@ def test_a_write_shows_on_the_http_fallback(shape, op):
 
 
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("cls", [HeldQuerySet, LegacyQuerySet, CachedRows])
+@pytest.mark.parametrize("cls", [HeldQuerySet, CachedRows])
 @pytest.mark.parametrize("transport", list(TRANSPORTS))
 async def test_queries_per_turn(request, transport, cls, sql):
     owner = await sync_to_async(_world)()

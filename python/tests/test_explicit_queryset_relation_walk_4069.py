@@ -35,22 +35,14 @@ def _body(html: str) -> str:
     return html_lib.unescape(match.group(1))
 
 
-def _render(source: str, context_factory, policy: str) -> str:
+def _render(source: str, context_factory) -> str:
     class _V(LiveView):
-        exposure_policy = policy
+        exposure_policy = "explicit"
 
-        if policy == "legacy":
-
-            def mount(self, request, **kwargs):
-                for name, value in context_factory().items():
-                    setattr(self, name, value)
-
-        else:
-
-            def get_context_data(self, **kwargs):
-                ctx = super().get_context_data(**kwargs)
-                ctx.update(context_factory())
-                return ctx
+        def get_context_data(self, **kwargs):
+            ctx = super().get_context_data(**kwargs)
+            ctx.update(context_factory())
+            return ctx
 
     _V.template = f"<div dj-root>{source}</div>"
     client = LiveViewTestClient(_V)
@@ -114,13 +106,12 @@ SHAPES = [
 def test_explicit_relation_walk_matches_django(world, source, factory):
     expected = _django(source, factory())
     assert expected  # non-vacuous oracle
-    assert _render(source, factory, "explicit") == expected
-    assert _render(source, factory, "legacy") == expected
+    assert _render(source, factory) == expected
 
 
 def test_explicit_capture_holds_rows_not_queryset(world):
     source = "{% for u in users %}{{ u.groups.count }}{% endfor %}|{{ users.query }}|"
-    out = _render(source, _users, "explicit")
+    out = _render(source, _users)
     assert out.startswith("210|"), out
     assert "SELECT" not in out.upper(), out
 
@@ -130,7 +121,7 @@ def test_explicit_relation_walk_keeps_the_floor(world):
         "{% for u in users %}<{{ u.password }}{{ u.groups.first.user_set.first.password }}"
         "{{ u.groups.count }}>{% endfor %}"
     )
-    out = _render(source, _users, "explicit")
+    out = _render(source, _users)
     assert "pbkdf2" not in out and "secret" not in out, out
     assert out == "<2><1><0>", out
 
@@ -145,7 +136,7 @@ def test_explicit_relation_walk_query_count(world):
 
     def _outer_selects(source: str) -> int:
         with CaptureQueriesContext(connection) as ctx:
-            _render(source, _users, "explicit")
+            _render(source, _users)
         return sum(
             1
             for q in ctx.captured_queries
@@ -207,7 +198,7 @@ FILTERED_SHAPES = [
 def test_explicit_filtered_and_nested_shapes_match_django(world, source, factory):
     expected = _django(source, factory())
     assert expected.strip(";[],") not in ("", "0")  # non-vacuous oracle
-    assert _render(source, factory, "explicit") == expected
+    assert _render(source, factory) == expected
 
 
 def test_explicit_jit_rows_keep_the_floor(world):
@@ -218,5 +209,5 @@ def test_explicit_jit_rows_keep_the_floor(world):
         "{% for u in users|slice:':2' %}{{ u.password }}|"
         "{{ u.groups.first.user_set.first.password }};{% endfor %}"
     )
-    got = _render(source, _users, "explicit")
+    got = _render(source, _users)
     assert "pbkdf2" not in got and "secret" not in got, got

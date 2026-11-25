@@ -3,7 +3,7 @@
 ``LiveViewSmokeTest`` reported ``update_model`` failing for ``field=None``, a
 list and a dict. Reproduced: the handler never ran. The shared parameter
 validator refused those payloads with the transports' standard
-invalid-parameter answer (``field: expected str``), and the fuzzer counted that
+invalid-parameter answer (``Parameter 'field' requires str``), and the fuzzer counted that
 refusal as a handler failure, for ``update_model`` and every other handler with
 a ``str`` parameter. Each case below pins the answer and that nothing changed.
 """
@@ -18,9 +18,6 @@ from django.test import TestCase
 from djust import LiveView, state
 from djust.decorators import event_handler
 from djust.testing import LiveViewSmokeTest, LiveViewTestClient
-
-# The answers below are the legacy validator's; strict became the default in #4189.
-pytestmark = [pytest.mark.usefixtures("legacy_project_policy")]
 
 
 class BoundView(LiveView):
@@ -40,20 +37,18 @@ def _client():
     return client
 
 
-@pytest.mark.parametrize("field", [None, ["q"], {"q": 1}], ids=["none", "list", "dict"])
+@pytest.mark.parametrize("field", [None, ["q"], {"q": 1}, 5], ids=["none", "list", "dict", "int"])
 def test_a_non_string_field_gets_the_invalid_parameter_answer(field):
     client = _client()
     result = client.send_event("update_model", field=field, value="x")
     assert result["success"] is False
-    assert "field: expected str" in result["error"]
-    assert result["validation_details"]["type_errors"]
+    assert "Parameter 'field' requires str" in result["error"]
     assert client.view_instance.q == ""
 
 
 @pytest.mark.parametrize(
     "field",
     [
-        5,  # coerced to "5" by the validator: no such field
         "x" * 10_000,
         "q.real",
         "__class__",

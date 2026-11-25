@@ -36,7 +36,7 @@ MODULE = __name__
 
 #: Every dict method name a field may take (all of them but ``get`` and ``update``).
 NAMES = ("items", "keys", "values", "copy", "pop", "clear", "fromkeys", "popitem", "setdefault")
-POLICIES = ("explicit", "legacy")
+POLICIES = ("explicit",)
 
 
 def _component(name: str) -> type:
@@ -118,8 +118,7 @@ def test_a_page_get_and_a_fallback_post(name, policy):
         assert page.status_code == 200
         assert "n=0" in page.content.decode()
         key = first.session.session_key
-        if policy == "explicit":
-            assert _saved(key), "the GET saved nothing"
+        assert _saved(key), "the GET saved nothing"
         view = view_class()
         response = view.post(_request("POST", key, "shadow_add"))
         assert response.status_code == 200, response.content
@@ -143,9 +142,8 @@ async def test_a_websocket_commit_and_a_reconnect(name, policy):
         again, remount = await harness.mount_view(view_class, key)
         await again.disconnect()
     assert remount["type"] != "error", remount
-    if policy == "explicit":
-        # The saved state is restored on the reconnect.
-        assert "n=1" in remount["html"], remount["html"]
+    # The saved state is restored on the reconnect.
+    assert "n=1" in remount["html"], remount["html"]
 
 
 @pytest.mark.parametrize("name", NAMES)

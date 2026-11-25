@@ -100,7 +100,7 @@ def test_alias_validates_under_either_project_policy(policy):
     and SSE runtime, and the HTTP fallback: ``validate_handler_params``)."""
     from djust.validation import validate_handler_params, validated_call_arguments
 
-    previous = config.get("event_parameter_policy", "legacy")
+    previous = config.get("event_parameter_policy", "strict")
     config.set("event_parameter_policy", policy)
     try:
         view = MixedPage()

@@ -10,7 +10,7 @@ The Rust engine has no handler for any of these tags (a LiveView root using
 one fails with "Invalid block tag"), so they run only where djust renders a
 LiveView template with Django's engine: embedded and sticky children. These
 tests mount such a child through the real ``ViewRuntime`` and re-render it
-through a real child event. Each explicit case has a legacy control.
+through a real child event.
 """
 
 import json
@@ -101,11 +101,6 @@ def staged(monkeypatch, settings):
     settings.DJUST_LIVE_RENDER_ALLOWED_MODULES = [MODULE]
 
 
-def _policy(monkeypatch, policy, *classes):
-    for view_class in classes:
-        monkeypatch.setattr(view_class, "exposure_policy", policy)
-
-
 async def _mount(parent):
     request = await sync_to_async(make_request)()
     transport = MockTransport()
@@ -129,9 +124,7 @@ def _mount_html(transport):
     return next(frame["html"] for frame in transport.sent if frame.get("type") == "mount")
 
 
-@pytest.mark.parametrize("policy", ["legacy", "explicit"])
-async def test_dj_activity_registers_on_the_rendering_view(monkeypatch, policy):
-    _policy(monkeypatch, policy, TagChild, TagChildParent)
+async def test_dj_activity_registers_on_the_rendering_view(monkeypatch):
     runtime, transport = await _mount(TagChildParent)
     child = runtime.view_instance._get_child_view("panel_child")
     html = _mount_html(transport)
@@ -140,11 +133,6 @@ async def test_dj_activity_registers_on_the_rendering_view(monkeypatch, policy):
     assert child._djust_activities.get("drawer", {}).get("visible") is False
     assert child.is_activity_visible("drawer") is False
 
-    if policy == "legacy":
-        # Legacy stops here: the event re-render path (render_embedded_child_html)
-        # gives a legacy child no ``view`` in context, so it never re-registered
-        # there. That is unchanged by construction; see the E2-2 report.
-        return
     # A child event re-renders through render_embedded_child_html; the
     # registration must hold on that path too.
     child._djust_activities = {}
@@ -158,13 +146,11 @@ async def test_dj_activity_registers_on_the_rendering_view(monkeypatch, policy):
     assert child.is_activity_visible("drawer") is False
 
 
-@pytest.mark.parametrize("policy", ["legacy", "explicit"])
 @pytest.mark.parametrize("namespacing", ["strict", "off"])
 async def test_colocated_hook_namespacing_uses_the_rendering_view(
-    monkeypatch, settings, policy, namespacing
+    monkeypatch, settings, namespacing
 ):
     settings.DJUST_CONFIG = {"hook_namespacing": namespacing} if namespacing == "strict" else {}
-    _policy(monkeypatch, policy, TagChild, TagChildParent)
     runtime, transport = await _mount(TagChildParent)
     html = _mount_html(transport)
     if namespacing == "strict":
@@ -172,8 +158,6 @@ async def test_colocated_hook_namespacing_uses_the_rendering_view(
     else:
         assert 'data-hook="Chart"' in html
 
-    if policy == "legacy":
-        return  # As above: the legacy re-render path has no view in context.
     transport.sent.clear()
     await runtime.dispatch_event(
         {"type": "event", "event": "bump", "params": {"view_id": "panel_child"}}
@@ -184,9 +168,7 @@ async def test_colocated_hook_namespacing_uses_the_rendering_view(
     assert f'data-hook=\\"{expected}\\"' in update
 
 
-@pytest.mark.parametrize("policy", ["legacy", "explicit"])
-async def test_form_tags_and_filters_resolve_the_rendering_view(monkeypatch, policy):
-    _policy(monkeypatch, policy, FormChild, FormChildParent)
+async def test_form_tags_and_filters_resolve_the_rendering_view(monkeypatch):
     runtime, transport = await _mount(FormChildParent)
     html = _mount_html(transport)
     assert "ERROR: View does not have" not in html

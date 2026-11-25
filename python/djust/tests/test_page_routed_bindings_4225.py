@@ -4,8 +4,8 @@
 for each directive; ``checks/bindings.py`` (T020) compares them with the
 handler's signature. ``dj-mutation`` listed only ``mutation``, while the client
 also sends ``attrs`` (when ``dj-mutation-attr`` names an attribute) or
-``added`` / ``removed`` (otherwise), so a legacy handler the server refuses
-was not reported. The client's generated values are read from its source here,
+``added`` / ``removed`` (otherwise), so a strict handler that declares them
+was reported as requiring a name the binding never sends. The client's generated values are read from its source here,
 so the two lists cannot drift apart again.
 """
 
@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -81,30 +80,6 @@ def test_dj_mutation_lists_both_payloads_the_client_sends():
 # --- what the check reports -----------------------------------------------------
 
 
-class LegacyAttrsUnaccepted(LiveView):
-    exposure_policy = "explicit"
-    template = '<div dj-root><div dj-mutation="h" dj-mutation-attr="class"></div></div>'
-
-    @event_handler(parameter_policy="legacy")
-    def h(self, mutation: str = "") -> None: ...
-
-
-class LegacyChildrenUnaccepted(LiveView):
-    exposure_policy = "explicit"
-    template = '<div dj-root><div dj-mutation="h"></div></div>'
-
-    @event_handler(parameter_policy="legacy")
-    def h(self, mutation: str = "") -> None: ...
-
-
-class LegacyAttrsAccepted(LiveView):
-    exposure_policy = "explicit"
-    template = '<div dj-root><div dj-mutation="h" dj-mutation-attr="class"></div></div>'
-
-    @event_handler(parameter_policy="legacy")
-    def h(self, mutation: str = "", attrs: Any = None) -> None: ...
-
-
 class StrictAttrsDeclared(LiveView):
     exposure_policy = "explicit"
     template = '<div dj-root><div dj-mutation="h" dj-mutation-attr="class,style"></div></div>'
@@ -148,12 +123,6 @@ def _findings(view: type) -> list[str]:
 @pytest.mark.parametrize(
     "view, expected",
     [
-        (LegacyAttrsUnaccepted, ["dj-mutation sends 'attrs', which h() does not accept."]),
-        (
-            LegacyChildrenUnaccepted,
-            ["dj-mutation sends 'added', 'removed', which h() does not accept."],
-        ),
-        (LegacyAttrsAccepted, []),
         (StrictAttrsDeclared, []),
         (StrictChildrenDeclared, []),
         (StrictAddedInAttributeMode, ["h() requires 'added', which this binding never sends."]),

@@ -2,7 +2,7 @@
 
 The initial page carries its root mount's contracts outside dj-root; HTTP
 fallback render responses carry the rendered tree's snapshot, with explicit
-clears for a client whose scope is strict. All-legacy pages are unchanged.
+clears for a client whose scope is strict.
 """
 
 import json
@@ -33,18 +33,6 @@ class StrictPage(LiveView):
 
     @event_handler(parameter_policy="strict")
     def quiet(self):
-        self._skip_render = True
-
-
-class LegacyPage(StrictPage):
-    template = "<div dj-root><span>{{ n }}</span></div>"
-
-    @event_handler(parameter_policy="legacy")
-    def choose(self, value=5, **kwargs):
-        self.n = int(value)
-
-    @event_handler(parameter_policy="legacy")
-    def quiet(self, **kwargs):
         self._skip_render = True
 
 
@@ -100,24 +88,6 @@ def test_initial_page_carries_root_contracts_outside_the_live_root():
     assert html.index("data-djust-parameter-contracts") > root_end
 
 
-@pytest.fixture
-def legacy_project():
-    """An all-legacy page needs a legacy project policy: the page's own handlers
-    (``update_model``) inherit it, and strict became the default in #4189."""
-    from djust.config import config
-
-    previous = config.get("event_parameter_policy", "strict")
-    config.set("event_parameter_policy", "legacy")
-    yield
-    config.set("event_parameter_policy", previous)
-
-
-@pytest.mark.django_db
-def test_all_legacy_page_is_unchanged(legacy_project):
-    _, html = _get(LegacyPage)
-    assert "djust-parameter-contracts" not in html
-
-
 @pytest.mark.django_db
 def test_discovery_failure_marks_the_page_scope_invalid_without_breaking_it(monkeypatch):
     # An invalid declaration already fails the page render itself (handler
@@ -141,22 +111,6 @@ def test_http_render_responses_carry_the_rendered_snapshot(event, params):
     assert status == 200, body
     assert body["parameter_contract_view"] == _path(StrictPage)
     assert body["parameter_contracts"]["owners"][0]["handlers"]["choose"]["policy"] == "strict"
-
-
-@pytest.mark.django_db
-@pytest.mark.parametrize("event,params", [("choose", {"value": "7"}), ("quiet", {})])
-@pytest.mark.parametrize("header", [False, True])
-def test_legacy_responses_omit_contracts_unless_the_client_scope_is_strict(
-    legacy_project, event, params, header
-):
-    request, _ = _get(LegacyPage)
-    status, body = _post(LegacyPage, request, event, params, header=header)
-    assert status == 200, body
-    if header:
-        assert body["parameter_contracts"] is None
-        assert body["parameter_contract_view"] == _path(LegacyPage)
-    else:
-        assert "parameter_contracts" not in body and "parameter_contract_view" not in body
 
 
 @pytest.mark.django_db

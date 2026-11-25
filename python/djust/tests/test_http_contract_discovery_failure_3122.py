@@ -29,7 +29,7 @@ class LegacyPage(LiveView):
 def project_policy():
     from djust.config import config
 
-    previous = config.get("event_parameter_policy", "legacy")
+    previous = config.get("event_parameter_policy", "strict")
 
     def set_policy(value):
         config.set("event_parameter_policy", value)

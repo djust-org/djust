@@ -1,4 +1,4 @@
-"""djust 2.0 upgrade checks (#4190): V034-V036, C045 and T029.
+"""djust 2.0 upgrade checks (#4190): V034, V035 and T029.
 
 What a 1.3 project must change before 2.0.0 removes the legacy behaviour. V033
 (strict readiness of a legacy handler) lives with the other parameter checks in
@@ -7,8 +7,6 @@ would refuse) in ``bindings.py``.
 
 - ``V034``: a handler declares or reads ``_target``, which a strict client never sends.
 - ``V035``: an explicit-exposure view overrides ``_on_sticky_update``, which djust never calls on it.
-- ``V036``: ``parameter_policy="legacy"`` or ``cancel_async_on_disconnect``, removed in 2.0.0.
-- ``C045``: ``event_parameter_policy``, ``reauth_on_event`` or ``reauth_server_turn_interval`` is set.
 - ``T029``: Python code emits a ``data-*`` event argument that a strict handler never receives.
 
 Every check is a warning and none constructs, mounts or invokes anything: they
@@ -202,90 +200,6 @@ def check_sticky_update_hooks(app_configs: Any, **kwargs: Any) -> list[CheckMess
             continue
         reported.add(owner)
         messages.append(_v035(owner))
-    return messages
-
-
-# ---------------------------------------------------------------------------
-# C045 / V036: what 2.0.0 refuses, reported while it is still accepted
-# ---------------------------------------------------------------------------
-
-
-def _c045(setting: str, key: str, text: str) -> CheckMessage:
-    """The one constructor of ``djust.C045`` (#4190)."""
-    from djust._removed_settings import MIGRATION_GUIDE_URL
-
-    return DjustWarning(
-        "%s[%r] is set; djust 2.0.0 removes the key and refuses it at startup: %s."
-        % (setting, key, text),
-        hint="Make the change now, while djust still accepts the key. See %s" % MIGRATION_GUIDE_URL,
-        id="djust.C045",
-        fix_hint="Delete `%s[%r]`." % (setting, key),
-    )
-
-
-@register("djust")
-def check_pending_removed_settings(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
-    """C045 (Warning): a setting djust 2.0.0 removes is still set (#4190)."""
-    if _is_check_suppressed("djust.C045"):
-        return []
-    from django.conf import settings
-
-    from djust._removed_settings import PENDING_CONFIG_KEYS
-
-    messages: list[CheckMessage] = []
-    for setting in ("LIVEVIEW_CONFIG", "DJUST_CONFIG"):
-        cfg = getattr(settings, setting, None)
-        if not isinstance(cfg, dict):
-            continue
-        for key, text in PENDING_CONFIG_KEYS.items():
-            if key in cfg:
-                messages.append(_c045(setting, key, text))
-    return messages
-
-
-def _v036(label: str, what: str, text: str, obj: Any) -> CheckMessage:
-    """The one constructor of ``djust.V036`` (#4190)."""
-    from djust._removed_settings import MIGRATION_GUIDE_URL
-
-    file_path, line_number = _source_location(obj)
-    return DjustWarning(
-        "%s: %s, which djust 2.0.0 removes: %s." % (label, what, text),
-        hint="From 2.0.0 the class or decorator is refused when it is created. See %s"
-        % MIGRATION_GUIDE_URL,
-        id="djust.V036",
-        fix_hint="Remove %s from `%s`." % (what, label),
-        file_path=file_path,
-        line_number=line_number,
-    )
-
-
-@register("djust")
-def check_pending_removed_code(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
-    """V036 (Warning): ``cancel_async_on_disconnect`` or ``parameter_policy="legacy"`` (#4190)."""
-    if _is_check_suppressed("djust.V036"):
-        return []
-    try:
-        from djust._removed_settings import PENDING_HANDLER_POLICY, PENDING_VIEW_ATTRIBUTES
-    except Exception:  # noqa: BLE001 — djust not importable/configured: nothing to check
-        return []
-    messages: list[CheckMessage] = []
-    for cls in _user_liveviews():
-        for attribute, text in PENDING_VIEW_ATTRIBUTES.items():
-            if attribute in vars(cls):
-                label = "%s.%s" % (cls.__module__, cls.__qualname__)
-                messages.append(_v036(label, "sets %s" % attribute, text, cls))
-    for cls, name, _member, function in _user_handlers():
-        decorators = getattr(function, "_djust_decorators", {})
-        metadata = decorators.get("event_handler") or decorators.get("server_function") or {}
-        if metadata.get("parameter_policy") == "legacy":
-            messages.append(
-                _v036(
-                    _label(cls, name),
-                    '@event_handler(parameter_policy="legacy")',
-                    PENDING_HANDLER_POLICY,
-                    function,
-                )
-            )
     return messages
 
 

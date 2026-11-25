@@ -92,22 +92,6 @@ def _liveview_serialize_for_template_render(source: str, context: dict) -> str:
     return _body(client.render())
 
 
-def _liveview_legacy_render(source: str, context: dict) -> str:
-    """The deprecated 1.x attribute walk: the QuerySet is a view attribute (JIT path)."""
-
-    class _V(LiveView):
-        exposure_policy = "legacy"  # legacy subject: #4241 parity under the legacy arm
-
-        def mount(self, request, **kwargs):
-            for name, value in context.items():
-                setattr(self, name, value)
-
-    _V.template = f"<div dj-root>{source}</div>"
-    client = LiveViewTestClient(_V)
-    client.mount()
-    return _body(client.render())
-
-
 NATIVE = [
     pytest.param(_backend_render, id="DjustTemplateBackend"),
     pytest.param(_liveview_render, id="LiveView-explicit-after-super"),
@@ -115,7 +99,6 @@ NATIVE = [
     pytest.param(
         _liveview_serialize_for_template_render, id="LiveView-explicit-serialize_for_template"
     ),
-    pytest.param(_liveview_legacy_render, id="LiveView-legacy"),
 ]
 
 SOURCES = {

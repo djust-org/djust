@@ -20,7 +20,6 @@ from django.views import View
 from ._class_snapshot import namespace as _class_namespace
 from ._mapping import mapping_values
 from ._context_provider import ContextProviderMixin  # noqa: F401  # re-exported for back-compat
-from ._deprecation import class_statement_stacklevel, warn_deprecated
 from .change_detection import CHANGE_DETECTION_IGNORED, deep_fingerprint, fingerprints_by_content
 from .serialization import (  # noqa: F401
     DjangoJSONEncoder,
@@ -249,24 +248,6 @@ def _protect_http_entry(cls: type, view: Callable[..., Any]) -> Callable[..., An
     return protected
 
 
-#: Where the deprecation message sends a reader.
-EXPLICIT_EXPOSURE_GUIDE_URL = "https://docs.djust.org/state/explicit-exposure/"
-
-#: Classes whose own ``exposure_policy = "legacy"`` has been warned about, and
-#: classes whose MRO has been searched for one. Weak: tests assert that view
-#: classes can be collected.
-_LEGACY_POLICY_WARNED: "weakref.WeakSet[type]" = weakref.WeakSet()
-_LEGACY_POLICY_SEARCHED: "weakref.WeakSet[type]" = weakref.WeakSet()
-
-
-def _is_framework_class(cls: type) -> bool:
-    """Whether ``cls`` is shipped in ``djust`` (its test modules are not)."""
-    module = getattr(cls, "__module__", "") or ""
-    return module == "djust" or (
-        module.startswith("djust.") and not module.startswith("djust.tests.")
-    )
-
-
 def reserved_state_field_error(view_class: type, owner: type, name: str) -> Exception:
     """The error for a ``state()`` field declared under a reserved name (#4070)."""
     from ._exposure import ExposureConfigurationError
@@ -335,61 +316,6 @@ def _warn_ignored_sticky_update_inputs(cls: type) -> None:
         UserWarning,
         stacklevel=3,
     )
-
-
-def _warn_legacy_exposure_policy(cls: type, *, at_class_statement: bool) -> None:
-    """Warn, once per class, that the class states ``exposure_policy = "legacy"``.
-
-    The warning is about the class that *states* the policy, because that is
-    the line to change: a subclass that inherits the statement adds no second
-    warning. It is raised when the class is created, pointing at its ``class``
-    statement. A policy assigned to the class afterwards, or stated on a plain
-    mixin (which has no ``__init_subclass__`` of ours), is caught the first
-    time a view of that class is constructed (``at_class_statement=False``),
-    and points at the code that constructed it.
-
-    .. deprecated:: 2.0
-       ``exposure_policy = "legacy"``. Removed in 2.0.0.
-
-    A class shipped in djust that states ``"legacy"`` does not warn, here or
-    through a subclass: that statement is not the application's to change.
-    None does any more (#4185, #4183); the exemption stays until the policy
-    itself is removed.
-    """
-    if at_class_statement:
-        owners = [cls] if "exposure_policy" in cls.__dict__ else []
-    else:
-        if cls in _LEGACY_POLICY_SEARCHED:
-            return
-        owners = [base for base in cls.__mro__ if "exposure_policy" in base.__dict__][:1]
-    for owner in owners:
-        policy = owner.__dict__["exposure_policy"]
-        if type(policy) is not str or policy != "legacy":
-            continue
-        if owner in _LEGACY_POLICY_WARNED or _is_framework_class(owner):
-            continue
-        warn_deprecated(
-            'exposure_policy = "legacy" (stated on %s.%s)'
-            % (getattr(owner, "__module__", "?"), owner.__qualname__),
-            since="2.0",
-            removed_in="2.0.0",
-            instead=(
-                'exposure_policy = "explicit" (the default: declare state() fields and '
-                "supply template context in get_context_data(); see %s). A legacy view "
-                "keeps no state between requests in 2.0: the page-POST fallback mounts "
-                'it again on every POST; declare state(persist="server") for what must '
-                "survive" % EXPLICIT_EXPOSURE_GUIDE_URL
-            ),
-            # Both walk out of djust's own frames: to the ``class`` statement,
-            # or to the code that constructed the view.
-            stacklevel=class_statement_stacklevel(),
-        )
-        # Recorded only once the warning has been raised and returned. Under
-        # warnings-as-errors it raises instead, and then every construction
-        # (and a re-import of the module) fails, not just the first.
-        _LEGACY_POLICY_WARNED.add(owner)
-    if not at_class_statement:
-        _LEGACY_POLICY_SEARCHED.add(cls)
 
 
 class LiveView(
@@ -681,9 +607,10 @@ class LiveView(
     sticky_id: Optional[str] = None
 
     # ADR-038: a value reaches a template, the session or the browser only
-    # when the view declares it. ``"legacy"`` (every public attribute is
-    # exported) is still accepted when a class states it, and is deprecated:
-    # see ``_warn_legacy_exposure_policy``.
+    # when the view declares it. ``"explicit"`` is the only policy. Stating it
+    # is a no-op kept through 2.x; ``"legacy"`` and any other value are refused
+    # when the class is created (``_removed_settings.REMOVED_VIEW_ATTRIBUTE_VALUES``,
+    # #4199).
     exposure_policy: str = "explicit"
 
     # Streaming initial render (v0.6.1 — Phase 1).
@@ -766,67 +693,35 @@ class LiveView(
     # ============================================================================
 
     def _validate_exposure_configuration(self) -> None:
-        """Refuse exposure configurations that would widen or silently fall back.
+        """Refuse a removed exposure configuration on this instance or its class.
 
-        ``"legacy"`` and ``"explicit"`` are the supported policies (ADR-038).
-        Anything else is refused rather than treated as legacy. A legacy view
-        cannot declare exposure grants it would not honor. Only class
-        dictionaries are inspected: no property, factory, ORM query or
-        component descriptor is evaluated.
+        ``"explicit"`` is the only policy (ADR-038); ``"legacy"`` and any other
+        value are refused with ``ImproperlyConfigured`` (#4199). Class creation
+        refuses them first; this catches ``LiveView(exposure_policy=...)`` and a
+        policy assigned to the class after it was created. Only the instance and
+        class dictionaries are read: no property or descriptor is evaluated.
         """
-        from ._exposure import ExposureConfigurationError
+        from ._removed_settings import reject_removed_view_attributes
 
-        policy = self.exposure_policy
-        if type(policy) is not str or policy not in ("legacy", "explicit"):
-            raise ExposureConfigurationError(
-                "Invalid exposure_policy. Supported policies are 'legacy' and 'explicit'; "
-                "unknown policies cannot fall back to legacy exposure."
-            )
-        if policy == "explicit":
-            return
-        _warn_legacy_exposure_policy(type(self), at_class_statement=False)
-        from ._state import StateProperty
-
-        # Inspect class dictionaries only: checking configuration must not
-        # evaluate properties, factories, ORM queries or component descriptors.
-        seen_state_names: set[str] = set()
-        for owner in type(self).__mro__:
-            for name, declaration in _class_namespace(owner).items():  # #3151
-                if name in seen_state_names:
-                    continue
-                seen_state_names.add(name)
-                if issubclass(type(declaration), StateProperty) and (
-                    declaration.exposure.persist not in (None, False) or declaration.exposure.client
-                ):
-                    raise ExposureConfigurationError(
-                        "state() exposure grants require exposure_policy='explicit'. "
-                        "Legacy views cannot honor these grants."
-                    )
-                # The legacy walk renders every public field, so it cannot
-                # honour render=False either (#4050).
-                if issubclass(type(declaration), StateProperty) and declaration.render is False:
-                    raise ExposureConfigurationError(
-                        "state(render=False) requires exposure_policy='explicit'. "
-                        "Legacy views render every public attribute."
-                    )
+        reject_removed_view_attributes(self)
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
         from ._component_subscriptions import compile_subscriptions
-        from ._removed_settings import reject_removed_view_attributes
+        from ._removed_settings import reject_removed_view_attributes, upgrade_inspection_active
 
         reject_removed_view_attributes(cls)
         # #4045: a plain component in an explicit view's class body is one
         # object shared by every session. The mount path checks again
-        # (``_params_form._refuse_removed_configuration``).
+        # (``_params_form._refuse_removed_configuration``). 1.3 code has that
+        # shape, so djust_exposure_inventory's permit lets the class be created.
         from ._exposure_providers import class_level_plain_component_error
 
-        shared = class_level_plain_component_error(cls)
+        shared = None if upgrade_inspection_active() else class_level_plain_component_error(cls)
         if shared is not None:
             raise shared
 
         cls._component_subscriptions = compile_subscriptions(cls)
-        _warn_legacy_exposure_policy(cls, at_class_statement=True)
         # #4070: a state() field may not take a reserved name.
         _refuse_reserved_state_names(cls)
         _warn_ignored_sticky_update_inputs(cls)

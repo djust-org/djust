@@ -1,4 +1,4 @@
-"""Render frames own detached snapshots; legacy-only sessions stay unchanged."""
+"""Render frames own detached snapshots; a handler-less page gains no contract fields."""
 
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -6,7 +6,11 @@ from unittest.mock import AsyncMock
 import pytest
 
 from djust.runtime import ViewRuntime
-from djust.tests.test_parameter_metadata import LegacyOwner, StrictOwner
+from djust.tests.test_parameter_metadata import StrictOwner
+
+
+class HandlerlessOwner:
+    """An owner with no event handlers: its manifest is ``None``."""
 
 
 def runtime(root):
@@ -27,7 +31,7 @@ async def test_render_contracts_follow_owner_replacement_and_removal(kind):
     assert first["parameter_contract_view"] == "app.Page"
     assert first["parameter_contracts"]["owners"][1]["handlers"]["choose"]["policy"] == "strict"
 
-    root._components["menu"] = LegacyOwner()
+    root._components["menu"] = HandlerlessOwner()
     second = {"type": kind, "version": 2}
     await owner._send_render_frame(second)
     assert second["parameter_contracts"] is None
@@ -41,14 +45,14 @@ async def test_render_contracts_follow_owner_replacement_and_removal(kind):
 
 
 @pytest.mark.asyncio
-async def test_legacy_render_does_not_gain_contract_fields_or_affect_another_runtime():
-    legacy, legacy_transport = runtime(LegacyOwner())
+async def test_handlerless_render_does_not_gain_contract_fields_or_affect_another_runtime():
+    bare, bare_transport = runtime(HandlerlessOwner())
     strict, _ = runtime(StrictOwner())
     await strict._send_render_frame({"type": "patch"})
     frame = {"type": "patch", "version": 2}
-    await legacy._send_render_frame(frame)
+    await bare._send_render_frame(frame)
     assert frame == {"type": "patch", "version": 2}
-    legacy_transport.send.assert_awaited_once_with(frame)
+    bare_transport.send.assert_awaited_once_with(frame)
 
 
 @pytest.mark.asyncio

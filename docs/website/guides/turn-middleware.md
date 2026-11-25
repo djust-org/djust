@@ -96,14 +96,13 @@ the API have page mounts and events.
 
 ```
 error_boundary   (built-in, always)
-  reauth         (built-in, when LIVEVIEW_CONFIG["reauth_on_event"] is on)
     LIVEVIEW_MIDDLEWARE[0] ... [n]
       the turn: login_required / permission_required, on_mount hooks,
       object permissions, mount() / handler / hook, render, send
 ```
 
 - **Built-ins are outermost and cannot be removed.** `LIVEVIEW_MIDDLEWARE`
-  lists only your middleware, so setting it never drops `reauth_on_event`.
+  lists only your middleware, so setting it never drops the error boundary.
 - **Your middleware wraps djust's view-level auth**, as Django middleware wraps a
   view and its decorators. It also sees anonymous users and turns djust is about
   to refuse.
@@ -411,10 +410,10 @@ timings. In development, read them from
 
 ## Built-in behaviour on the chain
 
-- **`reauth_on_event`** runs as the `reauth` built-in for legacy-exposure views
-  with `login_required` / `permission_required`: client turns re-check every
-  turn, server turns at most every `reauth_server_turn_interval` seconds.
-  `url_change` and background results are now re-checked too.
+- **Re-authorization** runs inside the turn, against a freshly loaded session,
+  on every client and server turn, `url_change` and background results
+  included. The 1.3 keys `reauth_on_event` and `reauth_server_turn_interval`
+  are refused at startup (#4199).
 - **Errors**: `PermissionDenied` anywhere in a turn becomes a deny; any other
   exception escaping a socket client turn is answered with the value-free error
   envelope. Server turns keep their own error handling.
@@ -440,5 +439,5 @@ async def test_anonymous_callers_are_sent_to_login():
 ## See also
 
 - [on_mount hooks](on-mount-hooks.md): mount-only logic per view
-- [Authentication](authentication.md): `login_required`, `reauth_on_event`
+- [Authentication](authentication.md): `login_required`, per-turn re-authorization
 - [ADR-044](https://github.com/djust-org/djust/blob/main/docs/adr/044-turn-middleware.md)

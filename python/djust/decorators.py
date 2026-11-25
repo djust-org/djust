@@ -169,6 +169,37 @@ def _make_metadata_decorator(key: str, value: Any) -> Callable[[F], F]:
     return decorator
 
 
+def _refuse_legacy_parameter_policy(decorator: str, parameter_policy: Any, func: Any) -> None:
+    """Refuse ``parameter_policy="legacy"`` when the decorator applies (#4199).
+
+    ``djust_exposure_inventory`` imports 1.3 code under
+    ``_removed_settings.upgrade_inspection()``; there the handler is created and
+    the metadata records ``"legacy"`` verbatim, which ``--fix`` reads.
+    """
+    if parameter_policy != "legacy":
+        return
+    from django.core.exceptions import ImproperlyConfigured
+
+    from ._removed_settings import (
+        MIGRATION_GUIDE_URL,
+        REMOVED_HANDLER_ARGUMENT_VALUES,
+        upgrade_inspection_active,
+    )
+
+    if upgrade_inspection_active():
+        return
+    raise ImproperlyConfigured(
+        '%s.%s: @%s(parameter_policy="legacy") was removed in djust 2.0: %s. See %s'
+        % (
+            getattr(func, "__module__", "?"),
+            getattr(func, "__qualname__", repr(func)),
+            decorator,
+            REMOVED_HANDLER_ARGUMENT_VALUES["parameter_policy"][2],
+            MIGRATION_GUIDE_URL,
+        )
+    )
+
+
 @overload
 def event_handler(params: F) -> F: ...
 
@@ -180,7 +211,7 @@ def event_handler(
     coerce_types: bool = ...,
     expose_api: bool = ...,
     serialize: Optional[Union[Callable[..., Any], str]] = ...,
-    parameter_policy: Optional[Literal["legacy", "strict"]] = ...,
+    parameter_policy: Optional[Literal["strict"]] = ...,
 ) -> Callable[[F], F]: ...
 
 
@@ -190,7 +221,7 @@ def event_handler(
     coerce_types: bool = True,
     expose_api: bool = False,
     serialize: Optional[Union[Callable[..., Any], str]] = None,
-    parameter_policy: Optional[Literal["legacy", "strict"]] = None,
+    parameter_policy: Optional[Literal["strict"]] = None,
     save: bool = False,
 ) -> Any:
     """
@@ -207,9 +238,9 @@ def event_handler(
         params: Optional explicit parameter list (overrides auto-extraction)
         description: Human-readable description (overrides docstring)
         coerce_types: Whether to coerce string params to expected types (default: True)
-        parameter_policy: Override the server parameter policy with "strict" or
-            "legacy"; None inherits LIVEVIEW_CONFIG['event_parameter_policy']
-            (default "strict"). Strict binds the Python signature exactly: see
+        parameter_policy: "strict" or None, accepted and doing nothing (strict is
+            the only policy). "legacy" was removed in 2.0 and is refused when the
+            decorator applies. Strict binds the Python signature exactly: see
             "Typed event parameters" in docs/website/core-concepts/events.md.
         expose_api: Expose this handler as an HTTP API endpoint at
             ``POST /djust/api/<view_slug>/<handler_name>/`` with OpenAPI 3.1 schema.
@@ -268,12 +299,14 @@ def event_handler(
         }
     """
 
-    if parameter_policy not in (None, "legacy", "strict"):
-        raise ValueError("parameter_policy must be 'legacy', 'strict', or None")
+    # "legacy" is refused by name inside decorator(), where the function is known.
+    if parameter_policy not in (None, "strict", "legacy"):
+        raise ValueError("parameter_policy must be 'strict' or None")
     if type(save) is not bool:
         raise TypeError("@event_handler(save=...) must be True or False")
 
     def decorator(func: F) -> F:
+        _refuse_legacy_parameter_policy("event_handler", parameter_policy, func)
         # Import here to avoid circular dependency
         from djust.validation import get_handler_signature_info
 
@@ -312,7 +345,9 @@ def event_handler(
 
         # Extract comprehensive signature information
         sig_info = get_handler_signature_info(
-            func, parameter_policy=parameter_policy, for_declaration=True
+            func,
+            parameter_policy=None if parameter_policy == "legacy" else parameter_policy,
+            for_declaration=True,
         )
 
         # Use explicit params if provided, otherwise use extracted
@@ -605,7 +640,7 @@ def is_action(func: Any) -> bool:
 def server_function(
     description: Any = "",
     coerce_types: bool = True,
-    parameter_policy: Optional[Literal["legacy", "strict"]] = None,
+    parameter_policy: Optional[Literal["strict"]] = None,
 ) -> Any:
     """Mark a method as a same-origin browser RPC target (v0.7.0).
 
@@ -629,8 +664,9 @@ def server_function(
         description: Optional human-readable description (overrides docstring).
         coerce_types: Coerce string params to the method's typed signature.
             Default True.
-        parameter_policy: Server parameter policy override ("strict" or "legacy").
-            None inherits the project's event_parameter_policy, default "strict".
+        parameter_policy: "strict" or None, accepted and doing nothing (strict is
+            the only policy). "legacy" was removed in 2.0 and is refused when the
+            decorator applies.
 
     Usage::
 
@@ -651,10 +687,12 @@ def server_function(
     inner wrapper and the dispatcher cannot see it.
     """
 
-    if parameter_policy not in (None, "legacy", "strict"):
-        raise ValueError("parameter_policy must be 'legacy', 'strict', or None")
+    # "legacy" is refused by name inside decorator(), where the function is known.
+    if parameter_policy not in (None, "strict", "legacy"):
+        raise ValueError("parameter_policy must be 'strict' or None")
 
     def decorator(func: F) -> F:
+        _refuse_legacy_parameter_policy("server_function", parameter_policy, func)
         from djust.validation import get_handler_signature_info
 
         from ._component_subscriptions import is_component_subscription
@@ -678,7 +716,9 @@ def server_function(
             )
 
         sig_info = get_handler_signature_info(
-            func, parameter_policy=parameter_policy, for_declaration=True
+            func,
+            parameter_policy=None if parameter_policy == "legacy" else parameter_policy,
+            for_declaration=True,
         )
         _desc = description if isinstance(description, str) else ""
         _add_decorator_metadata(

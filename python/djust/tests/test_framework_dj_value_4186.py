@@ -673,7 +673,7 @@ class TestConvertedSites:
 
 @pytest.fixture
 def policy(request):
-    old = config.get("event_parameter_policy", "legacy")
+    old = config.get("event_parameter_policy", "strict")
     config.set("event_parameter_policy", request.param)
     try:
         yield request.param

@@ -12,7 +12,7 @@ declared like any other argument::
 
 The browser sends only the names the handler declares, and the server binds
 and validates them with the handler's strict contract, under the same
-resource limits as every event argument. Legacy handlers keep the envelope.
+resource limits as every event argument.
 
 The reconnect tests run the built client in jsdom against the real server
 (``_auto_recover_bridge``): a ``WebsocketCommunicator`` on ``LiveViewConsumer``,
@@ -146,15 +146,6 @@ class ProjectStrict(_Base):
     def restore(self, form_values: dict[str, Any], data_attrs: dict[str, str]) -> None:
         CALLS.append(("project", form_values, data_attrs))
         self._apply(form_values, data_attrs)
-
-
-class LegacyRecovery(_Base):
-    """The 1.x spelling, unchanged under the legacy policy."""
-
-    @event_handler(parameter_policy="legacy")  # legacy params until #4192-#4198 (#4189)
-    def restore(self, _form_values=None, _data_attrs=None, **kwargs):
-        CALLS.append(("legacy", _form_values, _data_attrs, kwargs))
-        self._apply(_form_values or {}, _data_attrs or {})
 
 
 @pytest.fixture(autouse=True)
@@ -297,22 +288,6 @@ async def test_the_strict_project_policy_needs_no_handler_declaration():
     try:
         assert _application(params) == {"form_values": EXPECTED_FORM, "data_attrs": EXPECTED_DATA}
         assert CALLS == [("project", EXPECTED_FORM, EXPECTED_DATA)]
-        assert text == RESTORED
-    finally:
-        await browser.close()
-
-
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.asyncio
-@pytest.mark.parametrize("transport", ["ws", "sse"])
-async def test_a_legacy_recovery_handler_keeps_the_envelope(transport):
-    params, text, browser = await _recover(transport, LegacyRecovery)
-    try:
-        assert _application(params) == {
-            "_form_values": EXPECTED_FORM,
-            "_data_attrs": EXPECTED_DATA,
-        }
-        assert CALLS == [("legacy", EXPECTED_FORM, EXPECTED_DATA, {})]
         assert text == RESTORED
     finally:
         await browser.close()
@@ -798,7 +773,6 @@ class StrictRecoveryWithPage(_Base):
 def test_the_binding_check_knows_what_a_strict_recovery_binding_sends():
     """No T020 "requires 'form_values', which this binding never sends"."""
     assert _binding_findings(StrictRecovery) == []
-    assert _binding_findings(LegacyRecovery) == []
     found = _binding_findings(StrictRecoveryWithPage)
     assert [i for i, _ in found] == ["djust.T020"]
     assert "requires 'page'" in found[0][1]

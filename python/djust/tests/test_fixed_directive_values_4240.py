@@ -16,8 +16,8 @@ from djust.checks.bindings import scan_owner
 from djust.decorators import event_handler
 
 
-def _findings(markup: str, handler, policy: str = "strict") -> list[str]:
-    decorated = event_handler(parameter_policy=policy)(handler)
+def _findings(markup: str, handler) -> list[str]:
+    decorated = event_handler(handler)
     view = type(
         "FixedValuesView",
         (LiveView,),
@@ -86,16 +86,8 @@ def test_an_undeclared_value_is_reported():
     assert any("does not declare" in message for message in found), found
 
 
-def test_a_legacy_handler_gets_no_new_finding():
-    def closed(self, **kwargs) -> None: ...
-
-    found = _findings('<div dj-viewport-top="h" dj-value-edge="x"></div>', closed, "legacy")
-    assert not any("reuses" in message for message in found), found
-
-
-def test_routing_keys_are_reported_only_under_strict():
+def test_routing_keys_are_reported():
     def closed(self, **kwargs) -> None: ...
 
     markup = '<dialog dj-dialog-close-event="h" dj-value-view-id="x"></dialog>'
-    assert not any("routing" in m for m in _findings(markup, closed, "legacy"))
-    assert any("routing" in m for m in _findings(markup, closed, "strict"))
+    assert any("routing" in m for m in _findings(markup, closed))

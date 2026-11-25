@@ -162,7 +162,7 @@ def site_urls(settings):
 
 @pytest.fixture(params=["legacy", "strict"])
 def policy(request):
-    previous = config.get("event_parameter_policy", "legacy")
+    previous = config.get("event_parameter_policy", "strict")
     config.set("event_parameter_policy", request.param)
     yield request.param
     config.set("event_parameter_policy", previous)

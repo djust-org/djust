@@ -127,7 +127,7 @@ ALLOWLIST_SETUP = (
             "djust.checks.accounts",  # ADR-039 account checks (A100-A106)
             "djust.checks.parameters",  # ADR-036 parameter contract checks (V016-V018)
             "djust.checks.bindings",  # ADR-037 template event binding checks (T019-T022)
-            "djust.checks.upgrade",  # what a 1.3 project must change before 2.0 (V033-V036, T028, T029, C045)
+            "djust.checks.upgrade",  # what a 1.3 project must change before 2.0 (V034, V035, T029)
             "djust.checks.utils",
             "djust.config",
             "djust.observability",

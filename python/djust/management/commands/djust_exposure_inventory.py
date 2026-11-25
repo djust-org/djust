@@ -15,6 +15,15 @@ renames ``data-*`` event arguments to ``dj-value-*`` in templates, then lists wh
 needs a person (``djust.management._exposure_fix``). ``--dry-run`` prints the diff
 and writes nothing; only files under ``--root`` are changed.
 
+2.0 refuses 1.3 code that states ``exposure_policy = "legacy"``,
+``@event_handler(parameter_policy="legacy")`` or ``cancel_async_on_disconnect =
+True`` when the class or handler is created (#4199). This command imports such code
+under ``djust._removed_settings.upgrade_inspection()``, which lets the classes be
+created (never constructed) so they can be read and rewritten. A module imported
+while Django starts (by an ``AppConfig.ready()`` or a ``models.py``) is imported
+before the command runs, so it is refused first: delete its policy line by hand,
+or move the import.
+
 Usage:
     python manage.py djust_exposure_inventory                  # all user LiveViews
     python manage.py djust_exposure_inventory --app shop       # one app label
@@ -82,23 +91,28 @@ class Command(BaseCommand):
         if (options["dry_run"] or options["root"]) and not options["fix"]:
             raise CommandError("--dry-run and --root need --fix")
 
-        classes: list[type] = []
-        for path in options["view"]:
-            try:
-                cls = import_string(path)
-            except ImportError as exc:
-                raise CommandError(f"Cannot import {path}") from exc
-            if not (isinstance(cls, type) and issubclass(cls, LiveView)):
-                raise CommandError(f"{path} is not a LiveView class")
-            classes.append(cls)
-        if not classes:
-            classes = discover_views(options["app"])
+        from djust._removed_settings import upgrade_inspection
 
-        if options["fix"]:
-            self._fix(classes, options)
-            return
+        # #4199: 1.3 code is refused when its classes are created; only this
+        # command may import it, to read and rewrite it (never to run it).
+        with upgrade_inspection():
+            classes: list[type] = []
+            for path in options["view"]:
+                try:
+                    cls = import_string(path)
+                except ImportError as exc:
+                    raise CommandError(f"Cannot import {path}") from exc
+                if not (isinstance(cls, type) and issubclass(cls, LiveView)):
+                    raise CommandError(f"{path} is not a LiveView class")
+                classes.append(cls)
+            if not classes:
+                classes = discover_views(options["app"])
 
-        views = [inventory_view(cls) for cls in classes]
+            if options["fix"]:
+                self._fix(classes, options)
+                return
+
+            views = [inventory_view(cls) for cls in classes]
         if options["json"]:
             self.stdout.write(json.dumps({"destinations": DESTINATIONS, "views": views}, indent=2))
         else:

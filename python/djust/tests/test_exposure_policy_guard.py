@@ -1,11 +1,10 @@
 """ADR-038's construction guard, after activation (E6).
 
-``exposure_policy="explicit"`` is an enabled policy. The guard still refuses
-every configuration that would silently widen exposure or fall back to legacy
-exports: an unknown policy. None of these checks may
-evaluate a property or a state factory. Configuration errors are
-``ExposureConfigurationError`` (an ``ImproperlyConfigured``), whose messages
-are framework-authored and carry no view values.
+``exposure_policy="explicit"`` is the only policy (#4199). The guard refuses
+any other value, on the class when it is created and on construction. None of
+these checks may evaluate a property or a state factory. Configuration errors
+are ``ImproperlyConfigured``, whose messages are framework-authored and carry no
+view values.
 """
 
 import pytest
@@ -40,7 +39,7 @@ def test_inherited_explicit_policy_constructs():
 
 
 @pytest.mark.parametrize("policy", ["explict", "", None, [], True])
-def test_unknown_policy_is_not_treated_as_legacy(policy):
+def test_unknown_policy_is_refused(policy):
     with pytest.raises(ImproperlyConfigured, match="exposure_policy"):
         LiveView(exposure_policy=policy)
 
@@ -88,10 +87,16 @@ def test_http_view_renders_under_the_explicit_policy(rf, settings, db):
 
 
 def test_http_view_reports_an_invalid_policy_to_the_developer(rf, settings):
+    with pytest.raises(ImproperlyConfigured, match="exposure_policy"):
+
+        class Refused(LiveView):
+            exposure_policy = "explict"
+
     class InvalidPolicyView(LiveView):
-        exposure_policy = "explict"
         template = "<div dj-root></div>"
 
+    # Assigned after the class statement, so only construction can refuse it.
+    InvalidPolicyView.exposure_policy = "explict"
     settings.DEBUG = True
     # The guard's error is framework-authored and value-free, so it reaches
     # the developer through the protected HTTP entry (decision D-a).

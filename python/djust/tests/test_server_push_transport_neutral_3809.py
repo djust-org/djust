@@ -12,6 +12,7 @@ scopes and ``db_notify`` reach SSE since #3885
 below only pins that the SSE view joined its push group.
 """
 
+from typing import Any
 import asyncio
 import json
 import re
@@ -79,8 +80,8 @@ class PushPage(LiveView):
     def secret(self, **kwargs):  # neither handle_*, nor @event_handler, nor @push_handler
         self.log.append("SECRET")
 
-    @event_handler(parameter_policy="legacy")  # legacy params until #4192-#4198 (#4189)
-    async def follow(self, count=3, **kwargs):
+    @event_handler
+    async def follow(self, count: Any = 3, **kwargs: Any):
         """The issue's repro: a background task that pushes every step."""
         loop = asyncio.get_running_loop()
         self._follower = loop.create_task(self._follow(count))

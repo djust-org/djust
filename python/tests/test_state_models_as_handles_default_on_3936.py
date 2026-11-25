@@ -32,9 +32,9 @@ from python.tests.test_state_models_as_handles_3936 import (  # noqa: F401
 REBINDING = "{% with q=u|default:u %}{{ q.groups.count }}{% endwith %}"
 
 
-def _render_default(source: str, factory, policy: str) -> str:
+def _render_default(source: str, factory) -> str:
     """No ``LIVEVIEW_CONFIG`` override: whatever the shipped default is."""
-    client = LiveViewTestClient(_view(source, factory, policy))
+    client = LiveViewTestClient(_view(source, factory))
     client.mount()
     return _body(client.render())
 
@@ -45,11 +45,10 @@ def test_the_default_config_turns_the_overlay_on():
         assert state_models_as_handles_enabled() is True
 
 
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
-def test_default_config_reads_a_relation_through_a_filtered_rebinding(people, policy):
+def test_default_config_reads_a_relation_through_a_filtered_rebinding(people):
     expected = DjangoTemplate(REBINDING).render(DjangoContext(_ctx()))
     assert expected == "2"
-    assert _render_default(REBINDING, _ctx, policy) == expected
+    assert _render_default(REBINDING, _ctx) == expected
 
 
 def test_gate_off_a_false_default_renders_the_rebinding_empty(people, monkeypatch):
@@ -61,7 +60,7 @@ def test_gate_off_a_false_default_renders_the_rebinding_empty(people, monkeypatc
     config._rebuild_from_settings(keep_programmatic=True)
     try:
         assert state_models_as_handles_enabled() is False
-        assert _render_default(REBINDING, _ctx, "explicit") == ""
+        assert _render_default(REBINDING, _ctx) == ""
     finally:
         monkeypatch.undo()
         config._rebuild_from_settings(keep_programmatic=True)
@@ -74,8 +73,8 @@ def test_explicit_false_is_the_kill_switch(people):
     import json
 
     with override_settings(LIVEVIEW_CONFIG=FLAG_OFF):
-        assert _render_default(REBINDING, _ctx, "explicit") == ""
-        out = _render_default("{% load cc3949 %}{{ u|cc3949_filter }}", _ctx, "explicit")
+        assert _render_default(REBINDING, _ctx) == ""
+        out = _render_default("{% load cc3949 %}{{ u|cc3949_filter }}", _ctx)
         assert json.loads(out)["type"] == "dict"
         client = LiveViewTestClient(_view(REBINDING, _ctx))
         client.mount()
@@ -86,7 +85,7 @@ def test_explicit_false_is_the_kill_switch(people):
         view._sync_state_to_rust()
         assert spy.calls == []
     # and by default the same filter is handed the floor proxy
-    out = _render_default("{% load cc3949 %}{{ u|cc3949_filter }}", _ctx, "explicit")
+    out = _render_default("{% load cc3949 %}{{ u|cc3949_filter }}", _ctx)
     assert json.loads(out)["type"] == "_SidecarModelProxy"
 
 

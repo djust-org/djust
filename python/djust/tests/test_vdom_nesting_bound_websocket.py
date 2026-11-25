@@ -14,6 +14,7 @@ HTML passed through ``|safe``, user Markdown (one nested ``<blockquote>`` per
 
 from __future__ import annotations
 
+from typing import Any
 import pytest
 from asgiref.sync import sync_to_async
 
@@ -50,8 +51,8 @@ class _DeepView(LiveView):
         self.body = ""
         self.n = 0
 
-    @event_handler(parameter_policy="legacy")  # legacy params until #4192-#4198 (#4189)
-    def deep(self, kind="spans", **kwargs):
+    @event_handler
+    def deep(self, kind: str = "spans", **kwargs: Any):
         self.n += 1
         self.body = _body(kind, str(self.n))
 

@@ -1,4 +1,8 @@
-"""The 2.0 upgrade checks (#4190): V033-V036, T028, T029 and C045.
+"""The 2.0 upgrade checks (#4190): V033-V035, T028 and T029.
+
+V033 and T028 report a handler under the legacy parameter policy, which only the
+project key can still select at runtime (the decorator argument is refused, #4199),
+so their tests set it on ``djust.config`` directly.
 
 The fixture views live in a module written to a temporary directory and
 imported under a top-level name (djust's own modules are skipped by these
@@ -16,13 +20,10 @@ import types
 import pytest
 from django.test import override_settings
 
-from djust._removed_settings import REMOVED_CONFIG_KEYS, REMOVED_VIEW_ATTRIBUTES
 from djust._template_bindings import django_engine
 from djust.checks.bindings import _messages, scan_owner
 from djust.checks.parameters import check_event_parameter_contracts
 from djust.checks.upgrade import (
-    check_pending_removed_code,
-    check_pending_removed_settings,
     check_python_markup_arguments,
     check_sticky_update_hooks,
     check_target_parameter,
@@ -42,13 +43,12 @@ from djust.decorators import event_handler
 class OldHandlers(LiveView):
     exposure_policy = "explicit"
     template = "<div dj-root></div>"
-    cancel_async_on_disconnect = True
 
-    @event_handler(parameter_policy="legacy")
+    @event_handler()
     def pick(self, item_id, **kwargs):
         pass
 
-    @event_handler(parameter_policy="legacy")
+    @event_handler()
     def save(self, value: str = "", **kwargs):
         self.last = kwargs.get("_target")
 
@@ -61,7 +61,7 @@ class InheritsLegacy(LiveView):
     def pick(self, item_id, **kwargs):
         pass
 
-    @event_handler(parameter_policy="legacy")
+    @event_handler()
     def declares(self, _target=None, **kwargs):
         pass
 
@@ -87,7 +87,7 @@ class OldExtends(LiveView):
     exposure_policy = "explicit"
     template_name = "upgrade4190/old_page.html"
 
-    @event_handler(parameter_policy="legacy")
+    @event_handler()
     def choose(self, item_id: int = 0, **kwargs):
         pass
 
@@ -193,28 +193,36 @@ def _ours(messages, check_id):
     return [m for m in messages if m.id == check_id and MODULE in m.msg]
 
 
-def test_v033_reports_a_legacy_handler_strict_would_refuse(m):
-    found = _ours(check_event_parameter_contracts(None), "djust.V033")
-    old = [x for x in found if "OldHandlers.pick" in x.msg]
-    assert len(old) == 1 and "requires an annotation" in old[0].msg
-    assert not any("NewHandlers" in x.msg for x in found)
+@pytest.fixture
+def legacy_project_key():
+    """The project key, the one runtime route to a legacy handler left (#4205 removes it)."""
     previous = config.get("event_parameter_policy", "strict")
     config.set("event_parameter_policy", "legacy")
     try:
-        again = _ours(check_event_parameter_contracts(None), "djust.V033")
-        assert not any("NewHandlers" in x.msg for x in again)
-        # An unpinned handler inherits the legacy project policy: V033 names the key.
-        inherited = [x for x in again if "InheritsLegacy.pick" in x.msg]
-        assert len(inherited) == 1
-        assert "LIVEVIEW_CONFIG['event_parameter_policy']" in inherited[0].hint
-        # The pinned one names the decorator argument instead.
-        pinned = [x for x in again if "OldHandlers.pick" in x.msg]
-        assert "parameter_policy='legacy'" in pinned[0].hint
+        yield
     finally:
         config.set("event_parameter_policy", previous)
 
 
-def test_t028_reports_data_arguments_of_a_legacy_handler_in_an_extends_template(m):
+def test_v033_reports_a_legacy_handler_strict_would_refuse(m):
+    assert not _ours(check_event_parameter_contracts(None), "djust.V033")
+    previous = config.get("event_parameter_policy", "strict")
+    config.set("event_parameter_policy", "legacy")
+    try:
+        found = _ours(check_event_parameter_contracts(None), "djust.V033")
+        assert not any("NewHandlers" in x.msg for x in found)
+        # An unpinned handler inherits the legacy project policy: V033 names the key.
+        inherited = [x for x in found if "InheritsLegacy.pick" in x.msg]
+        assert len(inherited) == 1
+        assert "requires an annotation" in inherited[0].msg
+        assert "LIVEVIEW_CONFIG['event_parameter_policy']" in inherited[0].hint
+    finally:
+        config.set("event_parameter_policy", previous)
+
+
+def test_t028_reports_data_arguments_of_a_legacy_handler_in_an_extends_template(
+    m, legacy_project_key
+):
     engine = django_engine()
     old = _messages([scan_owner(m.OldExtends, "view", engine, {})])
     t028 = [x for x in old if x.id == "djust.T028"]
@@ -226,12 +234,10 @@ def test_t028_reports_data_arguments_of_a_legacy_handler_in_an_extends_template(
 
 def test_v034_target(m):
     found = _ours(check_target_parameter(None), "djust.V034")
-    assert len(found) == 2
-    reads = [x for x in found if "OldHandlers.save" in x.msg]
-    assert len(reads) == 1 and "reads _target" in reads[0].msg
-    # A legacy handler that declares the parameter; a strict one is V016's.
-    assert any("InheritsLegacy.declares" in x.msg and "declares _target" in x.msg for x in found)
-    assert not any("strict_declares" in x.msg for x in found)
+    assert len(found) == 1
+    assert "OldHandlers.save" in found[0].msg and "reads _target" in found[0].msg
+    # A handler that declares the parameter is V016's (a reserved name).
+    assert not any("declares _target" in x.msg for x in found)
 
 
 def test_v035_sticky_hook(m):
@@ -239,34 +245,6 @@ def test_v035_sticky_hook(m):
     assert len(found) == 1 and "OldSticky" in found[0].msg
     # A view that names the inputs the hook takes (#4181) is quiet.
     assert not any("NamedSticky" in x.msg for x in found)
-
-
-def test_c045_settings():
-    with override_settings(
-        LIVEVIEW_CONFIG={
-            "event_parameter_policy": "legacy",
-            "reauth_on_event": True,
-            "reauth_server_turn_interval": 5,
-        }
-    ):
-        found = [x for x in check_pending_removed_settings(None) if x.id == "djust.C045"]
-    assert len(found) == 3
-    for key in ("event_parameter_policy", "reauth_on_event", "reauth_server_turn_interval"):
-        assert any(key in x.msg for x in found)
-    with override_settings(LIVEVIEW_CONFIG={}, DJUST_CONFIG={}):
-        assert not check_pending_removed_settings(None)
-    # The sixth name is already refused at startup (#4184).
-    assert "time_travel_enabled" in REMOVED_CONFIG_KEYS
-    assert "time_travel_enabled" in REMOVED_VIEW_ATTRIBUTES
-
-
-def test_v036_code(m):
-    found = _ours(check_pending_removed_code(None), "djust.V036")
-    texts = [x.msg for x in found]
-    assert sum("cancel_async_on_disconnect" in t for t in texts) == 1
-    assert sum("OldHandlers.pick" in t and 'parameter_policy="legacy"' in t for t in texts) == 1
-    assert sum("OldHandlers.save" in t and 'parameter_policy="legacy"' in t for t in texts) == 1
-    assert not any("NewHandlers" in t for t in texts)
 
 
 def test_t029_python_markup(m):

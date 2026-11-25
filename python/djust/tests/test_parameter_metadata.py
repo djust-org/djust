@@ -20,9 +20,9 @@ class StrictOwner:
         raise AssertionError("must not inspect a property")
 
 
-class LegacyOwner:
-    @event_handler(parameter_policy="legacy")
-    def choose(self, value="SECRET_DEFAULT", **kwargs):
+class DefaultedOwner:
+    @event_handler
+    def choose(self, value: str = "SECRET_DEFAULT", **kwargs):
         raise AssertionError("must not execute")
 
 
@@ -33,30 +33,27 @@ def manifest(root):
 
 
 def test_same_named_handlers_remain_owned_and_defaults_are_absent():
-    left, right = StrictOwner(), LegacyOwner()
+    left, right = StrictOwner(), DefaultedOwner()
     root = SimpleNamespace(_components={"left": left, "right": right}, _child_views={})
     data = manifest(root)
     owners = {(o["view_id"], o["component_id"]): o["handlers"] for o in data["owners"]}
     assert owners[(None, "left")]["choose"]["policy"] == "strict"
-    assert owners[(None, "right")]["choose"] == {"policy": "legacy"}
+    assert owners[(None, "right")]["choose"]["policy"] == "strict"
+    assert owners[(None, "right")]["choose"]["parameters"][0]["type"] == "str"
     assert owners[(None, "left")]["choose"]["parameters"][0]["type"] == "int"
     assert "SECRET" not in json.dumps(data)
 
 
 def test_embedded_view_is_distinct_from_root_and_component():
     root = StrictOwner()
-    root._components = {"same": LegacyOwner()}
-    root._child_views = {"same": LegacyOwner()}
+    root._components = {"same": DefaultedOwner()}
+    root._child_views = {"same": DefaultedOwner()}
     data = manifest(root)
     assert [(o["view_id"], o["component_id"]) for o in data["owners"]] == [
         (None, None),
         (None, "same"),
         ("same", None),
     ]
-
-
-def test_legacy_only_tree_does_not_change_wire_protocol():
-    assert manifest(LegacyOwner()) is None
 
 
 def test_rpc_and_undecorated_methods_are_not_dom_event_contracts():
@@ -119,18 +116,7 @@ def test_disposed_children_are_not_advertised():
     assert len(manifest(root)["owners"]) == 1
 
 
-@pytest.fixture
-def legacy_project():
-    """The page's own handlers (``update_model``) inherit a legacy project policy."""
-    from djust.config import config
-
-    previous = config.get("event_parameter_policy", "strict")
-    config.set("event_parameter_policy", "legacy")
-    yield
-    config.set("event_parameter_policy", previous)
-
-
-def test_wrapper_method_precedence_hides_descriptor_handler(legacy_project):
+def test_wrapper_method_precedence_hides_descriptor_handler():
     class Menu(LiveComponent):
         class State(TypedState):
             selected: int = 0
@@ -147,7 +133,11 @@ def test_wrapper_method_precedence_hides_descriptor_handler(legacy_project):
     from djust.decorators import is_event_handler
 
     assert not is_event_handler(page.menu.get)
-    assert manifest(page) is None
+    assert all(
+        "get" not in owner["handlers"]
+        for owner in manifest(page)["owners"]
+        if owner["component_id"] == "menu"
+    )
 
 
 def test_rebuilding_manifest_tracks_removal_and_returns_detached_metadata():
@@ -161,18 +151,7 @@ def test_rebuilding_manifest_tracks_removal_and_returns_detached_metadata():
     assert second["owners"][0]["handlers"]["choose"]["parameters"][0]["type"] == "int"
 
 
-def test_new_manifest_limits_do_not_reject_legacy_only_mounts():
-    from djust._parameter_contract import ContractError
-
-    root = LegacyOwner()
-    root._components = {str(index): LegacyOwner() for index in range(1025)}
-    assert manifest(root) is None
-    root._components["0"] = StrictOwner()
-    with pytest.raises(ContractError, match="declaration limit"):
-        manifest(root)
-
-
-def test_bound_instance_shadowing_including_none_matches_dispatch(legacy_project):
+def test_bound_instance_shadowing_including_none_matches_dispatch():
     class Menu(LiveComponent):
         class State(TypedState):
             selected: int = 0
@@ -188,7 +167,11 @@ def test_bound_instance_shadowing_including_none_matches_dispatch(legacy_project
     page = Page()
     bound = page.menu
     object.__setattr__(bound, "choose", None)
-    assert manifest(page) is None
+    assert all(
+        "choose" not in owner["handlers"]
+        for owner in manifest(page)["owners"]
+        if owner["component_id"] == "menu"
+    )
 
     @event_handler(parameter_policy="strict")
     def replacement(value: str):
