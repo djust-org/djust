@@ -454,14 +454,7 @@ MIXIN_TABLES = {
             ): ("filter bridging (#3208)"),
         },
     ),
-    "forms.py": (
-        {},
-        {
-            ("_ensure_model_instance", "Failed to re-hydrate model instance (label=%s, p"): (
-                "re-hydration names a model label and pk, not state"
-            ),
-        },
-    ),
+    "forms.py": ({}, {}),
     "hot_view_replacement.py": (
         {},
         {

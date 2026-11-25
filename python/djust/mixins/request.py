@@ -979,10 +979,9 @@ class RequestMixin:
                 self.__dict__["_page_render_digest"] = render_token(self, request, baseline_html)
             t_render_diff = (time.perf_counter() - t0) * 1000
             self._lazy_thunks = list(page_lazy_thunks)
-            if not uses_legacy_exposure(self):
-                from .._exposure_child_persistence import save_child_states
+            from .._exposure_child_persistence import save_child_states
 
-                save_child_states(self, request)
+            save_child_states(self, request)
             self._cached_context = None
 
         # Wrap in Django template if wrapper_template is specified
@@ -1068,7 +1067,7 @@ class RequestMixin:
 
         # ADR-036: the page's own owner contracts, for events sent before a
         # socket mounts or over the HTTP fallback. Emitted outside dj-root so
-        # the VDOM baseline is unaffected; all-legacy pages are unchanged.
+        # the VDOM baseline is unaffected.
         self.__dict__["_initial_parameter_contracts"] = _initial_parameter_contracts(
             self, view_path
         )
@@ -1106,10 +1105,9 @@ class RequestMixin:
             self._pending_authenticated_page = False
             self._record_dj_model_fields_from_rust(self._rust_view)
             request._djust_timing["vdom_ms"] = round((time.perf_counter() - t0) * 1000, 2)
-            if not uses_legacy_exposure(self):
-                from .._exposure_child_persistence import save_child_states
+            from .._exposure_child_persistence import save_child_states
 
-                save_child_states(self, request)
+            save_child_states(self, request)
             self._cached_context = None
         response: HttpResponse
         if getattr(self, "streaming_render", False):
@@ -1120,7 +1118,7 @@ class RequestMixin:
         if status is not None:
             response.status_code = int(status)
         # ADR-038 D-b: the service worker must not persist an explicit page's
-        # HTML in its shell cache. Legacy responses are unchanged.
+        # HTML in its shell cache.
         from .._exposure import service_worker_cache_eligible
         from ..security.service_worker import SW_CACHE_HEADER, SW_CACHE_NO_STORE
 
@@ -1820,8 +1818,6 @@ class RequestMixin:
             if not render_only and not is_safe_event_name(event_name):
                 return JsonResponse({"error": "Invalid event name"}, status=400)
 
-            legacy_exposure = uses_legacy_exposure(self)
-
             # ADR-035: bound before mount() so the route, not the body, supplies it.
             bind_route = getattr(self, "_djust_bind_route_kwargs", None)
             if callable(bind_route):
@@ -2245,7 +2241,7 @@ class RequestMixin:
                 if owner is not self:
                     _run_http_background_work(self, bg_budget)
 
-            if child_view is not None and not legacy_exposure:
+            if child_view is not None:
                 # The object permission again after the handler, as the socket
                 # runtime re-checks an explicit child's (#4173).
                 from ..auth.core import enforce_object_permission
@@ -2296,7 +2292,7 @@ class RequestMixin:
             # The flag is not saved state: this request's view is discarded.
             reset_form = bool(getattr(self, "_should_reset_form", False))
 
-            # Explicit and legacy views alike (#4107).
+            # Every view (#4107).
             from .._exposure_sessions import StateLimitExceeded, save_server_state
 
             from ..state_store import StateStoreError
@@ -2388,10 +2384,9 @@ class RequestMixin:
                 self._rust_view.reset()
                 return _contract_error_response()
 
-            if not legacy_exposure:
-                from .._exposure_child_persistence import save_child_states
+            from .._exposure_child_persistence import save_child_states
 
-                save_child_states(self, request)
+            save_child_states(self, request)
 
             import json as json_module
 
@@ -2522,7 +2517,7 @@ class RequestMixin:
             if not diagnostics_policy_allows(self):
                 # ADR-038: undeclared state can occur in the exception's message,
                 # its traceback and the posted params, so in production a
-                # nonlegacy view gets the value-free log line and the generic
+                # view gets the value-free log line and the generic
                 # response. Under DEBUG it gets Django-like detail (D-a).
                 from .._exposure_diagnostics import (
                     log_failure_for,

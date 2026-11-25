@@ -742,9 +742,7 @@ class DropdownMenuCollection(ComponentDeclaration):
 
     def _saves(self, view: LiveView) -> bool:
         """Whether this collection's record is saved with ``view``'s state."""
-        from djust._exposure import uses_legacy_exposure
-
-        return self._persist == "server" and not uses_legacy_exposure(view)
+        return self._persist == "server"
 
     def _remember(self, key: str, entry: list[object]) -> None:
         self._known.pop(key, None)

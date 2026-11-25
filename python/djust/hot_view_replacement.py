@@ -318,13 +318,6 @@ def apply_class_swap(
         if not ok:
             return False, reason
         if old_cls is not new_cls:
-            # ADR-038: an in-place swap never runs the construction guard. A
-            # policy change would keep state built under one exposure contract
-            # in a view governed by another, so it reloads instead.
-            if getattr(old_cls, "exposure_policy", None) != getattr(
-                new_cls, "exposure_policy", None
-            ):
-                return False, "exposure_policy_changed"
             try:
                 view_instance.__class__ = new_cls
             except TypeError as e:
@@ -602,20 +595,12 @@ def _repoint_http_entries(class_pairs: List[Tuple[type, type]]) -> int:
 
     The live instances are swapped by :func:`apply_class_swap`; a new page
     load goes through the callable Django resolved at import, which kept the
-    pre-reload class. A class whose ``exposure_policy`` changed is left as it
-    is (its HTTP entry was wrapped for the old policy): a restart picks it up.
-    Covers ``settings.ROOT_URLCONF``; a per-request ``request.urlconf`` is not
+    pre-reload class. Covers ``settings.ROOT_URLCONF``; a per-request ``request.urlconf`` is not
     walked. Returns how many references changed.
     """
     replacements: Dict[int, type] = {}
     for old_cls, new_cls in class_pairs:
         if old_cls is new_cls:
-            continue
-        if getattr(old_cls, "exposure_policy", None) != getattr(new_cls, "exposure_policy", None):
-            logger.warning(
-                "HVR: %s changed exposure_policy; restart the server to serve it over HTTP",
-                new_cls.__qualname__,
-            )
             continue
         replacements[id(old_cls)] = new_cls
     if not replacements:

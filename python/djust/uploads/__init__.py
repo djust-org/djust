@@ -712,8 +712,8 @@ class UploadEntry:
     # The explicit (ADR-038) owner that registered the upload (#4175): the
     # mount binding's principal digest (session, user, tenant) and view. A
     # resumable writer records it, and chunk / complete / cancel frames and a
-    # resume from any other owner are refused. ``None`` for a legacy owner,
-    # whose key is the session alone.
+    # resume from any other owner are refused. ``None`` when the connection has
+    # no mount binding; the key is then the session alone.
     _owner: Optional[Dict[str, str]] = field(default=None, repr=False)
 
     @property
@@ -834,7 +834,7 @@ class UploadEntry:
 #: The default ``owner`` of :meth:`UploadManager.add_chunk` /
 #: ``complete_upload`` / ``cancel_upload``: a call by the framework or the
 #: view's own code, which no owner check refuses. A client frame passes the
-#: connection's owner (``None`` for a legacy view), #4175.
+#: connection's owner (``None`` when the connection has no mount binding), #4175.
 SERVER_CALL: Any = object()
 
 
@@ -1595,8 +1595,7 @@ class UploadMixin:
         """Render-only upload state for an explicit view's template context.
 
         ADR-038 E2-6: the explicit render context calls this for the
-        registered ``djust.uploads`` provider; legacy views never render an
-        ``uploads`` key. The value is ``get_upload_state()`` with each entry
+        registered ``djust.uploads`` provider. The value is ``get_upload_state()`` with each entry
         projected through :func:`_render_upload_entry`, which drops
         ``writer_result`` and the raw ``client_name``. Nothing here is
         persisted, sent as client state or exported to debug tools. A

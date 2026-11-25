@@ -41,7 +41,7 @@ import re
 from typing import Any, Dict, Iterator, List, Optional, Set, Tuple
 
 from djust._class_snapshot import namespace as _class_namespace
-from djust._exposure import ProviderContract, uses_legacy_exposure
+from djust._exposure import ProviderContract
 from djust._exposure_providers import provide_context, require_mixin_before_view
 from djust.components.utils import format_cell, interpolate_color_gradient
 from djust.decorators import event_handler
@@ -308,7 +308,7 @@ _PRE_MOUNT_TABLE_CONTEXT = {
 
 #: Public instance state ``DataTableMixin`` assigns (``init_table_state()``, the
 #: export / copy / import handlers). With the class-level ``table_*``
-#: configuration it is what the legacy attribute walk rendered.
+#: configuration it is what the mixin renders.
 _TABLE_STATE_NAMES = (
     "table_active_expressions",
     "table_collapsed_groups",
@@ -485,16 +485,14 @@ class DataTableMixin:
         require_mixin_before_view(cls, DataTableMixin)
 
     def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
-        """Render the mixin's ``table_*`` names for a view with explicit exposure.
+        """Render the mixin's ``table_*`` names.
 
-        A legacy view is untouched: its attribute walk already renders these
-        names. An explicit view renders nothing it is not given, so the mixin
+        A view renders nothing it is not given, so the mixin
         provides the names it publishes: its class-level ``table_*``
         configuration and the state ``init_table_state()`` and the handlers
         assign. A name that is not set yet (before ``init_table_state()``) is
         left out, and so is a callable (``table_row_class_map`` may be one)
-        and a class-level value that is not plain data, as the walk left them
-        out. Render-only: nothing here is persisted or
+        and a class-level value that is not plain data. Render-only: nothing here is persisted or
         sent to the browser as data. ``table_model`` and ``table_queryset``
         are never rendered.
         """
@@ -505,8 +503,6 @@ class DataTableMixin:
             if hasattr(super(), "get_context_data")
             else {}
         )
-        if uses_legacy_exposure(self):
-            return context
         from djust.mixins.context import _is_json_serializable
 
         missing = _TABLE_UNSET

@@ -10,7 +10,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any, Awaitable, Dict, List, Optional
 
-from djust._exposure import ProviderContract, uses_legacy_exposure
+from djust._exposure import ProviderContract
 from djust._exposure_providers import provide_context
 from djust.decorators import background, event_handler
 from djust.js import JS, JSChain
@@ -23,9 +23,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger("djust.tutorials")
 
 #: The names ``TutorialMixin`` renders under explicit exposure (ADR-038 Step R,
-#: PR 0c): the three progress values and the highlight class. These are the
-#: mixin names the legacy attribute walk rendered. ``tutorial_steps`` is not
-#: among them: the walk skipped it too (#694, ``TutorialStep`` is not data).
+#: PR 0c): the three progress values and the highlight class.
+#: ``tutorial_steps`` is not among them (#694, ``TutorialStep`` is not data).
 _TUTORIAL_CONTEXT_NAMES = (
     "tutorial_running",
     "tutorial_current_step",
@@ -180,11 +179,10 @@ class TutorialMixin:
         self._tutorial_total_steps = value
 
     def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
-        """Render the tour's progress values for a view with explicit exposure.
+        """Render the tour's progress values.
 
-        A legacy view is untouched: its attribute walk already renders these
-        names. Render-only: nothing here is persisted or sent to the browser
-        as data, and a tour does not survive a reconnect under either policy.
+        Render-only: nothing here is persisted or sent to the browser as data,
+        and a tour does not survive a reconnect.
         """
         # TutorialMixin is mixed into a LiveView at runtime; the MRO supplies
         # get_context_data(). mypy only sees object here.
@@ -193,9 +191,8 @@ class TutorialMixin:
             if hasattr(super(), "get_context_data")
             else {}
         )
-        if not uses_legacy_exposure(self):
-            for name in _TUTORIAL_CONTEXT_NAMES:
-                provide_context(self, context, TUTORIAL_PROVIDER.name, name, getattr(self, name))
+        for name in _TUTORIAL_CONTEXT_NAMES:
+            provide_context(self, context, TUTORIAL_PROVIDER.name, name, getattr(self, name))
         return context
 
     # ------------------------------------------------------------------

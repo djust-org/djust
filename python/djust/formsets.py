@@ -40,7 +40,7 @@ from django.forms import BaseFormSet
 from django.forms.models import BaseModelFormSet
 
 from . import _form_data_bounds
-from ._exposure import ProviderContract, uses_legacy_exposure
+from ._exposure import ProviderContract
 from ._exposure_diagnostics import log_failure_for
 from ._exposure_providers import (
     provide_context,
@@ -384,10 +384,8 @@ class FormSetHelpersMixin:
         """Render the declared formsets for a view with explicit exposure.
 
         ``add_row`` / ``remove_row`` assign the rebuilt formset to the attribute
-        named in ``formset_classes``. A legacy view is untouched: its attribute
-        walk already renders that attribute. An explicit view renders nothing it
-        is not given, so the mixin provides each declared name the view has
-        assigned. Render-only: the formset and ``_formset_data`` are neither
+        named in ``formset_classes``. A view renders nothing it is not given,
+        so the mixin provides each declared name the view has assigned. Render-only: the formset and ``_formset_data`` are neither
         persisted nor sent to the browser as data.
         """
         # FormSetHelpersMixin is mixed into a LiveView at runtime; the MRO
@@ -397,8 +395,6 @@ class FormSetHelpersMixin:
             if hasattr(super(), "get_context_data")
             else {}
         )
-        if uses_legacy_exposure(self):
-            return context
         view_class = type(self)
         rendered = _formsets_provider(view_class).rendered
         declared = self.formset_classes if isinstance(self.formset_classes, dict) else {}

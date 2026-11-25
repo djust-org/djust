@@ -31,8 +31,6 @@ The rules, in one place (``docs/adr/notes/038-amendment-automatic-server-state.m
   running; a name that is now a method or property is skipped.
 * **Binding**: the session, user, tenant and route, and the declared
   envelope's lifetime.
-
-A view on the deprecated ``exposure_policy = "legacy"`` takes no part.
 """
 
 from __future__ import annotations
@@ -56,7 +54,6 @@ from ._exposure import (
     StateLimits,
     _class_facts,
     reserved_state_names,
-    uses_legacy_exposure,
 )
 
 logger = logging.getLogger("djust.automatic_state")
@@ -501,7 +498,7 @@ def _forget(view: Any, request: Any) -> None:
     """Saving is off for this view: the state saved for this tab before that
     (with its changed/deleted record) is removed from the session, so it is
     neither read nor left at rest. One write, and only when there is one."""
-    if uses_legacy_exposure(view) or view.__dict__.get("_djust_auto_forgot"):
+    if view.__dict__.get("_djust_auto_forgot"):
         return
     view.__dict__["_djust_auto_forgot"] = True  # once per view object
     try:
@@ -521,7 +518,7 @@ def _forget(view: Any, request: Any) -> None:
 
 def _not_saved(view: Any) -> bool:
     """The one gate every entry point of this module asks first."""
-    return uses_legacy_exposure(view) or not saving_enabled(view)
+    return not saving_enabled(view)
 
 
 def limits_for(view: Any) -> Tuple[int, int]:

@@ -422,15 +422,7 @@ def _with_stored_rows(
 def _declared_adapter(
     view: Any, request: Any, *, create: bool = False
 ) -> "ServerStateSession | None":
-    """The strict adapter for declared ``persist="server"`` fields.
-
-    A legacy view has no declared server state (the constructor refuses the
-    grant), so it has no adapter; its state is the automatic kind only (#4107).
-    """
-    from ._exposure import uses_legacy_exposure
-
-    if uses_legacy_exposure(view):
-        return None
+    """The strict adapter for declared ``persist="server"`` fields."""
     return server_state_adapter(view, request, create=create)
 
 
@@ -584,8 +576,8 @@ def load_server_state(view: Any, request: Any) -> dict[str, Any] | None:
     sets are disjoint (a field that states ``persist`` is never automatic).
 
     Invalid configuration and storage failures still propagate. Only a rejected
-    envelope (schema/identity/expiry) becomes a cache miss. Never hydrate a legacy
-    session dictionary or log rejected values. Caller performs fresh object auth
+    envelope (schema/identity/expiry) becomes a cache miss. Never hydrate an
+    unversioned session dictionary or log rejected values. Caller performs fresh object auth
     before dispatch/render after applying these values.
     """
     from . import _automatic_state

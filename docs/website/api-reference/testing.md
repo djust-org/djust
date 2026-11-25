@@ -147,7 +147,7 @@ assert len(state["items"]) == 3
 
 #### `persisted_state() -> PersistedState`
 
-What the mounted view would save, split by destination, for a view under explicit exposure (a legacy view raises `TypeError`; it persists `get_state()`). `get_state()` is what the view holds; this is what it keeps between requests. It is a read-only projection: nothing is written to the session. Also available as `djust.testing.persisted_state(view)`, which takes the view instance. Calling it spends the once-per-class "large state" notices, so a later real save in the same process does not repeat them, and an over-limit `persist="server"` projection raises `ExposureError` where a real save drops the component records and saves without them.
+What the mounted view would save, split by destination. `get_state()` is what the view holds; this is what it keeps between requests. It is a read-only projection: nothing is written to the session. Also available as `djust.testing.persisted_state(view)`, which takes the view instance. Calling it spends the once-per-class "large state" notices, so a later real save in the same process does not repeat them, and an over-limit `persist="server"` projection raises `ExposureError` where a real save drops the component records and saves without them.
 
 | Field | Contents |
 |---|---|

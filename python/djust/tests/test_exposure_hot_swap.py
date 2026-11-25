@@ -1,10 +1,9 @@
 """ADR-038: hot view replacement cannot change or bypass the exposure policy.
 
 ``apply_class_swap`` assigns ``__class__`` in place, which never runs the
-construction guard. A swap that changed the policy would keep state built
-under one exposure contract inside a view governed by another, and a swap to
-an invalid configuration would dodge the guard entirely. Both fall back to a
-full reload.
+construction guard. A swap to an invalid configuration (a policy other than
+``"explicit"`` assigned after the class statement included) would dodge the
+guard entirely, so the swap re-validates and falls back to a full reload.
 """
 
 import pytest

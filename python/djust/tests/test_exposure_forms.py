@@ -433,14 +433,14 @@ def test_http_post_restores_opted_in_fields_across_requests(staged):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("policy", ["explicit"])
-def test_raw_model_pk_is_never_re_resolved_from_a_raw_key(staged, policy):
+def test_raw_model_pk_is_never_re_resolved(staged):
     user = User.objects.create(username="form-owner")
-    view = VIEWS[policy]()
+    view = VIEWS["explicit"]()
     view.model_pk = user.pk
     view.model_label = "auth.User"
     view._model_instance = None
-    view._ensure_model_instance()
+    view._form_instance = None
+    view.form_instance
     assert view._model_instance is None
 
 
