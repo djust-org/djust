@@ -18,7 +18,7 @@ This guide explains how to write effective event handlers in djust LiveView appl
 
 ## The Signature Is the Contract
 
-Under the strict policy (`event_parameter_policy = "strict"`, opt-in until 2.0.0 final), a handler receives exactly the parameters its signature declares. Declare each argument the binding sends, and nothing else: `**kwargs` is not required, and a handler that does not read it should not take it.
+Under the strict policy (`event_parameter_policy = "strict"`, the default since djust 2.0), a handler receives exactly the parameters its signature declares. Declare each argument the binding sends, and nothing else: `**kwargs` is not required, and a handler that does not read it should not take it.
 
 ```python
 @event_handler()

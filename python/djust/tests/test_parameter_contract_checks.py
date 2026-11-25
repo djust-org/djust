@@ -302,7 +302,10 @@ def _unload(module: types.ModuleType) -> None:
 
 @pytest.fixture
 def fixture_module(tmp_path):
-    old_policy = config.get("event_parameter_policy", "legacy")
+    old_policy = config.get("event_parameter_policy", "strict")
+    # This module's subject is the policy interplay: its unannotated handlers
+    # inherit a legacy project policy until a test sets another (#4189).
+    config.set("event_parameter_policy", "legacy")
     module = _load(tmp_path)
     try:
         yield module
@@ -396,6 +399,10 @@ def test_project_strict_policy_reports_inheriting_handlers_but_not_legacy_overri
 
 
 def test_invalid_project_policy_is_one_configuration_error(fixture_module):
+    # check_configuration imports djust.presence lazily, and an @event_handler
+    # resolves the project policy when it is decorated (#4189): import it first.
+    import djust.presence  # noqa: F401
+
     config.set("event_parameter_policy", "Strict")
     c022 = [m for m in check_configuration(None) if m.id == "djust.C022"]
     assert [m.msg for m in c022] == [

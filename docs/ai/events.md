@@ -2,9 +2,7 @@
 
 All handlers require the `@event_handler()` decorator. `manage.py check` compares each template binding with its handler (`djust.T019`–`T022`).
 
-The rules below are the default legacy policy. For new code, prefer the strict
-policy (`@event_handler(parameter_policy="strict")`, or project-wide
-`LIVEVIEW_CONFIG = {"event_parameter_policy": "strict"}`; ADR-036):
+Strict is the default parameter policy (ADR-036, #4189):
 - Closed, annotated signatures are the contract; `**kwargs` is not required.
 - Pass arguments with `dj-value-*` only (never `data-*` or `dj-params`); no type suffix is needed.
 - The browser sends a generated value (`value`/`field` for input/change, form fields and the pressed submit button's `name=value` for submit, `key`/`code` for keyboard) only when the handler declares that parameter name or a `**` catch-all.

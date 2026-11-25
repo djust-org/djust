@@ -356,7 +356,9 @@ class LoggingTerminal(TtydTerminalView):
         super().on_ttyd_connect(timestamp=timestamp, user_agent=user_agent, **kwargs)
         self.session_log.append("Connected at %s" % timestamp)
 
-    on_ttyd_connect = event_handler()(on_ttyd_connect)
+    on_ttyd_connect = event_handler(parameter_policy="legacy")(
+        on_ttyd_connect
+    )  # legacy params until #4192-#4198 (#4189)
 
 
 class ExplicitTerminal(LoggingTerminal):

@@ -2687,7 +2687,7 @@ class TestV007Retired:
         def mount(self, request, **kwargs):
             pass
 
-        @event_handler()
+        @event_handler(parameter_policy="legacy")  # legacy params until #4192-#4198 (#4189)
         def handle_click(self, item_id=0):
             pass
 

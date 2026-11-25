@@ -210,3 +210,21 @@ def rel_files(tmp_path, request):
             yield write
         finally:
             clear_template_dirs_cache()
+
+
+@pytest.fixture
+def legacy_project_policy():
+    """Run a test under the legacy project parameter policy.
+
+    Strict became the default in #4189; a test whose subject is the legacy
+    frame shape or legacy binding says so with this fixture. Removed with the
+    legacy path (#4198/#4205).
+    """
+    from djust.config import config
+
+    previous = config.get("event_parameter_policy", "strict")
+    config.set("event_parameter_policy", "legacy")
+    try:
+        yield
+    finally:
+        config.set("event_parameter_policy", previous)

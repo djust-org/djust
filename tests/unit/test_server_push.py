@@ -143,7 +143,7 @@ class TestServerPushHandler:
         consumer = self._make_consumer()
         call_log = []
 
-        @event_handler
+        @event_handler(parameter_policy="legacy")  # legacy params until #4192-#4198 (#4189)
         def on_msg(text):
             call_log.append(text)
 

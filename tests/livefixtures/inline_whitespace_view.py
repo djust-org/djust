@@ -72,15 +72,15 @@ class InlineWhitespaceView(LiveView):
 
     # --- event handlers (immutable updates so change detection fires) ---
 
-    @event_handler
+    @event_handler(parameter_policy="legacy")  # legacy params until #4192-#4198 (#4189)
     def set_texts(self, label, code, tail):
         self.label, self.code, self.tail = label, code, tail
 
-    @event_handler
+    @event_handler(parameter_policy="legacy")  # legacy params until #4192-#4198 (#4189)
     def set_tags(self, tags):
         self.tags = list(tags)
 
-    @event_handler
+    @event_handler(parameter_policy="legacy")  # legacy params until #4192-#4198 (#4189)
     def set_chips(self, chips):
         self.chips = list(chips)
 
@@ -88,7 +88,7 @@ class InlineWhitespaceView(LiveView):
     def toggle(self):
         self.show = not self.show
 
-    @event_handler
+    @event_handler(parameter_policy="legacy")  # legacy params until #4192-#4198 (#4189)
     def set_md(self, md):
         self.md = md
 
@@ -130,7 +130,7 @@ def keyed_list_view(shape):
             ctx["items"] = self.items
             return ctx
 
-        @event_handler
+        @event_handler(parameter_policy="legacy")  # legacy params until #4192-#4198 (#4189)
         def set_items(self, items):
             self.items = list(items)
 

@@ -325,6 +325,7 @@ def test_the_handler_signature_is_computed_once_per_function(monkeypatch):
         return real(obj, *a, **k)
 
     class _V:
+        @event_handler(parameter_policy="legacy")  # legacy params until #4192-#4198 (#4189)
         def handler(self, amount: int = 0, **kwargs):
             pass
 

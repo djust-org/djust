@@ -117,6 +117,7 @@ class TestEventAttrs:
     def test_a_str_annotated_handler_still_receives_text(self):
         """Compat: a handler written for the untyped wire keeps working."""
 
+        @event_handler(parameter_policy="legacy")  # legacy params until #4192-#4198 (#4189)
         def pick(self: Any, value: str) -> None:
             pass
 
@@ -140,6 +141,7 @@ class TestEventAttrs:
         assert r.name == "service"
 
     def test_the_handler_convention_accepts_the_typed_params(self):
+        @event_handler(parameter_policy="legacy")  # legacy params until #4192-#4198 (#4189)
         def set_rating(self: Any, value: int, name: str | None = None, **kwargs: Any) -> None:
             pass
 

@@ -56,11 +56,11 @@ class GroupPage(LiveView):
         self.log.append(n)
         self.n = n
 
-    @event_handler()
+    @event_handler(parameter_policy="legacy")  # legacy params until #4192-#4198 (#4189)
     def join_room(self, room="", **kwargs):
         self.push_scope = room
 
-    @event_handler()
+    @event_handler(parameter_policy="legacy")  # legacy params until #4192-#4198 (#4189)
     def push_to_my_class(self, n=0, **kwargs):
         """A handler that pushes to its own class: the sender skips its own echo (#1677)."""
         from djust import push_to_view

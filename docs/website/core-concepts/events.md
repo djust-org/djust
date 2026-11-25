@@ -651,18 +651,11 @@ Under the strict parameter policy, the handler's Python signature is the
 event's contract. Named parameters, their annotations and their defaults
 decide what an event may carry. Values are converted exactly, and an event
 that doesn't fit is rejected before your code runs. The examples in these
-guides are written for it. In 2.0.0rc5 it is still an opt-in; it becomes the
-only behaviour before 2.0.0 final
-([#4171](https://github.com/djust-org/djust/issues/4171)). Turn it on for the
-whole project:
-
-<!-- djust-example: skip -- settings fragment: the project-wide policy switch -->
-<!-- doc-snippet-check: skip -->
-```python
-LIVEVIEW_CONFIG = {"event_parameter_policy": "strict"}
-```
-
-or for one handler with `@event_handler(parameter_policy="strict")`.
+guides are written for it. It is the default since djust 2.0
+([#4189](https://github.com/djust-org/djust/issues/4189)) and the only
+behaviour from 2.0.0 final ([#4171](https://github.com/djust-org/djust/issues/4171)).
+Until then a handler that still needs the 1.x behaviour can pin
+`@event_handler(parameter_policy="legacy")`.
 
 ### Example: typed click arguments
 

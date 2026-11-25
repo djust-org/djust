@@ -25,9 +25,8 @@ Add `"myapp"` to `INSTALLED_APPS` in your project's settings, and add
 (`djust init` does not; without the setting, installed apps are allowed). Keep the existing
 entries. The URL step below connects this app to the site.
 
-The handlers below are written for the strict event parameter policy, which
-[Installation](./installation.md#3-configure-django) turns on with
-`LIVEVIEW_CONFIG = {"event_parameter_policy": "strict"}`: a handler declares,
+The handlers below are written for the strict event parameter policy, the default
+since djust 2.0: a handler declares,
 with annotations, exactly the arguments its events carry, and the browser
 sends it nothing else.
 

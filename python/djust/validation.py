@@ -77,7 +77,7 @@ def get_project_parameter_policy() -> str:
     from .config import config
     from ._parameter_contract import ContractError
 
-    policy = config.get("event_parameter_policy", "legacy")
+    policy = config.get("event_parameter_policy", "strict")
     if policy not in ("legacy", "strict"):
         raise ContractError("event_parameter_policy must be 'legacy' or 'strict'.")
     return str(policy)

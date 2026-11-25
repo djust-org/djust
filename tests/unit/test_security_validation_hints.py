@@ -26,6 +26,21 @@ from djust.validation import (
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _legacy_parameter_policy():
+    """This module tests the legacy parameter path; strict became the default in #4189.
+    Removed with the legacy path (#4198/#4205)."""
+    from djust.config import config
+
+    previous = config.get("event_parameter_policy", "strict")
+    config.set("event_parameter_policy", "legacy")
+    yield
+    config.set("event_parameter_policy", previous)
+
+
 def test_hint_generic_for_unknown_pair():
     hint = format_type_error_hint("x", expected="SomeCustomType", actual="dict", value={})
     assert "SomeCustomType" in hint

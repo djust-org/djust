@@ -19,6 +19,9 @@ from djust import LiveView, state
 from djust.decorators import event_handler
 from djust.testing import LiveViewSmokeTest, LiveViewTestClient
 
+# The answers below are the legacy validator's; strict became the default in #4189.
+pytestmark = [pytest.mark.usefixtures("legacy_project_policy")]
+
 
 class BoundView(LiveView):
     exposure_policy = "explicit"
