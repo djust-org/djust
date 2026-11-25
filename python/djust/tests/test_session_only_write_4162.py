@@ -709,8 +709,11 @@ async def test_background_work_writes_the_session_after_the_reply(interval):
             await harness.event(comm, "later")
             await receive_until(
                 comm,
+                # No render frame when the result changed nothing the template
+                # reads (#4123): the batch's ``async_complete`` ends it then.
                 lambda frames: any(
-                    f.get("type") in ("patch", "noop", "html_update") for f in frames
+                    f.get("type") in ("patch", "noop", "html_update", "async_complete")
+                    for f in frames
                 ),
                 what="the background result",
             )
@@ -819,9 +822,14 @@ async def _ws_background(view: type, name: str) -> Any:
     comm = await _ws_mount(view, key)
     try:
         await harness.event(comm, name)
+        # A result that changed nothing the template reads sends no render
+        # frame (#4123); the batch's ``async_complete`` is then its outcome.
         frames = await receive_until(
             comm,
-            lambda got: any(f.get("source") == "async" or f.get("type") == "error" for f in got),
+            lambda got: any(
+                f.get("source") == "async" or f.get("type") in ("error", "async_complete")
+                for f in got
+            ),
             what="the background outcome",
             allow_close=True,
         )

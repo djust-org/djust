@@ -29,6 +29,7 @@ from django.urls import path
 
 from djust import LiveView, event_handler, state
 from djust.testing import open_live_page
+from djust.tests._ws_frames import receive_until
 from djust.uploads import (
     FRAME_CANCEL,
     FRAME_CHUNK,
@@ -563,14 +564,11 @@ async def _socket():
     return communicator, consumer, consumer._slot_map()["up"].facade
 
 
-async def _frames(communicator, predicate, timeout=PATIENCE):
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout
-    seen = []
-    while True:
-        seen.append(await communicator.receive_json_from(timeout=deadline - loop.time()))
-        if predicate(seen[-1]):
-            return seen
+async def _frames(communicator, predicate):
+    """Frames up to the first one ``predicate`` accepts (#3709: no short waits)."""
+    return await receive_until(
+        communicator, lambda seen: bool(seen) and predicate(seen[-1]), timeout=PATIENCE
+    )
 
 
 async def _spin(predicate, what):
@@ -625,11 +623,11 @@ async def test_a_slow_hook_does_not_delay_another_view_and_keeps_its_views_order
         await _wait_held()
         # Another view's event is answered while the hook is still blocked.
         await communicator.send_json_to(_event("quick", 7))
-        await _frames(communicator, _reply_to(7), timeout=5.0)
+        await _frames(communicator, _reply_to(7))
         # The uploading view's own next event waits for its hook.
         await communicator.send_json_to(_event("bump", 8, "up"))
         await communicator.send_json_to({"type": "ping"})
-        await _frames(communicator, lambda f: f.get("type") == "pong", timeout=5.0)
+        await _frames(communicator, lambda f: f.get("type") == "pong")
         assert ("finished-end", "doc", ref) not in CALLS and ("bump",) not in CALLS
         RELEASE.set()
         await _frames(communicator, _reply_to(8))
