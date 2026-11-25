@@ -947,6 +947,16 @@ state the old value.
   either changes `dj-chart-revision` when that state changes, or sets
   `dj-chart-update="always"` for the old behaviour
   ([#4004](https://github.com/djust-org/djust/issues/4004)).
+- **Production logs and error trackers lose exception detail for explicit
+  views.** With `DEBUG = False` a legacy view's failure was logged with its
+  exception and traceback, and error trackers listening to
+  `got_request_exception` (Sentry) received it. An explicit view logs a static
+  line, sends the signal with a value-free `ExposureError` from the HTTP page
+  view, and none from the WebSocket, SSE or HTTP fallback. To get the detail
+  back in server sinks only, set
+  `LIVEVIEW_CONFIG = {"log_exception_detail": True}`: client frames and HTTP
+  responses stay generic
+  ([#4180](https://github.com/djust-org/djust/issues/4180)).
 - **Background work stops when the connection closes.** Under the 1.3
   default a view's `start_async()` / `@background` work ran to completion
   after its socket or SSE stream closed, and the result was discarded, unless
@@ -1106,4 +1116,4 @@ of looking for a replacement.
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: 68d58f21ec6d -->
+<!-- generated-doc prose-sha256: 3e07aaabaabf -->

@@ -265,7 +265,13 @@ def handle_exception(
         'error'
     """
     import logging as logging_module
-    from .._exposure_diagnostics import diagnostics_allowed
+    from .._exposure_diagnostics import (
+        PROTECTED_FAILURE,
+        diagnostics_allowed,
+        log_failure,
+        send_request_exception,
+        server_exception_detail_enabled,
+    )
 
     if expose_details is not True or not diagnostics_allowed():
         # Do not stringify the exception or pass exc_info/extra to a logger:
@@ -282,6 +288,32 @@ def handle_exception(
             protected_logger.error("Protected view operation failed: %s", exception)
         else:
             protected_logger.error("Protected view operation failed")
+            if server_exception_detail_enabled():
+                # #4180: the operator opted in to exception detail in server
+                # sinks (the log and error trackers). The client answer below
+                # stays generic, and the observability ring buffer is not a
+                # server log, so ``record_traceback`` is not called.
+                from .log_sanitizer import sanitize_for_log
+
+                protected_parts = []
+                if view_class:
+                    protected_parts.append(f"view={sanitize_for_log(str(view_class))}")
+                if event_name:
+                    protected_parts.append(f"event={sanitize_for_log(event_name)}")
+                protected_context = f" ({', '.join(protected_parts)})" if protected_parts else ""
+                # Through ``log_failure``, which reads the same opt-in: no raw
+                # exception-carrying logger call (test_log_exposure_pin).
+                log_failure(
+                    protected_logger,
+                    exception,
+                    "%s%s: %s: %s",
+                    PROTECTED_FAILURE,
+                    protected_context,
+                    type(exception).__name__,
+                    sanitize_for_log(str(exception)),
+                    traceback=True,
+                )
+                send_request_exception(exception)
         return {
             "type": "error",
             "error": GENERIC_ERROR_MESSAGES.get(error_type, GENERIC_ERROR_MESSAGES["default"]),
@@ -367,6 +399,10 @@ def handle_exception(
             safe_exc,
             exc_info=True,
         )
+
+    if server_exception_detail_enabled():
+        # #4180: the signal fires whatever the owner's policy.
+        send_request_exception(exception)
 
     # Create and return safe response
     return create_safe_error_response(

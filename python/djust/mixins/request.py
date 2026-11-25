@@ -2422,9 +2422,26 @@ class RequestMixin:
                 # its traceback and the posted params, so in production a
                 # nonlegacy view gets the value-free log line and the generic
                 # response. Under DEBUG it gets Django-like detail (D-a).
-                from .._exposure_diagnostics import log_failure_for
+                from .._exposure_diagnostics import (
+                    log_failure_for,
+                    send_request_exception,
+                    server_exception_detail_enabled,
+                )
 
-                log_failure_for(logger, (self,), e, "HTTP event failed")
+                # The message and traceback reach the log only under
+                # ``LIVEVIEW_CONFIG["log_exception_detail"]`` (#4180), which
+                # also sends ``got_request_exception``; the answer stays generic.
+                log_failure_for(
+                    logger,
+                    (self,),
+                    e,
+                    "HTTP event failed: %s: %s",
+                    type(e).__name__,
+                    e,
+                    traceback=True,
+                )
+                if server_exception_detail_enabled():
+                    send_request_exception(e, request)
                 return JsonResponse(
                     {
                         "error": "An error occurred processing your request. Please try again.",

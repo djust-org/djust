@@ -249,6 +249,10 @@ token = state("", persist="server", render=False)  # handlers only, never templa
   technical 500 page, detailed error frames and dev overlay, and full log lines.
   With `DEBUG = False` it is value-free: a generic 500 page or error frame and
   a static log line. The debug panel always shows redacted values.
+  To keep exception text and tracebacks in production server logs and error
+  trackers (Sentry's `got_request_exception`), set
+  `LIVEVIEW_CONFIG = {"log_exception_detail": True}`. Client frames and HTTP
+  responses stay generic.
 - **Service-worker caches.** Explicit pages are never written to the worker's
   page-shell or VDOM caches. The caches are cleared when the logged-in identity
   changes.

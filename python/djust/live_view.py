@@ -202,6 +202,7 @@ def _protect_http_entry(cls: type, view: Callable[..., Any]) -> Callable[..., An
         protected_http_outcome,
         protected_server_error,
         restrict_diagnostics,
+        server_exception_detail_enabled,
     )
 
     if iscoroutinefunction(view):
@@ -217,9 +218,14 @@ def _protect_http_entry(cls: type, view: Callable[..., Any]) -> Callable[..., An
                     outcome = protected_http_outcome(exc)
                     if diagnostics_allowed() or outcome == "raise":
                         raise
+                    # #4180: the server-side opt-in keeps the real exception for
+                    # the log and the signal; the response stays generic.
+                    failure = exc if server_exception_detail_enabled() else None
                     del exc
             # Outside the except block: the signal's exception has no context.
-            return await sync_to_async(protected_server_error)(request, logger, outcome)
+            return await sync_to_async(protected_server_error)(
+                request, logger, outcome, exc=failure
+            )
 
         markcoroutinefunction(protected_async)
         _PROTECTED_HTTP_ENTRIES.add(protected_async)
@@ -235,8 +241,9 @@ def _protect_http_entry(cls: type, view: Callable[..., Any]) -> Callable[..., An
                 outcome = protected_http_outcome(exc)
                 if diagnostics_allowed() or outcome == "raise":
                     raise
+                failure = exc if server_exception_detail_enabled() else None
                 del exc
-        return protected_server_error(request, logger, outcome)
+        return protected_server_error(request, logger, outcome, exc=failure)
 
     _PROTECTED_HTTP_ENTRIES.add(protected)
     return protected

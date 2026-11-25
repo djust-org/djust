@@ -388,6 +388,24 @@ to `True`, the SDK attaches user details (id, username, email), IP
 addresses, cookies and request bodies to events. Leave it off
 unless your privacy policy explicitly allows it.
 
+For views on explicit exposure (the 2.0 default), also turn on
+exception detail for server sinks:
+
+```python
+# settings.py
+LIVEVIEW_CONFIG = {
+    "log_exception_detail": True,
+}
+```
+
+Without it, an explicit view's failure in production reaches Sentry as
+a value-free `ExposureError` from the HTTP page view and not at all
+from the WebSocket, SSE or HTTP fallback, and the server log has a
+static line with no traceback. With it, the log line carries the
+exception and traceback and `got_request_exception` (the signal
+Sentry listens to) fires with the real exception on every transport
+(#4180). Client frames and HTTP responses stay generic either way.
+
 ### Structured logging
 
 ```python
