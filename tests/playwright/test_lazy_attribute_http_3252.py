@@ -29,7 +29,7 @@ ROOT_URLCONF = "lazyfixture.urls"
 INSTALLED_APPS = ["django.contrib.auth", "django.contrib.contenttypes", "django.contrib.sessions", "django.contrib.staticfiles", "djust", "djust.components", "lazyfixture"]
 MIDDLEWARE = ["django.contrib.sessions.middleware.SessionMiddleware", "django.contrib.auth.middleware.AuthenticationMiddleware", "django.middleware.csrf.CsrfViewMiddleware"]
 DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}}
-SESSION_ENGINE = "django.contrib.sessions.backends.signed_cookies"
+SESSION_ENGINE = "django.contrib.sessions.backends.cache"
 STATIC_URL = "/static/"
 LIVEVIEW_CONFIG = {"hot_reload_auto_enable": False}
 DJUST_LIVE_RENDER_ALLOWED_MODULES = ["lazyfixture.views"]
@@ -46,7 +46,7 @@ from djust.decorators import event_handler
 class Child(LiveView):
     exposure_policy = "explicit"
     template = '<div><span class="count">{{ count }}</span><button dj-click="inc">Increment</button></div>'
-    count = state(0, client=True)
+    count = state(0, persist="server")
     @event_handler
     def inc(self, **kwargs):
         self.count += 1
