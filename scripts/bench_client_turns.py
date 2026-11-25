@@ -286,7 +286,8 @@ class Server:
 
 
 def _client_core(path: Optional[str] = None) -> str:
-    source = open(path or os.path.join(STATIC, "client-core.js"), encoding="utf-8").read()
+    with open(path or os.path.join(STATIC, "client-core.js"), encoding="utf-8") as fh:
+        source = fh.read()
     if source.count(_HANDLER) != 1:
         raise SystemExit("client-core.js no longer defines handleServerResponse once")
     return source.replace(_HANDLER, _HANDLER_WRAP, 1)
@@ -312,7 +313,8 @@ def _serve_static(core: str):
             if not os.path.isfile(file):
                 route.fulfill(status=404, body="")
                 return
-            body = open(file, encoding="utf-8").read()
+            with open(file, encoding="utf-8") as fh:
+                body = fh.read()
         route.fulfill(status=200, content_type="application/javascript", body=body)
 
     return handler

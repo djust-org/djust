@@ -164,7 +164,8 @@ def _launch(playwright, chrome: str):
 def run(sizes: List[int], shapes: List[str], turns: int, chrome: str) -> List[Dict[str, Any]]:
     from playwright.sync_api import sync_playwright
 
-    client = open(CLIENT_JS, encoding="utf-8").read()
+    with open(CLIENT_JS, encoding="utf-8") as fh:
+        client = fh.read()
     # The response handler is private to the bundle: expose it for the harness.
     marker = "\nasync function handleServerResponse("
     if marker not in client:
