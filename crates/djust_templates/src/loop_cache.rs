@@ -1042,7 +1042,8 @@ pub fn with_active_cache<R>(f: impl FnOnce(&mut LoopRenderCache) -> R) -> Option
 //   the `env` string the renderer builds, which resets the entry when it
 //   changes;
 // * context reads: only bodies that read nothing but the loop variables and
-//   `forloop`, with no tag whose output depends on anything else
+//   `forloop`, with no tag whose output depends on anything else and no
+//   nested loop (its parse-cache placeholders must never be stored)
 //   (`body_is_item_storable`), and only for an outermost loop with no safety
 //   mark under its iterable (checked by the renderer each execution);
 // * Python: an item whose render made a live read is never stored.
@@ -1311,16 +1312,12 @@ fn node_is_item_storable(node: &Node) -> bool {
                 && true_nodes.iter().all(node_is_item_storable)
                 && false_nodes.iter().all(node_is_item_storable)
         }
-        Node::For {
-            iterable,
-            nodes,
-            empty_nodes,
-            ..
-        } => {
-            expr_filters_storable(iterable)
-                && nodes.iter().all(node_is_item_storable)
-                && empty_nodes.iter().all(node_is_item_storable)
-        }
+        // A nested loop is refused. Its own content cache (#1967/#1970) can
+        // emit parse-cache PLACEHOLDERS (`<dj-pc-…>`) in place of an inner
+        // item, which `render_with_diff` splices back from that render's
+        // manifest; storing the outer item's HTML kept the placeholders, and
+        // a later render served them with no manifest entry behind them, so
+        // the page showed literal `<dj-pc-…>` elements.
         Node::With { assignments, nodes } => {
             assignments.iter().all(|(_, e)| expr_filters_storable(e))
                 && nodes.iter().all(node_is_item_storable)

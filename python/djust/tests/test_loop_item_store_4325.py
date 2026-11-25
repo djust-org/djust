@@ -105,6 +105,23 @@ TEMPLATES: Dict[str, str] = {
         "{% endif %}</li>{% endfor %}</ul>{% endif %}<ol>{% for r in items %}<li>"
         "{% if not r.on %}{{ r.n }}{% endif %}{{ r.a }}</li>{% endfor %}</ol></div>"
     ),
+    # An inner loop whose variable the body never reads, beside an if: the
+    # inner loop's content cache emits parse-cache placeholders that must
+    # never be stored with the outer item.
+    "nested_unread": (
+        "<div dj-root>{% for r in items %}<section>{% for t in r.tags %}<div>-</div>"
+        "{% endfor %}{% if r.on %}{{ r.a }}{% endif %}</section>{% endfor %}</div>"
+    ),
+    # Inline ifs whose trailing filter argument is outer context (refused:
+    # `prefix` is a read), and a second loop whose arguments are the item
+    # and literals (served).
+    "inline_if": (
+        "<div dj-root><ul>{% for r in items %}<li>{{ r.a if r.on else r.a|add:prefix }}"
+        '/{{ r.n if r.on else "z"|add:prefix }}{% if r.on %}!{% endif %}</li>'
+        "{% endfor %}</ul><ol>{% for r in items %}<li>{{ r.a if r.on else r.g|add:r.n }}"
+        '/{{ r.n if r.on else "z"|add:"!" }}{% if r.on %}!{% endif %}</li>'
+        "{% endfor %}</ol></div>"
+    ),
     "dict": (
         "<div dj-root><ul>{% for k, v in d.items %}<li>{% if v %}{{ k }}={{ v }}"
         "{% endif %}</li>{% endfor %}</ul><ul>{% for r in items %}<li>{% if r.on %}"
@@ -324,12 +341,12 @@ def test_the_store_serves_items_in_the_fuzz(tmp_path: Path) -> None:
         name: sum(_run(s, name, tmp_path, switch=False).hits for s in range(4))
         for name in TEMPLATES
     }
-    for name in ("if_forloop", "filters", "two_loops", "unpack", "dict"):
+    for name in ("if_forloop", "filters", "two_loops", "unpack", "dict", "inline_if"):
         assert hits[name] > 0, hits
     # Refused bodies: cycle and ifchanged carry state across items, include
-    # reads the context, and a nested loop's own variable is a root the
-    # body check cannot scope (conservative: those bodies always render).
-    for name in ("cycle", "ifchanged", "include", "nested", "regroup"):
+    # reads the context, and a nested loop is refused outright (its content
+    # cache's placeholders must not be stored).
+    for name in ("cycle", "ifchanged", "include", "nested", "nested_unread", "regroup"):
         assert hits[name] == 0, hits
 
 
