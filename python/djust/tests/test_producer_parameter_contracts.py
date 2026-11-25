@@ -105,7 +105,8 @@ async def test_hotreload_patch_carries_the_contract_snapshot():
             )
             frame = await _receive_until(communicator, "patch")
             assert frame.get("hotreload") is True, frame
-            assert frame["parameter_contracts"] == mount["parameter_contracts"]
+            # Unchanged since the mount: sent as its digest (#4307).
+            assert frame["parameter_contracts"] == mount["parameter_contracts"]["digest"]
             assert frame["parameter_contract_view"] == f"{__name__}.{view}"
         finally:
             _BODY[0] = "Count: {{ count }}"
@@ -156,7 +157,8 @@ async def test_push_state_frame_carries_the_contract_snapshot():
             pushed = await communicator.receive_json_from()
             assert pushed["type"] in ("patch", "html_update"), pushed
             assert "Step: 1" in str(pushed) or pushed.get("patches"), pushed
-            assert pushed["parameter_contracts"] == mount["parameter_contracts"]
+            # Unchanged since the mount: sent as its digest (#4307).
+            assert pushed["parameter_contracts"] == mount["parameter_contracts"]["digest"]
             assert pushed["parameter_contract_view"] == f"{__name__}.{view}"
         finally:
             await communicator.disconnect()

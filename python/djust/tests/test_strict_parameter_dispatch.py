@@ -210,7 +210,8 @@ async def test_real_websocket_strict_positional_and_rejection():
                 else:
                     assert frame["type"] in ("patch", "update", "noop"), frame
                     assert "7:2026-09-21" in json.dumps(frame)
-                    assert frame["parameter_contracts"] == contracts
+                    # Unchanged since the mount: sent as its digest (#4307).
+                    assert frame["parameter_contracts"] == contracts["digest"]
                     expected_view = __name__ + ".StrictTransportView"
                     assert frame["parameter_contract_view"] == expected_view
                     await socket.send_json_to({"type": "request_html"})
@@ -218,7 +219,9 @@ async def test_real_websocket_strict_positional_and_rejection():
                     assert recovery["type"] == "html_recovery"
                     assert recovery["version"] == frame["version"]
                     assert "7:2026-09-21" in recovery["html"]
-                    assert recovery["parameter_contracts"] == contracts
+                    # The recovery keeps the frame's snapshot; on this
+                    # connection it is unchanged, so it goes out as its digest.
+                    assert recovery["parameter_contracts"] == contracts["digest"]
                     assert recovery["parameter_contract_view"] == expected_view
         finally:
             await socket.disconnect()
@@ -270,7 +273,10 @@ async def test_real_sse_strict_positional_and_rejection():
                     assert "SECRET_INVALID" not in json.dumps(frames)
                 else:
                     rendered = next(frame for frame in frames if frame["type"] == "patch")
-                    assert rendered["parameter_contracts"] == mounted["parameter_contracts"]
+                    # Unchanged since the mount: sent as its digest (#4307).
+                    assert (
+                        rendered["parameter_contracts"] == mounted["parameter_contracts"]["digest"]
+                    )
         finally:
             _sse_sessions.pop(sid, None)
 

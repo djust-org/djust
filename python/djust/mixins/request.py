@@ -8,6 +8,7 @@ import inspect
 import json
 from types import MappingProxyType
 import logging
+import re
 import sys
 import threading
 import time
@@ -538,8 +539,11 @@ def _run_http_deferred(view: Any) -> None:
 
 #: Sent by the client when its HTTP scope holds strict contracts, so a response
 #: whose tree no longer has any carries an explicit clear (the stateless HTTP
-#: counterpart of the socket runtime's ``_parameter_contracts_active``).
+#: counterpart of the socket runtime's ``_parameter_contracts_active``). The
+#: value is ``1``, or the digest of the manifest held: an answer whose manifest
+#: has that digest carries the digest alone (#4307).
 PARAMETER_CONTRACTS_HEADER = "X-Djust-Parameter-Contracts"
+_DIGEST = re.compile(r"[0-9a-f]{16}")
 
 
 #: A page POST carrying this header (value ``1``) and no event asks for the
@@ -600,6 +604,9 @@ def _initial_parameter_contracts(view: Any, view_path: str) -> Optional[str]:
 def _http_parameter_contract_fields(view: Any, request: Any) -> Optional[Dict[str, Any]]:
     """Contract fields for an HTTP render response (``{}`` for a tree with no handlers).
 
+    A client that names the digest of the manifest it holds
+    (``X-Djust-Parameter-Contracts``) gets the digest string in place of an
+    unchanged manifest (#4307); any other value gets the full manifest.
     None means discovery failed: the caller withholds the DOM update.
     """
     from .._parameter_metadata import parameter_contract_manifest
@@ -609,9 +616,12 @@ def _http_parameter_contract_fields(view: Any, request: Any) -> Optional[Dict[st
     except Exception:  # noqa: BLE001 — never send a DOM update with invalid contracts
         logger.warning("Render parameter contracts unavailable")
         return None
-    if manifest is None and request.headers.get(PARAMETER_CONTRACTS_HEADER) != "1":
+    header = request.headers.get(PARAMETER_CONTRACTS_HEADER) or ""
+    if manifest is None and not header:
         return {}
     view_path = f"{view.__class__.__module__}.{view.__class__.__name__}"
+    if manifest is not None and _DIGEST.fullmatch(header) and header == manifest["digest"]:
+        return {"parameter_contracts": header, "parameter_contract_view": view_path}
     return {"parameter_contracts": manifest, "parameter_contract_view": view_path}
 
 

@@ -107,7 +107,8 @@ describe('HTTP fallback contract scope', () => {
         const {dom, resolve} = setup(block({view: 'app.Page', contracts: manifest()}), [cleared]);
         try {
             await send(dom);
-            expect(dom.window._fetches[0]['X-Djust-Parameter-Contracts']).toBe('1');
+            // A valid scope names the digest it holds (#4307).
+            expect(dom.window._fetches[0]['X-Djust-Parameter-Contracts']).toBe(manifest().digest);
             expect(resolve('root').contract).toBeNull();
             await send(dom);
             expect(dom.window._fetches[1]['X-Djust-Parameter-Contracts']).toBeUndefined();

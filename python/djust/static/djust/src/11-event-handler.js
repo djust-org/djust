@@ -94,6 +94,16 @@ function _noteRenderDigest(data, sent) {
     }
 }
 
+// A strict (or invalid) page scope asks for an explicit contract clear when
+// the rendered tree no longer has one; a valid scope names the digest it holds,
+// so an unchanged manifest is answered with the digest alone (#4307).
+function _parameterContractHeader() {
+    const t = _localEventTransport, p = t.primaryViewPath;
+    const d = t._parameterContractDigest?.get(p);
+    return d ? {'X-Djust-Parameter-Contracts': d}
+        : (t._parameterContracts?.get(p) != null ? {'X-Djust-Parameter-Contracts': '1'} : {});
+}
+
 // Every answer of this transport enters here, an event's and a resync's: the
 // same client-owned-flag strip as the WebSocket and SSE transports (#2829; the
 // HTTP fallback dispatches straight into handleServerResponse, so it needs its
@@ -121,8 +131,7 @@ async function _httpFallbackResync() {
                 'X-Djust-Resync': '1',
                 // The tab whose saved state the page is to be rendered from (#4106).
                 'X-Djust-Tab': djustTabId(),
-                ...(_localEventTransport._parameterContracts?.get(_localEventTransport.primaryViewPath) != null
-                    ? {'X-Djust-Parameter-Contracts': '1'} : {})
+                ..._parameterContractHeader()
             },
             body: '{}'
         });
@@ -584,10 +593,7 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
                 'X-CSRFToken': csrfToken,
                 'X-Djust-Event': eventName,
                 'X-Djust-Tab': djustTabId(),
-                // A strict (or invalid) page scope asks for an explicit
-                // contract clear when the rendered tree no longer has one.
-                ...(_localEventTransport._parameterContracts?.get(_localEventTransport.primaryViewPath) != null
-                    ? {'X-Djust-Parameter-Contracts': '1'} : {}),
+                ..._parameterContractHeader(),
                 ...(sentDigest ? {'X-Djust-Render-Digest': sentDigest} : {})
             },
             body: JSON.stringify(paramsToSend)

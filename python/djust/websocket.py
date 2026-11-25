@@ -777,6 +777,9 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         # applied class swap and is echoed to the client for telemetry.
         self._hvr_version: int = 0
         self._hvr_last_reload_id: Optional[str] = None
+        # The digest of the parameter-contract manifest this connection last
+        # sent in full; an unchanged one is sent as its digest (#4307).
+        self._parameter_contract_sent: Optional[str] = None
         # Consumer-owned monotonic VDOM wire version (#1788). This is the
         # SINGLE SOURCE OF TRUTH for the ``version`` field on every
         # client-checked outbound frame (patch / html_update / mount /
@@ -3931,8 +3934,18 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             logger.debug("Dropping outbound frame: peer closed the WebSocket (%r)", exc)
 
     async def send_json(self, data: Dict[str, Any]) -> None:
-        """Send JSON message to client with Django type support"""
+        """Send JSON message to client with Django type support.
+
+        A manifest equal to the one this connection last sent goes out as its
+        digest (#4307). The digest is recorded only after the awaited send, so
+        a concurrent sender never elides against bytes not yet on the wire.
+        """
+        from ._parameter_metadata import elide_sent_manifest
+
+        data, sent = elide_sent_manifest(self, data)
         await self._send_frame(text_data=json.dumps(data, cls=DjangoJSONEncoder))
+        if sent is not None:
+            self._parameter_contract_sent = sent
 
     @staticmethod
     def _clear_template_caches() -> int:

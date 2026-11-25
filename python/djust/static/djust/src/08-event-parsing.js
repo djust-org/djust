@@ -330,12 +330,30 @@ function _installParameterContracts(transport, manifest, viewPath, resetPrimary 
     if (!owners.has('[null,null]')) reject();
     transport._parameterContracts.set(viewPath, owners);
     transport._parameterContractDigest.set(viewPath, manifest.digest);
+    _cacheParameterManifest(transport, manifest);
+}
+
+// Content-addressed: a frame may name a manifest this transport already
+// received (#4307). The server elides only against the last digest it sent.
+function _cacheParameterManifest(transport, manifest) {
+    if (!manifest || typeof manifest.digest !== 'string') return;
+    const cache = transport._parameterManifests ??= new Map();
+    cache.delete(manifest.digest);
+    cache.set(manifest.digest, manifest);
+    if (cache.size > 4) cache.delete(cache.keys().next().value);
 }
 
 // Receipt order is client-owned, not a wire field or the VDOM version (child
 // replies have no parent VDOM version). Weak keys cannot retain consumed frames.
 function _recordParameterContractFrame(transport, data) {
     if (!data || typeof data !== 'object') return;
+    // An unchanged manifest arrives as its digest (#4307). Resolve it here, at
+    // receipt and before any buffering: frames are FIFO, so the full manifest
+    // for a digest is always received first. A miss installs as invalid and
+    // fails closed.
+    const m = data.parameter_contracts;
+    if (typeof m === 'string') data.parameter_contracts = transport._parameterManifests?.get(m) || false;
+    else if (m && typeof m === 'object') _cacheParameterManifest(transport, m);
     transport._parameterContractFrames ??= new WeakMap();
     transport._parameterContractSequence = (transport._parameterContractSequence || 0) + 1;
     transport._parameterContractFrames.set(data, transport._parameterContractSequence);

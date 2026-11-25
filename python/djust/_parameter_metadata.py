@@ -538,3 +538,20 @@ def expand_parameter_manifest(manifest: dict[str, Any]) -> list[dict[str, Any]]:
         }
         for view_id, component_id, table in manifest["owners"]
     ]
+
+
+def elide_sent_manifest(holder: Any, frame: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
+    """(frame to send, digest to record after a successful send) (#4307).
+
+    A frame whose manifest has the digest ``holder`` last sent goes out with
+    the digest string in its place (a shallow copy; the caller's dict is not
+    touched). Any other manifest goes out in full, and its digest is returned
+    for the caller to record once the bytes have been sent.
+    """
+    manifest = frame.get("parameter_contracts")
+    if type(manifest) is not dict or not isinstance(manifest.get("digest"), str):
+        return frame, None
+    digest = manifest["digest"]
+    if getattr(holder, "_parameter_contract_sent", None) == digest:
+        return {**frame, "parameter_contracts": digest}, None
+    return frame, digest
