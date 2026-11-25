@@ -36,7 +36,15 @@
 //!   marker whose `<index>` is the loop position (#1832).
 //! * `Node::Cycle` / `Node::ResetCycle` — `{% cycle %}` state is per node per render (#2556).
 //! * a nested `Node::For` — composes `Context::dj_if_loop_path` from the outer
-//!   index, so any dj-if inside the nested loop is position-dependent.
+//!   index, so any dj-if inside the nested loop is position-dependent. This
+//!   refuses the OUTER body only. The inner `{% for %}` is a loop of its own
+//!   and goes through both gates with its own loop variable(s): an inner body
+//!   that reads nothing but the inner variable (`{% for t in r.tags %}<i>{{ t
+//!   }}</i>{% endfor %}`) IS cached, and is correct to cache, because its
+//!   output is fully determined by `t`. An inner body that reads the outer
+//!   item, outer context or `forloop` is refused by the same gates as any
+//!   other body (`test_loop_cache_nested_for_1967.py` checks this
+//!   differentially).
 //! * a `{{ forloop.* }}` reference (counter/index/first/last/parentloop/…).
 //!   The Rust renderer does not currently implement `forloop`, but a future
 //!   implementation would make such a body position-dependent — so we treat
@@ -879,7 +887,9 @@ fn node_is_position_dependent(node: &Node) -> bool {
         // The parent body it carries can hold anything, including a
         // `{% cycle %}`; treat it as opaque rather than proving otherwise.
         Node::BlockSuperScope { .. } => true,
-        Node::For { .. } => true, // nested loop composes the if-loop-path
+        // Nested loop composes the if-loop-path. Refuses THIS body; the inner
+        // loop's own body is gated separately when the inner For renders.
+        Node::For { .. } => true,
         // Opaque / Python-backed nodes — we cannot prove position-independence.
         Node::PartialCall { .. }
         | Node::PartialDef { .. }
