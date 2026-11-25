@@ -227,3 +227,88 @@ fn y_is_zero_padded_and_u_truncates_toward_zero() {
         "0"
     );
 }
+
+#[test]
+fn naive_string_acceptance_matches_the_chrono_parser_within_pythons_range() {
+    // Measured: chrono's `parse_from_str` and jiff's `strptime` agree on every
+    // shape here except the ones marked; those are settled to chrono's answer
+    // or, where chrono accepted a year no Python `datetime` can hold, refused.
+    let fmt = r#"{{ v|date:"Y-m-d H:i:s.u" }}"#;
+    for (input, expected) in [
+        // One-digit fields, a space before a number, a doubled separator.
+        ("2026-1-1 1:2", "2026-01-01 01:02:00.000000"),
+        ("2026-1-1", "2026-01-01 00:00:00.000000"),
+        ("2026- 01-01 01:02:03", "2026-01-01 01:02:03.000000"),
+        ("2026-01-01  01:02:03", "2026-01-01 01:02:03.000000"),
+        ("+2026-01-01 00:00:00", "2026-01-01 00:00:00.000000"),
+        ("026-01-01 00:00:00", "0026-01-01 00:00:00.000000"),
+        // chrono kept the first nine fractional digits; jiff alone refuses.
+        (
+            "2026-01-01T01:02:03.1234567891",
+            "2026-01-01 01:02:03.123456",
+        ),
+        (
+            "2026-01-01 01:02:03.9999999999",
+            "2026-01-01 01:02:03.999999",
+        ),
+    ] {
+        assert_eq!(render_in(None, fmt, input), expected, "{input:?}");
+    }
+    for refused in [
+        // Refused by both parsers.
+        "2026-01-01 24:00:00",
+        "2026-02-29 00:00:00",
+        "2026-01-01T01:02:03.",
+        "12026-01-01 00:00:00",
+        // chrono accepted these; no Python datetime has year 0, a negative
+        // year or year 12026, so a string spelling one never came from Python.
+        "+12026-01-01 00:00:00",
+        "0000-01-01",
+        "0-01-01",
+        "-2026-01-01 00:00:00",
+        "0000-01-01T00:00:00Z",
+    ] {
+        assert_eq!(
+            render_in(None, fmt, refused),
+            "",
+            "{refused:?} must be refused"
+        );
+    }
+    // A bare time keeps chrono's leniency too.
+    assert_eq!(
+        render_in(None, r#"{{ v|time:"H:i:s" }}"#, "1:2"),
+        "01:02:00"
+    );
+}
+
+#[test]
+fn u_is_pythons_correctly_rounded_float_truncated() {
+    // `int(dt.timestamp())`, where `timestamp()` is an int/int true division.
+    // 2.5e17 microseconds is past f64's 53 bits, so `.999999` rounds up.
+    assert_eq!(
+        render_in(
+            None,
+            r#"{{ v|date:"U" }}"#,
+            "9998-09-28T10:10:25.999999+00:00"
+        ),
+        "253362593426"
+    );
+    // ...while the same fraction at a 2026 magnitude does not.
+    assert_eq!(
+        render_in(
+            None,
+            r#"{{ v|date:"U" }}"#,
+            "2026-01-01T00:00:00.999999+00:00"
+        ),
+        "1767225600"
+    );
+    // Pre-1970 with a fraction truncates toward zero (Django: -2186096890).
+    assert_eq!(
+        render_in(
+            None,
+            r#"{{ v|date:"U" }}"#,
+            "1900-09-22T22:51:49.123456+00:00"
+        ),
+        "-2186096890"
+    );
+}

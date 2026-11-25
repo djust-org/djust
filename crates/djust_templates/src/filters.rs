@@ -3177,7 +3177,20 @@ fn parse_serialized_datetime(
     //
     // `%.f` makes the fractional part OPTIONAL, so each covers both "...:00"
     // and "...:00.123456".
-    let trimmed = datetime_str.trim();
+    //
+    // `jiff`'s `strptime` was measured against the chrono `parse_from_str` it
+    // replaced (#4222) over a corpus of odd shapes: both take one-digit fields
+    // (`2026-1-1 1:2`), a space before a number and a doubled separator, and
+    // both refuse `24:00`, `2026-02-29` and a bare trailing dot. They differ
+    // in three places, each settled here: more than nine fractional digits
+    // (chrono kept the first nine; [`clip_fraction`] does the same), a year
+    // outside 1..=9999 (chrono took `+12026` and `0000`; [`naive_as_utc`]
+    // refuses what no Python `datetime` can hold), and a `:60` leap second
+    // (chrono kept it as a 1-second fraction that printed as `:60` with
+    // `u` = `1000000`; jiff reads `:59`, which Python, with no leap seconds,
+    // never emits).
+    let clipped = clip_fraction(datetime_str.trim());
+    let trimmed = clipped.as_str();
     for fmt in [
         "%Y-%m-%dT%H:%M:%S%.f",
         "%Y-%m-%d %H:%M:%S%.f",
@@ -3294,9 +3307,28 @@ impl Stamp {
     }
 }
 
+/// `datetime.MINYEAR..=datetime.MAXYEAR`. A serialized Python value is always
+/// inside it; a string outside it never came from Python (#4222).
+const PYTHON_YEARS: std::ops::RangeInclusive<i16> = 1..=9999;
+
+/// Keep at most nine fractional-second digits, dropping the rest — what
+/// chrono's `%.f` did and `jiff`'s refuses (#4222). Only a trailing
+/// `.digits` run is touched; anything else is returned as it was.
+fn clip_fraction(s: &str) -> String {
+    let digits = s.bytes().rev().take_while(u8::is_ascii_digit).count();
+    let dot = s.len() - digits;
+    if digits > 9 && dot > 0 && s.as_bytes()[dot - 1] == b'.' {
+        return s[..dot + 9].to_string();
+    }
+    s.to_string()
+}
+
 /// A naive wall clock read as UTC: the `+00:00` stamp every naive branch of
 /// [`parse_serialized_datetime`] produces (#2203).
 fn naive_as_utc(ndt: civil::DateTime) -> Option<Stamp> {
+    if !PYTHON_YEARS.contains(&ndt.year()) {
+        return None;
+    }
     Some(Stamp {
         local: ndt,
         offset: Offset::UTC,
@@ -3339,6 +3371,10 @@ fn parse_rfc3339(s: &str) -> Option<Stamp> {
         return None;
     }
     let year = digits(0..4)?;
+    // Python's range: chrono took `0000`, which no `datetime` can hold.
+    if year == 0 {
+        return None;
+    }
     let month = digits(5..7)?;
     let day = digits(8..10)?;
     let hour = digits(11..13)?;
@@ -4102,6 +4138,40 @@ pub(crate) fn format_offset(offset: Offset, colon: bool) -> String {
     out
 }
 
+/// Python's `int(dt.timestamp())` for an instant `floor_secs + micros / 1e6`
+/// (`micros` in `0..1_000_000`).
+///
+/// `timestamp()` is `total_microseconds / 10**6`, an int/int TRUE division —
+/// the exact quotient correctly rounded to the nearest `f64` — and `int()`
+/// then truncates toward zero. Two consequences show in `U` (#4222):
+///
+/// * truncation: a pre-1970 instant with a fraction is the LATER second
+///   (`1969-12-31T23:59:59.5Z` is `0`, not `-1`);
+/// * rounding: past 2^33 seconds an `f64` is coarser than a microsecond, so a
+///   fraction within half an ulp of the next whole second rounds up to it
+///   (`9998-09-28T10:10:25.999999Z` is `...426`).
+///
+/// Done in integers so the one rounding is the correctly rounded one; an
+/// `as f64` followed by a float division would round twice.
+fn python_int_timestamp(floor_secs: i64, micros: i32) -> i64 {
+    const MICROS: i128 = 1_000_000;
+    let total = i128::from(floor_secs) * MICROS + i128::from(micros);
+    let whole = total / MICROS; // toward zero, as `int()` will
+    let rest = (total % MICROS).abs();
+    if rest == 0 || whole == 0 {
+        return whole as i64;
+    }
+    // |x| lies in [|whole|, |whole| + 1), so its binade is |whole|'s:
+    // 2^e <= |x| < 2^(e+1), with an f64 spacing (ulp) of 2^(e-52). The exact
+    // value rounds AWAY from `whole` to the next integer when its distance to
+    // it, `(1e6 - rest) / 1e6`, is at most half an ulp — a tie goes there
+    // too, since that integer's mantissa is the even one. Below 2^20 half an
+    // ulp is under a microsecond and nothing can round.
+    let e = 127 - whole.unsigned_abs().leading_zeros();
+    let away = e >= 20 && (MICROS - rest) << (53 - e) <= MICROS;
+    (whole + if away { total.signum() } else { 0 }) as i64
+}
+
 /// Django's `O`: `"%s%02d%02d" % (sign, seconds // 3600, (seconds // 60) % 60)`
 /// — the seconds component is TRUNCATED, never printed or rounded.
 fn django_o(offset: Offset) -> String {
@@ -4294,6 +4364,22 @@ fn format_date(datetime_str: &str, format_str: &str, original: &Value) -> Result
                 encoded.attrs.get(&djust_core::ObjectKey::from("tzname"))
             {
                 stamped.abbrev = Some(name.clone());
+            }
+            // Django's ambiguity guard runs against the value's OWN tzinfo
+            // here (`timezone = obj.tzinfo`), not the active zone: a fold
+            // value through `|timezone:"America/New_York"` renders the zone
+            // codes empty. The zone crosses as `str(tz)` (#2770), which is the
+            // IANA key for a `ZoneInfo`; a fixed offset (`UTC+09:00`) is not a
+            // zone name and can never be ambiguous.
+            if let Some(Value::String(key)) =
+                encoded.attrs.get(&djust_core::ObjectKey::from("tzinfo"))
+            {
+                if let Some(zone) = crate::timezone::parse_zone(key) {
+                    stamped.zone_unknown = !matches!(
+                        zone.to_ambiguous_timestamp(stamped.dt.local).offset(),
+                        AmbiguousOffset::Unambiguous { .. }
+                    );
+                }
             }
         }
     }
@@ -4534,16 +4620,10 @@ fn format_date(datetime_str: &str, format_str: &str, original: &Value) -> Result
             'Z' if !stamped.time_only => result.push_str(&dt.offset().seconds().to_string()),
             'O' | 'Z' => {}
             'U' => {
-                // Seconds since epoch. Django's is `int(dt.timestamp())`: a
-                // FLOAT, truncated toward zero. Both halves show: one
-                // microsecond before a whole second is the later second for a
-                // pre-1970 instant (truncation), and `.999999` in year 9998
-                // rounds up to the next second (2.5e17 microseconds is past
-                // f64's 53 bits). Same arithmetic, same answer (#4222).
-                let micros =
-                    i128::from(stamped.timestamp) * 1_000_000 + i128::from(subsec_micros(&dt));
-                let seconds = (micros as f64 / 1_000_000.0).trunc() as i64;
-                result.push_str(&seconds.to_string());
+                // Seconds since epoch: Django's `int(dt.timestamp())`.
+                result.push_str(
+                    &python_int_timestamp(stamped.timestamp, subsec_micros(&dt)).to_string(),
+                );
             }
             'I' => {
                 // '1' during DST, '0' otherwise. Django reads `dst()`; the

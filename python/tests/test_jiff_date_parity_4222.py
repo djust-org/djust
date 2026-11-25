@@ -20,7 +20,7 @@ Every expected string is Django's, computed in the same process.
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from django.template import Context, Engine
+from django.template.backends.django import DjangoTemplates
 from django.test import override_settings
 from django.utils import timezone as dj_timezone
 
@@ -80,7 +80,10 @@ def _backend():
 
 
 def _both(source, context):
-    expected = Engine().from_string(source).render(Context(context))
+    # The DjangoTemplates backend, not a bare `Engine()`, so `{% load tz %}`
+    # resolves on both sides.
+    django_backend = DjangoTemplates({"NAME": "dj", "DIRS": [], "APP_DIRS": False, "OPTIONS": {}})
+    expected = django_backend.from_string(source).render(context)
     actual = _backend().from_string(source).render(context)
     return actual, expected
 
@@ -136,4 +139,61 @@ def test_duration_filters_with_explicit_instant_match_django(then, now, filter_n
     source = "{{ a|" + filter_name + ":b }}"
     with override_settings(USE_TZ=True, TIME_ZONE="America/New_York"):
         actual, expected = _both(source, {"a": then, "b": now})
+    assert actual == expected
+
+
+# A value whose zone Django does NOT take from the active zone: the ambiguity
+# guard then runs against the value's own tzinfo. Both instants are 01:30 in
+# New York on the fall-back night; one minute later is unambiguous again.
+NY_FOLD = [
+    datetime(2026, 11, 1, 5, 30, tzinfo=UTC),
+    datetime(2026, 11, 1, 6, 30, tzinfo=UTC),
+    datetime(2026, 11, 1, 7, 31, tzinfo=UTC),
+]
+ZONE_CODES = "H:i|e|T|O|Z|I|U|c|r"
+
+
+@pytest.mark.parametrize("value", NY_FOLD)
+def test_a_value_pinned_by_the_timezone_filter_checks_its_own_zone(value):
+    source = '{% load tz %}{{ v|timezone:"America/New_York"|date:"' + ZONE_CODES + '" }}'
+    with override_settings(USE_TZ=True, TIME_ZONE="Asia/Tokyo"):
+        actual, expected = _both(source, {"v": value})
+    assert actual == expected
+
+
+@pytest.mark.parametrize("value", NY_FOLD)
+def test_localtime_off_checks_the_values_own_zone(value):
+    from zoneinfo import ZoneInfo
+
+    local = value.astimezone(ZoneInfo("America/New_York"))
+    source = '{% load tz %}{% localtime off %}{{ v|date:"' + ZONE_CODES + '" }}{% endlocaltime %}'
+    with override_settings(USE_TZ=True, TIME_ZONE="Asia/Tokyo"):
+        actual, expected = _both(source, {"v": local})
+    assert actual == expected
+
+
+@pytest.mark.parametrize("value", NY_FOLD)
+def test_use_tz_false_checks_an_aware_values_own_zone(value):
+    from zoneinfo import ZoneInfo
+
+    local = value.astimezone(ZoneInfo("America/New_York"))
+    source = '{{ v|date:"' + ZONE_CODES + '" }}'
+    with override_settings(USE_TZ=False, TIME_ZONE="Asia/Tokyo"):
+        actual, expected = _both(source, {"v": local})
+    assert actual == expected
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        datetime(9998, 9, 28, 10, 10, 25, 999999, tzinfo=UTC),
+        datetime(1900, 9, 22, 22, 51, 49, 123456, tzinfo=UTC),
+        datetime(1969, 12, 31, 23, 59, 59, 500000, tzinfo=UTC),
+        datetime(1, 1, 1, 0, 0, 0, 1, tzinfo=UTC),
+        datetime(4000, 6, 30, 12, 0, 0, 999999, tzinfo=UTC),
+    ],
+)
+def test_u_is_int_of_the_float_timestamp(value):
+    with override_settings(USE_TZ=True, TIME_ZONE="UTC"):
+        actual, expected = _both('{{ v|date:"U" }}', {"v": value})
     assert actual == expected
