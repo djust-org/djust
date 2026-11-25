@@ -250,6 +250,18 @@ raises one `DeprecationWarning` through `warn_deprecated` per process; the board
 renders exactly as before. Leave it out, and draw your own "Add column" control
 that sends your view's event (#4134).
 
+
+### Component argument aliases → their current names (#4207)
+
+Each still works, is deprecated since 2.0 and removed no earlier than `3.0.0`.
+Using one raises one `DeprecationWarning` per process through `warn_deprecated`:
+
+- `{% slider %}` and `{% currency_input %}`: `min` / `max` → `min_val` / `max_val`
+- `{% date_picker range=... %}` → `is_range`
+- `{% split_button open=... %}` → `is_open`
+- `{% dj_button variant="danger" %}` → `variant="destructive"`
+- `Dropdown(items=[{...}])` → `DropdownItem` objects; `Tabs(tabs=[{...}])` → `TabItem` objects
+
 ---
 
 ## Removed in 2.0.0
@@ -991,4 +1003,4 @@ API is evaluated. Existing per-session ticks and push/presence behavior retain
 their stability commitments. Phases 1–3 are process-local; distributed ownership
 is deferred.
 
-<!-- generated-doc prose-sha256: f54a0f763793 -->
+<!-- generated-doc prose-sha256: 10d92fd3cd47 -->

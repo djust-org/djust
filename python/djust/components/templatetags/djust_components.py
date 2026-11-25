@@ -31,6 +31,7 @@ from django.utils.html import conditional_escape, escape, format_html, format_ht
 from django.utils.safestring import SafeString
 
 from djust._template_guards import call_method_for_template
+from djust.components._alias_deprecation import warn_alias
 from djust.components.utils import safe_url  # from where it is DEFINED, not ``._registry`` (#3820)
 from djust.components.utils import (
     rich_html,
@@ -1207,7 +1208,7 @@ _DJ_BUTTON_VARIANT_CLASS_MAP = {
     "primary": "btn-primary",
     "secondary": "btn-secondary",
     "destructive": "btn-destructive",
-    "danger": "btn-destructive",  # back-compat alias (#1619)
+    "danger": "btn-destructive",  # deprecated alias, removed no earlier than 3.0.0 (#4207)
     "ghost": "btn-ghost",
     "link": "btn-link",
 }
@@ -1285,8 +1286,8 @@ def dj_button(
     Args:
         label: button text
         variant: one of ``primary``, ``secondary``, ``destructive``,
-            ``ghost``, ``link``. ``danger`` is accepted as a back-compat
-            alias for ``destructive`` (#1619). Any other string is passed
+            ``ghost``, ``link``. ``danger`` is a deprecated alias for
+            ``destructive``, removed no earlier than 3.0.0 (#4207). Any other string is passed
             through verbatim as ``btn-<variant>`` so user-defined theme
             classes still work.
         event: dj-click event name
@@ -1303,6 +1304,8 @@ def dj_button(
     label, variant, event, confirm, icon, disabled, loading, size = resolve_dj_button_args(
         label, variant, event, confirm, icon, disabled, loading, size, preset
     )
+    if variant == "danger":
+        warn_alias("{% dj_button %}", 'variant="danger"', 'variant="destructive"')
 
     # Map well-known variants to their canonical CSS class names; for
     # everything else, pass through with conditional_escape (#1619).
@@ -3434,11 +3437,12 @@ def date_picker(
             declares two (#4134). A declared ``DatePicker`` answers the default
             ``prev_event`` / ``next_event``; ``select_event`` is the application's.
 
-    Deprecated aliases (still accepted):
+    Deprecated aliases (still accepted, removed no earlier than 3.0.0):
         range → is_range
     """
-    # Backward-compat: accept deprecated 'range' kwarg
+    # Deprecated to 3.0 (#4207): accept 'range' kwarg
     if "range" in kwargs:
+        warn_alias("{% date_picker %}", "range", "is_range")
         is_range = kwargs.pop("range")
 
     if isinstance(is_range, str):
@@ -4773,11 +4777,12 @@ def split_button(
             the default (#4134)
         component_id: the ``Dropdown`` the toggle drives, when a view declares two
 
-    Deprecated aliases (still accepted):
+    Deprecated aliases (still accepted, removed no earlier than 3.0.0):
         open → is_open
     """
-    # Backward-compat: accept deprecated 'open' kwarg
+    # Deprecated to 3.0 (#4207): accept 'open' kwarg
     if "open" in kwargs:
+        warn_alias("{% split_button %}", "open", "is_open")
         is_open = kwargs.pop("open")
 
     if options is None:

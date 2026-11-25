@@ -5,6 +5,7 @@ Provides dropdown menus with items and actions.
 """
 
 import re
+from djust.components._alias_deprecation import warn_alias
 from typing import Dict, Any, Optional
 from dataclasses import dataclass
 from ..base import LiveComponent
@@ -93,13 +94,14 @@ class DropdownComponent(LiveComponent):
         self.split = kwargs.get("split", False)  # Split dropdown button
         self.direction = kwargs.get("direction", "down")  # down, up, start, end
 
-        # Accept both DropdownItem objects and dicts for backward compatibility
+        # Dicts are deprecated to 3.0 (#4207): pass DropdownItem objects
         items = kwargs.get("items", [])
         self.items = []
         for item in items:
             if isinstance(item, DropdownItem):
                 self.items.append(item.to_dict())
             else:
+                warn_alias("Dropdown", "dict items", "DropdownItem objects")
                 self.items.append(item)
 
     def get_context(self) -> Dict[str, Any]:

@@ -183,7 +183,7 @@ EXAMPLES: Dict[str, Any] = {
         "category": "form",
         "variants": [
             {"name": "Primary", "template": '{% dj_button label="Save" variant="primary" %}'},
-            {"name": "Danger", "template": '{% dj_button label="Delete" variant="danger" %}'},
+            {"name": "Danger", "template": '{% dj_button label="Delete" variant="destructive" %}'},
             {"name": "Outline", "template": '{% dj_button label="Cancel" variant="outline" %}'},
             {"name": "Loading", "template": '{% dj_button label="Processing..." loading=True %}'},
             {"name": "With Icon", "template": '{% dj_button label="Download" icon="⬇" %}'},
