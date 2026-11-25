@@ -203,3 +203,42 @@ async def test_released_answer_carries_its_ref_and_batch(monkeypatch, drain, tar
         frames = await receive_until(ws.socket, _batch_completed(7))
         frames += await drain_extra(ws.socket)
         _assert_answer(frames, 7, target)
+
+
+# ---------------------------------------------------------------------------
+# The global rate-limit gate answers a dropped event with its ref, so the
+# client settles that request rather than keep its loading state forever.
+# ---------------------------------------------------------------------------
+
+
+async def _rate_limited(frame):
+    import json
+    from unittest.mock import AsyncMock, MagicMock
+
+    consumer = LiveViewConsumer()
+    consumer.send_json = AsyncMock()
+    consumer._rate_limiter = MagicMock()
+    consumer._rate_limiter.check.return_value = False
+    consumer._rate_limiter.should_disconnect.return_value = False
+    await consumer.receive(text_data=json.dumps(frame))
+    ((sent,), _kwargs) = consumer.send_json.await_args
+    assert sent["type"] == "rate_limit_exceeded"
+    return sent
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("ref", "echoed"), [(12, 12), (12.0, 12), ("12", None), (None, None)])
+async def test_rate_limited_event_answers_with_its_ref(ref, echoed):
+    frame = {"type": "event", "event": "save", "params": {}}
+    if ref is not None:
+        frame["ref"] = ref
+    sent = await _rate_limited(frame)
+    assert sent.get("ref") == echoed
+    if echoed is None:
+        assert "ref" not in sent
+
+
+@pytest.mark.asyncio
+async def test_rate_limited_non_event_frame_carries_no_ref():
+    sent = await _rate_limited({"type": "url_change", "ref": 5})
+    assert "ref" not in sent

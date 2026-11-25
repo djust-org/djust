@@ -2549,13 +2549,20 @@ class LiveViewWebSocket {
                 // Server is dropping events due to rate limiting — show brief warning, do NOT retry
                 // codeql[js/log-injection] -- data.message is a server-controlled rate limit message
                 console.warn('[LiveView] Rate limited:', data.message || 'Too many events');
-                this._showRateLimitWarning();
-                // Stop loading state if applicable
-                if (this.lastEventName) {
+                if (data.ref != null) {
+                    // The dropped event's own request (#4309): settle it, end
+                    // its loading state, and apply what it held back.
+                    if (_pendingEventOwners.get(data.ref) === this) {
+                        cancelEventRequests(this, data.ref);
+                        if (!hasPendingEventRequests(this)) await flushServerUpdates(this);
+                    }
+                } else if (this.lastEventName) {
+                    // Stop loading state if applicable
                     globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
                     this.lastEventName = null;
                     this.lastTriggerElement = null;
                 }
+                this._showRateLimitWarning();
                 break;
 
             case 'hvr-applied':

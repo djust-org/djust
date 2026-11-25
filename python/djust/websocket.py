@@ -747,6 +747,21 @@ def _clear_live_handles(view_instance: Any) -> None:
             logger.warning("%s failed during teardown", name, exc_info=True)
 
 
+def _echoed_ref(data: Dict[str, Any]) -> Dict[str, int]:
+    """``{"ref": n}`` for a refused frame's numeric ref, else ``{}``.
+
+    Only an int or float ref is echoed, as an int. A non-finite one cannot be,
+    and the refusal still answers the frame without a ref.
+    """
+    ref = data.get("ref")
+    if type(ref) is int or type(ref) is float:
+        try:
+            return {"ref": int(ref)}
+        except (ValueError, OverflowError):
+            pass
+    return {}
+
+
 class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
     """
     WebSocket consumer for handling LiveView connections.
@@ -2793,12 +2808,15 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                         ip_tracker.add_cooldown(client_ip, cooldown)
                     await self.close(code=4429)
                     return
-                await self.send_json(
-                    {
-                        "type": "rate_limit_exceeded",
-                        "message": "Too many messages, some events are being dropped",
-                    }
-                )
+                refusal: Dict[str, Any] = {
+                    "type": "rate_limit_exceeded",
+                    "message": "Too many messages, some events are being dropped",
+                }
+                if msg_type == "event":
+                    # The dropped event's ref settles its pending request on
+                    # the client (#4309); without it the request never ends.
+                    refusal.update(_echoed_ref(data))
+                await self.send_json(refusal)
                 return
 
             # ---- Frame routing (#1852) -------------------------------------
@@ -3049,15 +3067,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
 
     async def _refuse_busy_view(self, data: Dict[str, Any]) -> None:
         """Answer a frame for a view that already has as many turns waiting as it may."""
-        fields: Dict[str, Any] = {"code": "view_busy"}
-        ref = data.get("ref")
-        if type(ref) is int or type(ref) is float:
-            try:
-                fields["ref"] = int(ref)
-            except (ValueError, OverflowError):
-                # Non-finite numeric refs cannot be echoed as integers; the
-                # busy refusal still answers the frame without a ref.
-                pass
+        fields: Dict[str, Any] = {"code": "view_busy", **_echoed_ref(data)}
         if isinstance(data.get("target_id"), str):
             fields["target_id"] = data["target_id"]
         # Which event was dropped, so the application can decide to send it

@@ -26,6 +26,31 @@ it.each(['refresh', 'tick', 'db_notify'])(
     }
 );
 
+it('a rate_limit_exceeded frame with its ref settles that request and flushes (#4309)', async () => {
+    const {dom, transport, button, sent, send, loading} = setup('LiveViewWebSocket');
+    dom.window.requestAnimationFrame = callback => setTimeout(callback, 0);
+    try {
+        const first = send();
+        let secondDone = false;
+        send().then(() => { secondDone = true; });
+        await transport.handleMessage({type: 'patch', source: 'tick', patches: [],
+            event_name: 'refresh'});
+        expect(dom.window.djust._getEventSeqState().tickBufferLength).toBe(1);
+        // The other request's ref: only that request settles; the tick waits.
+        await transport.handleMessage({type: 'rate_limit_exceeded', message: 'slow', ref: sent[0].ref});
+        expect(await first).toBeNull();
+        expect(secondDone).toBe(false);
+        expect(button.disabled).toBe(true);
+        expect(dom.window.djust._getEventSeqState().tickBufferLength).toBe(1);
+        await transport.handleMessage({type: 'rate_limit_exceeded', message: 'slow', ref: sent[1].ref});
+        await Promise.resolve();
+        expect(secondDone).toBe(true);
+        expect(button.disabled).toBe(false);
+        expect(loading.pendingEvents.size).toBe(0);
+        expect(dom.window.djust._getEventSeqState().tickBufferLength).toBe(0);
+    } finally { dom.window.close(); }
+});
+
 it('a server-initiated (async) error cannot cancel foreground work', async () => {
     const {dom, transport, button, sent, send} = setup('LiveViewWebSocket');
     try {
