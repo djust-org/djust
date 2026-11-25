@@ -658,15 +658,12 @@ async def _one_more(transport: str, client: Any, name: str) -> None:
 @pytest.mark.parametrize("transport", TRANSPORTS)
 async def test_a_turn_that_does_not_write_the_session_adds_no_save(transport, interval):
     """``nothing`` changes nothing; ``read_only`` reads a list from the session
-    without changing it. Neither adds a session save on any transport. The one
-    save of a fallback request with an interval set is the holder claim the
-    restore writes (``_save_policy.holder_claims``), which Django's
-    ``SessionMiddleware`` stores; it was there before #4162 and is the same
-    for both handlers."""
+    without changing it. Neither adds a session save on any transport. A
+    fallback request with an interval set claims its tab only with a save that
+    changes the stored state (#4164 item 2), so it adds none either."""
     with _settings(interval):
         _client, counts = await turns(transport, Plain, ["nothing", "read_only", "nothing"])
-    claim = 1 if transport == "http" and interval else 0
-    assert counts == [claim, claim, claim]
+    assert counts == [0, 0, 0]
 
 
 @pytest.mark.parametrize("interval", INTERVALS)

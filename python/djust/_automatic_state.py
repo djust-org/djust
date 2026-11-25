@@ -1742,6 +1742,11 @@ _HOLDER_PREFIX = "_djust_hold_"
 MAX_HOLDERS = 4 * MAX_TABS
 
 
+#: Where a fallback request's claim on its tab waits for a save that changes
+#: the stored state (:func:`_hold`, :func:`stage`).
+_PENDING_CLAIM = "_djust_auto_pending_claim"
+
+
 def holder_key(store: "_Store") -> str:
     return _HOLDER_PREFIX + store.key[len(_KEY_PREFIX) :]
 
@@ -1812,7 +1817,9 @@ def _hold(view: Any, store: _Store, *, socket: bool, write: bool) -> None:
     Only a socket holds a token afterwards (``socket``): it keeps the view and
     may write after its last turn. A fallback request takes the tab (so an
     older socket is fenced out) but writes within its own request, as before,
-    and is not fenced against another fallback request.
+    and is not fenced against another fallback request. It takes it only when
+    its save changes the stored state (#4164 item 2): a request that changes
+    nothing renders the stored state and leaves the tab to its socket.
 
     The rule (:func:`djust._session_merge.holder_refuses`): a socket's save
     is refused only when a DIFFERENT, unexpired token is stored. No record
@@ -1821,7 +1828,9 @@ def _hold(view: Any, store: _Store, *, socket: bool, write: bool) -> None:
     ==============================================  ===========================
     Case                                            Older socket A's late write
     ==============================================  ===========================
-    B restores the tab (socket or fallback)         refused (B's token stored)
+    B restores the tab (socket, or a fallback       refused (B's token stored)
+    request that changes the state)
+    B is a fallback request that changes nothing    accepted (B records nothing)
     B starts from ``mount()``, nothing stored       refused: B records a token
     (the finding-1 bypass)                          too
     A's state evicted / cleared / expired, then B   refused (B's token stored)
@@ -1837,8 +1846,8 @@ def _hold(view: Any, store: _Store, *, socket: bool, write: bool) -> None:
                                                     only lets others through)
     A is the oldest of 33 tabs (record dropped)     accepted, re-recorded
     two fresh sockets A then B                      A refused (last taker holds)
-    a fallback request after A                      A refused; the fallback
-                                                    itself is never refused
+    a fallback request after A that changes the     A refused; the fallback
+    state                                           itself is never refused
     A superseded, then its record is wiped          refused: A's in-memory
                                                     superseded flag wins
     ==============================================  ===========================
@@ -1849,6 +1858,7 @@ def _hold(view: Any, store: _Store, *, socket: bool, write: bool) -> None:
     from ._session_merge import save_merged, track_session
 
     view.__dict__.pop("_djust_auto_holder", None)
+    view.__dict__.pop(_PENDING_CLAIM, None)
     if not _save_policy.holder_claims(view):
         return
     session = store.session
@@ -1856,12 +1866,32 @@ def _hold(view: Any, store: _Store, *, socket: bool, write: bool) -> None:
         return  # saved whole: nothing to fence with
     token = secrets.token_urlsafe(12)
     key = holder_key(store)
+    if not socket:
+        # A fallback request takes the tab only by saving a CHANGED state
+        # (#4164 item 2): one that changes nothing renders what is stored and
+        # must not fence out a socket holding newer, unsaved changes, whose
+        # flush would otherwise be refused. :func:`stage` records the claim.
+        view.__dict__[_PENDING_CLAIM] = (key, _holder_record(token, store.max_age))
+        return
     session[key] = _holder_record(token, store.max_age)
     _prune_holders(session, key)
     if write:
         save_merged(session, session.session_key)
-    if socket:
-        view.__dict__["_djust_auto_holder"] = token
+    view.__dict__["_djust_auto_holder"] = token
+
+
+def _record_pending_claim(view: Any, session: Any, changed: bool) -> None:
+    """A fallback request's claim on its tab (:func:`_hold`), recorded with
+    the first of its saves that changes the stored state; a request whose
+    saves change nothing records none."""
+    if not changed:
+        return
+    claim = view.__dict__.pop(_PENDING_CLAIM, None)
+    if claim is None:
+        return
+    key, record = claim
+    session[key] = record
+    _prune_holders(session, key)
 
 
 def saved(view: Any, request: Any, *, socket: bool = False) -> Optional[Saved]:
@@ -2390,6 +2420,7 @@ def stage(
     # and refuse the tab's only holder.
     token = _holder_token(view)
     holder = holder_key(store)
+    _record_pending_claim(view, session, changed=not unchanged and not page_load)
     if token is not None and not page_load:
         session[holder] = _holder_record(token, store.max_age)
         _fence(session, store.key, holder, token)
