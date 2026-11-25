@@ -7078,8 +7078,8 @@ function bindLiveViewEvents(scope) {
             }
             if (document.hidden) return;
             // Routing context lets the owner that resolved the contract receive
-            // it: a poll inside an embedded child view (`{% live_render %}`) is
-            // that child's; a component's poll still reaches its host.
+            // it: a poll inside an embedded child view (`{% live_render %}`) or
+            // a component is that owner's.
             const strictParams = _strictBinding(element, parsed.name, {}, [], element);
             if (strictParams === false) return;
             handleEvent(parsed.name, markSlotOf(Object.assign(strictParams, { _skipLoading: true }), element));
