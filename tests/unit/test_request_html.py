@@ -18,6 +18,9 @@ def _make_consumer():
     consumer.send_json = AsyncMock()
     consumer.send_error = AsyncMock()
     consumer.view_instance = None
+    # This file tests what the turn does once authorized; the authorization
+    # itself (#4201) is covered by test_explicit_turn_kinds_4201.py.
+    consumer._authorize_explicit_consumer_turn = AsyncMock(return_value=True)
     return consumer
 
 

@@ -29,6 +29,9 @@ def setup():
     runtime.view_instance = consumer.view_instance
     runtime._parameter_contract_view = "app.Page"
     consumer._runtime = runtime
+    # This file tests what the turn does once authorized; the authorization
+    # itself (#4201) is covered by test_explicit_turn_kinds_4201.py.
+    consumer._authorize_explicit_consumer_turn = AsyncMock(return_value=True)
     return consumer, runtime, transport
 
 

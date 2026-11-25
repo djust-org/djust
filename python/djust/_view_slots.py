@@ -96,6 +96,9 @@ PER_VIEW_ATTRS: Dict[str, Callable[[], Any]] = {
     "_mounting_in_batch": lambda: False,
     "_current_event_name": lambda: None,
     "_current_event_ref": lambda: None,
+    # The view's own presence-authorization window (``_authorize_presence_turn``):
+    # each view re-checks its own authority, never a sibling's.
+    "_presence_authorized_at": lambda: None,
     # What serializes one view's renders, and what the view's tick and pushes
     # consult: a view's own, so a slow turn in one view does not hold up the
     # renders of another (#3252). The page view's are the consumer's own.

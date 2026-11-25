@@ -318,6 +318,9 @@ def apply_class_swap(
         if not ok:
             return False, reason
         if old_cls is not new_cls:
+            # No exposure_policy comparison: reject_removed_view_attributes
+            # refuses any policy but "explicit" when the class is created, so
+            # the old and new classes always share one exposure contract.
             try:
                 view_instance.__class__ = new_cls
             except TypeError as e:

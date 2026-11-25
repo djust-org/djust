@@ -15,7 +15,12 @@ revokes the authority and asserts the turn is refused:
 * a background task's result, refused once the stored session is deleted
   (WebSocket and SSE);
 * an event queued on a hidden activity and released by a ``db_notify`` turn,
-  refused when the session is deleted before the release (WebSocket).
+  refused when the session is deleted before the release (WebSocket);
+* the frames the server sends without running a handler: a presence frame, a
+  ``push_event_to_view`` frame and a recovery render (``request_html``), each
+  refused once the stored session is deleted (WebSocket). A presence turn is
+  authorized at most once per ``PRESENCE_AUTH_INTERVAL_S``; SSE carries none
+  of the three.
 """
 
 import asyncio
@@ -28,7 +33,7 @@ from django.contrib.sessions.backends.db import SessionStore
 from django.test import override_settings
 from django.urls import include, path
 
-from djust import LiveView, event_handler, sse, state
+from djust import LiveView, event_handler, sse, state, websocket
 from djust.sse import sse_urlpatterns
 from djust.testing import open_live_page
 
@@ -262,10 +267,91 @@ async def test_a_released_activity_event_runs_while_the_session_lives():
 
 
 async def test_a_released_activity_event_after_the_session_is_revoked_is_denied():
+    """Site-local mutant: ``LiveViewConsumer._authorize_released_explicit_event``
+    returning True runs ``bump`` and sends its render, so this test fails."""
     page = await _page("/deferred/")
     async with await page.connect() as socket:
         await _queue_bump(socket)
         await _notify({"revoke": True})
-        await _refused(socket)
+        frame = await socket.receive(("error",))
+        assert "bump" not in RAN, "a released event ran for a revoked session"
+        assert frame.get("code") == "permission_denied", frame
         await _closed_4403(socket)
     assert "bump" not in RAN, "a released event ran for a revoked session"
+
+
+# -- frames sent without a handler: presence, client push, recovery render ---
+
+_DATA_FRAME = {
+    "presence_event": "presence_event",
+    "client_push_event": "push_event",
+    "request_html": "html_recovery",
+}
+
+
+async def _arm(socket):
+    """An authorized event render: the control turn, and it arms recovery."""
+    answer = await socket.send_event("bump")
+    assert answer["type"] != "error", answer
+    assert "bump" in RAN, RAN
+
+
+async def _trigger(socket, kind):
+    if kind == "request_html":
+        await socket.send({"type": "request_html"})
+    else:
+        # The channel-layer message the consumer handles, delivered directly.
+        await socket.communicator.send_input({"type": kind, "event": "secret", "payload": {"s": 1}})
+
+
+async def _next_frame(socket, kind):
+    return await socket.receive((_DATA_FRAME[kind], "error"), timeout=5.0)
+
+
+@pytest.mark.parametrize("kind", sorted(_DATA_FRAME))
+async def test_a_frame_without_a_handler_is_sent_while_the_session_lives(kind):
+    page = await _page("/deferred/")
+    async with await page.connect() as socket:
+        await _arm(socket)
+        await _trigger(socket, kind)
+        frame = await _next_frame(socket, kind)
+        assert frame["type"] == _DATA_FRAME[kind], frame
+
+
+@pytest.mark.parametrize("kind", sorted(_DATA_FRAME))
+async def test_a_frame_without_a_handler_is_refused_once_the_session_is_revoked(kind):
+    """Site-local mutants: dropping the ``_authorize_explicit_consumer_turn``
+    check in ``_request_html_turn`` or ``_deliver_client_push_event``, or in
+    ``_authorize_presence_turn``, sends the data frame, so this test fails."""
+    page = await _page("/deferred/")
+    async with await page.connect() as socket:
+        await _arm(socket)
+        await sync_to_async(page.session.delete)()
+        await _trigger(socket, kind)
+        frame = await _next_frame(socket, kind)
+        assert frame["type"] == "error", "%s was sent for a revoked session: %r" % (kind, frame)
+        assert frame.get("code") == "permission_denied", frame
+        await _closed_4403(socket)
+
+
+async def test_a_presence_turn_is_authorized_at_most_once_per_interval(monkeypatch):
+    """A presence frame within ``PRESENCE_AUTH_INTERVAL_S`` of an authorized one
+    does not re-read the session; the first one after the window does."""
+    now = [1000.0]
+    monkeypatch.setattr(websocket, "_presence_clock", lambda: now[0])
+    page = await _page("/deferred/")
+    async with await page.connect() as socket:
+        await _arm(socket)
+        await _trigger(socket, "presence_event")  # authorized: opens the window
+        assert (await _next_frame(socket, "presence_event"))["type"] == "presence_event"
+        await sync_to_async(page.session.delete)()
+        now[0] += websocket.PRESENCE_AUTH_INTERVAL_S - 0.5
+        await _trigger(socket, "presence_event")  # inside the window: not re-read
+        frame = await _next_frame(socket, "presence_event")
+        assert frame["type"] == "presence_event", frame
+        now[0] += 1.0
+        await _trigger(socket, "presence_event")  # past the window: re-read, denied
+        frame = await _next_frame(socket, "presence_event")
+        assert frame["type"] == "error", frame
+        assert frame.get("code") == "permission_denied", frame
+        await _closed_4403(socket)

@@ -9,6 +9,7 @@ import inspect
 import json
 import logging
 import msgpack
+import time
 import uuid
 import weakref
 import zlib
@@ -68,6 +69,13 @@ from .turns import Turn, run_turn
 
 logger = logging.getLogger(__name__)
 hotreload_logger = logging.getLogger("djust.hotreload")
+
+#: How long a presence turn's authorization covers later presence frames of the
+#: same view (seconds). Cursor frames can arrive many times a second; every
+#: other server turn is authorized each time.
+PRESENCE_AUTH_INTERVAL_S = 5.0
+#: The clock the presence throttle reads (a module global so a test can fake it).
+_presence_clock = time.monotonic
 
 # Upper bound on server_push turns queued while the session is busy (#3001).
 # When exceeded the OLDEST is dropped, so the latest state always arrives.
@@ -866,6 +874,11 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         # Track whether a user event is currently being processed so ticks
         # can yield priority to user interactions.
         self._processing_user_event = False
+        # The view whose presence turn was last authorized, and when
+        # (monotonic), or None: presence frames re-authorize at most every
+        # ``PRESENCE_AUTH_INTERVAL_S`` (``_authorize_presence_turn``). Keyed by
+        # the view, so a view mounted later never inherits the window.
+        self._presence_authorized_at: Optional[Tuple[Any, float]] = None
         # Set once Channels dispatches ``websocket.disconnect`` to us. The
         # ``__call__`` backstop (#3000) runs ``disconnect()`` itself only when
         # the dispatch loop died before that happened.
@@ -2159,6 +2172,33 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         """Drop a turn's authorized request so no later turn can reuse it."""
         if view is not None:
             view.__dict__.pop("_djust_event_request", None)
+
+    async def _authorize_presence_turn(self, view: Any) -> bool:
+        """Authorize a presence frame's delivery, at most once per interval.
+
+        Presence (cursor) frames can be very frequent, so one authorization
+        against the stored session covers this view's presence frames for
+        ``PRESENCE_AUTH_INTERVAL_S`` seconds; every other server turn is
+        authorized each time. A refusal closes the connection like any other
+        (:meth:`_deny_explicit_consumer_turn`) and clears the window. Under the
+        render lock, because a refusal releases the view.
+        """
+        last = self._presence_authorized_at
+        if (
+            last is not None
+            and last[0]() is view
+            and 0 <= _presence_clock() - last[1] < PRESENCE_AUTH_INTERVAL_S
+        ):
+            return True
+        async with self._render_lock:
+            if self.view_instance is not view:
+                return False
+            try:
+                allowed = await self._authorize_explicit_consumer_turn(view)
+            finally:
+                self._end_explicit_turn(view)
+        self._presence_authorized_at = (weakref.ref(view), _presence_clock()) if allowed else None
+        return allowed
 
     async def _dispatch_single_event(
         self,
@@ -5168,8 +5208,14 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             if self.view_instance is not view or (owner is not None and owner() is not view):
                 await self.send_error("Recovery owner changed. Reload the page.", recoverable=False)
                 return
-            with _tenant_context(getattr(view, "_tenant", None)):
-                await self._handle_request_html_locked(data)
+            # A recovery render re-renders the view: authorized every turn.
+            try:
+                if not await self._authorize_explicit_consumer_turn(view):
+                    return
+                with _tenant_context(getattr(view, "_tenant", None)):
+                    await self._handle_request_html_locked(data)
+            finally:
+                self._end_explicit_turn(view)
 
     async def _handle_request_html_locked(self, data: Dict[str, Any]) -> None:
         """
@@ -5329,13 +5375,16 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             # The presence payload is data the viewer may no longer be entitled
             # to: each delivery is a ``push``/``presence`` turn (ADR-044) for THE
             # VIEW THAT RECEIVES THE FRAME (the page view or a slot's stand-in),
-            # so app middleware gates it.
+            # authorized against the stored session (throttled, see
+            # ``_authorize_presence_turn``) and gated by app middleware.
             await consumer._deliver_presence_event(consumer.view_instance, event)
 
     @_consumer_turn("push", "presence", locked=False)
     async def _deliver_presence_event(self, view: Any, event: Dict[str, Any]) -> None:
         """Send one presence frame to this view's client (a ``push`` turn)."""
         if self.view_instance is not view:
+            return
+        if not await self._authorize_presence_turn(view):
             return
         await self.send_json(
             {
@@ -6021,9 +6070,21 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
 
     @_consumer_turn("push", "client_push", locked=False)
     async def _deliver_client_push_event(self, view: Any, event: Dict[str, Any]) -> None:
-        """Send one ``push_event`` frame to this view's client (a ``push`` turn, ADR-044)."""
+        """Send one ``push_event`` frame to this view's client (a ``push`` turn, ADR-044).
+
+        The payload is data the viewer may no longer be entitled to, so the
+        turn is authorized against the stored session first, every time.
+        """
         if self.view_instance is not view:
             return
+        async with self._render_lock:
+            if self.view_instance is not view:
+                return
+            try:
+                if not await self._authorize_explicit_consumer_turn(view):
+                    return
+            finally:
+                self._end_explicit_turn(view)
         await self.send_json(
             {
                 "type": "push_event",
