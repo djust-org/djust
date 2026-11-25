@@ -145,7 +145,9 @@ The preserved instance is re-attached when all of these match the page it
 left:
 
 - the child class and its `state()` declarations, and the `sticky_id`;
-- the `{% live_render %}` keyword arguments (its mount inputs);
+- the `{% live_render %}` keyword arguments (its mount inputs), except those
+  named in `sticky_update_inputs`, which the carried child receives through
+  `_on_sticky_update` (it is then re-rendered right after the mount frame);
 - the nesting depth: a child the destination renders at a different depth
   (inside another embedded view instead of directly in the page, or the
   other way round) is not carried;
@@ -269,24 +271,31 @@ A sticky child keeps its live instance across parent re-renders, so its
 `mount()` runs once and the tag's kwargs reach it once. When the parent renders
 the tag again with different values (`{% live_render "..." sticky=True
 section=section %}` after `section` changed), a child that defines
-`_on_sticky_update(self, changed)` receives them:
+`_on_sticky_update(self, changed)` and names the input in
+`sticky_update_inputs` receives them:
 
 ```python
+from djust import LiveView, state
+
+
 class Sidebar(LiveView):
     sticky = True
     sticky_id = "sidebar"
+    sticky_update_inputs = ("section",)
+    section = state("home")
     collapsed = state(False)
 
     def mount(self, request, section="home", **kwargs):
         self.section = section
 
-    def get_context_data(self, **kwargs):
-        return {**super().get_context_data(**kwargs), "section": self.section}
-
     def _on_sticky_update(self, changed):
         if "section" in changed:
             self.section = changed["section"]
 ```
+
+`section` is declared with `state()`, so it renders by itself: under explicit
+exposure (the default) a value set on `self` without `state()` never reaches
+the template.
 
 How it behaves:
 
@@ -319,12 +328,24 @@ How it behaves:
 - **Not a client event.** The leading underscore keeps it out of event dispatch;
   only the tag calls it. Do not decorate it with
   `@event_handler`.
-- **Preserved children.** A sticky preserved across a `live_redirect` is not
-  rendered again (the browser keeps its DOM), so the hook does not run and a
-  changed kwarg logs the warning. Push changing data to such a child instead.
-- **Explicit exposure.** A child with `exposure_policy = "explicit"` is remounted
-  when its inputs change (they are part of its reuse identity), so it never
-  reaches the hook.
+- **Updatable vs identity inputs.** Under explicit exposure only the names in
+  `sticky_update_inputs` (a tuple of input names; anything else is refused with
+  a `TemplateSyntaxError`) reach the hook. Every other input is part of the
+  child's identity: a change to one remounts the child and discards its
+  in-memory state. Its `persist="server"` fields survive a change to an
+  updatable input, but not to an identity input. The object permission is
+  checked again after the hook runs, so an updatable input that names the
+  object cannot switch the child to one the user may not see. On the HTTP
+  fallback (and on any mount that restores saved state) the child is mounted
+  afresh, its saved fields are restored, and the hook then receives every
+  updatable input on the tag, so it ends where a live socket's child would.
+  Setting `sticky_update_inputs` on a non-sticky or legacy view warns: it is
+  ignored there.
+- **Preserved children.** An explicit sticky carried across a `live_redirect`
+  gets the hook with the destination's changed updatable inputs, and is
+  re-rendered to the browser right after the mount frame. A legacy sticky
+  preserved across a `live_redirect` is not rendered again (the browser keeps
+  its DOM), so the hook does not run and a changed kwarg logs the warning.
 
 ### Allowlist mismatch
 

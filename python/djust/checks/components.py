@@ -2449,3 +2449,150 @@ def check_undeclared_handler_state(app_configs: Any, **kwargs: Any) -> list[Chec
                     )
                 )
     return messages
+
+
+_SW_TEMPLATE_USER_RE = re.compile(
+    r"\{[{%][^}]*?(?<![\w.])((?:user|request\.\w+|perms|csrf_token|messages)(?!\w)[\w.]*)"
+)
+
+
+def _v037(cls: type, message: str) -> CheckMessage:
+    """The one constructor of ``djust.V037`` (#4176)."""
+    file_path = ""
+    line_number = None
+    try:
+        file_path = inspect.getfile(cls)
+        line_number = inspect.getsourcelines(cls)[1]
+    except (OSError, TypeError):
+        pass  # Source introspection may fail for dynamically created classes
+    return DjustWarning(
+        message,
+        hint=(
+            "sw_cacheable is for a page that renders the same HTML for every visitor. "
+            "Remove sw_cacheable = True, or stop reading the user, the session and "
+            "persisted state in this view. Suppress with "
+            "DJUST_CONFIG = {'suppress_checks': ['V037']} if the read cannot change the HTML."
+        ),
+        id="djust.V037",
+        fix_hint="Remove `sw_cacheable = True` from `%s`." % cls.__qualname__,
+        file_path=file_path,
+        line_number=line_number,
+    )
+
+
+def _sw_code_reasons(cls: type) -> list[str]:
+    """``request.user`` / ``request.session`` reads in the view's own code (V037)."""
+    found: dict[str, int] = {}
+    for klass in cls.__mro__:
+        if is_djust_module(getattr(klass, "__module__", "") or ""):
+            continue
+        try:
+            tree = ast.parse(textwrap.dedent(inspect.getsource(klass)))
+        except (OSError, TypeError, SyntaxError):
+            continue
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Attribute) and node.attr in ("user", "session")):
+                continue
+            owner = node.value
+            is_request = isinstance(owner, ast.Name) and owner.id == "request"
+            is_self_request = (
+                isinstance(owner, ast.Attribute)
+                and owner.attr == "request"
+                and isinstance(owner.value, ast.Name)
+                and owner.value.id == "self"
+            )
+            if is_request or is_self_request:
+                found.setdefault("its code reads request.%s" % node.attr, node.lineno)
+    return list(found)
+
+
+def _sw_template_reason(cls: type) -> Optional[str]:
+    """The per-visitor expression in the view's template, if any (V037).
+
+    Reads the template and every ``{% extends %}`` / ``{% include %}`` it
+    reaches, through the ADR-037 binding scan; a template that cannot be loaded
+    is not reported.
+    """
+    sources: list[str] = []
+    try:
+        from djust._template_bindings import TemplateScan, django_engine, scan_class_template
+
+        engine = django_engine()
+        if engine is not None:
+            cache: dict[Any, Any] = {}
+            _label, key = scan_class_template(cls, engine, cache)
+            scan = cache.get(key) if key is not None else None
+            if isinstance(scan, TemplateScan):
+                sources = list(scan.files.values())
+    except Exception:  # noqa: BLE001 — an unscannable template cannot be reported
+        sources = []
+    if not sources:
+        inline = getattr(cls, "template", None)
+        if isinstance(inline, str) and inline:
+            sources = [inline]
+    for source in sources:
+        match = _SW_TEMPLATE_USER_RE.search(source)
+        if match:
+            return "its template reads %s" % match.group(1)
+    return None
+
+
+@register("djust")
+def check_sw_cacheable_views(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
+    """V037 (Warning): a view sets ``sw_cacheable = True`` but reads the user, the session
+    or persisted state, so the service worker would keep per-visitor HTML (#4176)."""
+    messages: list[CheckMessage] = []
+    if _is_check_suppressed("djust.V037"):
+        return messages
+    try:
+        from djust._exposure import ExposureContract
+        from djust.live_view import LiveView
+    except Exception:  # noqa: BLE001 — djust not importable/configured: nothing to check
+        return messages
+
+    candidates = set(_routed_liveview_classes()) | set(_walk_subclasses(LiveView))
+    for cls in sorted(candidates, key=lambda c: (c.__module__, c.__qualname__)):
+        if is_djust_module(cls.__module__) or cls.__dict__.get("abstract") is True:
+            continue
+        if not any(
+            "sw_cacheable" in vars(k) for k in cls.__mro__ if not is_djust_module(k.__module__)
+        ):
+            continue
+        label = "%s.%s" % (cls.__module__, cls.__qualname__)
+        value = getattr(cls, "sw_cacheable", False)
+        if value is False:
+            continue
+        if value is not True:
+            messages.append(
+                _v037(
+                    cls,
+                    "%s sets sw_cacheable = %r; only True opts a page in, so the page stays "
+                    "uncacheable." % (label, value),
+                )
+            )
+            continue
+        reasons = _sw_code_reasons(cls)
+        template_reason = _sw_template_reason(cls)
+        if template_reason:
+            reasons.append(template_reason)
+        try:
+            fields = ExposureContract.from_view_class(cls).fields
+        except Exception:  # noqa: BLE001 — declarations that do not compile are other checks' report
+            fields = {}
+        for name, exposure in fields.items():
+            if exposure.persist in ("server", "client"):
+                reasons.append(
+                    "it declares per-session state %r (persist=%r)" % (name, exposure.persist)
+                )
+        if getattr(cls, "login_required", None) or getattr(cls, "permission_required", None):
+            reasons.append("it requires a signed-in user (login_required / permission_required)")
+        if reasons:
+            messages.append(
+                _v037(
+                    cls,
+                    "%s sets sw_cacheable = True, but %s; the service worker would keep this "
+                    "page's HTML for anyone who opens the URL in that browser."
+                    % (label, "; ".join(reasons)),
+                )
+            )
+    return messages

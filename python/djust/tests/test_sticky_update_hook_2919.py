@@ -69,7 +69,7 @@ class HookParent(LiveView):
         self.label = "a"
 
     @event_handler()
-    def set_n(self, n=0, **kwargs):
+    def set_n(self, n: int = 0, **kwargs):
         self.n = int(n)
 
     def get_context_data(self, **kwargs):

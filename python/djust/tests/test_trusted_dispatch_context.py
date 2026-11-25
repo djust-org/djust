@@ -52,7 +52,7 @@ class DispatchView(LiveView):
         CALLS.append(("rpc", value))
         return value
 
-    @event_handler
+    @event_handler(parameter_policy="legacy")  # legacy params until #4192-#4198 (#4189)
     def legacy(self, value=None, **kwargs):
         CALLS.append(("legacy", value, dict(kwargs)))
 

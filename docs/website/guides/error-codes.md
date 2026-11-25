@@ -302,7 +302,7 @@ In development, pages render without Tailwind utilities until you compile the CS
 
 **Severity**: Error
 
-**What causes it**: `LIVEVIEW_CONFIG['event_parameter_policy']` is set to something other than `'legacy'` or `'strict'`. Every event handler without its own `parameter_policy` inherits this value, and dispatch rejects each of their events until it is fixed. The strict policy (ADR-036) is opt-in; `'legacy'` is the default.
+**What causes it**: `LIVEVIEW_CONFIG['event_parameter_policy']` is set to something other than `'legacy'` or `'strict'`. Every event handler without its own `parameter_policy` inherits this value, and dispatch rejects each of their events until it is fixed. `'strict'` is the default since djust 2.0; `'legacy'` is deprecated and removed before 2.0.0 (#4199).
 
 **Fix**: Set the key to `'legacy'` or `'strict'`, or remove it. Suppress with `DJUST_CONFIG = {"suppress_checks": ["C022"]}` (the runtime still rejects the events).
 
@@ -515,6 +515,14 @@ Retired in 2.0 with the `view_state_in_session` setting it validated: no view st
 **Fix**: Drop the marker, or make sure the inclusion template never mounts a child view and suppress this check.
 
 ---
+
+### C045: a setting djust 2.0.0 removes is still set
+
+**Severity**: Warning
+
+**What causes it**: `LIVEVIEW_CONFIG` or `DJUST_CONFIG` has `event_parameter_policy`, `reauth_on_event` or `reauth_server_turn_interval`. Strict event parameters are the only policy in 2.0.0, and an explicit-exposure view authorizes every event and server turn itself. djust 2.0.0 refuses the keys at startup (#4199); until then they are accepted and this check reports them. Message: 'LIVEVIEW_CONFIG['reauth_on_event'] is set; djust 2.0.0 removes the key and refuses it at startup: ...'
+
+**Fix**: delete the key. For `event_parameter_policy`, annotate every handler parameter first (`djust.V016` and `djust.V033` report what strict refuses). Suppress with `DJUST_CONFIG = {"suppress_checks": ["C045"]}`.
 
 ### C301: Invalid VDOM cache TTL
 
@@ -1001,6 +1009,46 @@ On an explicit view the same declaration is refused when the class is created, w
 **What causes it**: A `DjustModelAdmin`'s `change_list_widgets` or `change_form_widgets` lists a widget class that states `exposure_policy = "legacy"`. The admin pages are explicit and cannot embed a legacy view, so the page fails to render. Message: '<admin>.change_form_widgets lists <widget>, which states exposure_policy = "legacy". The djust admin change form uses explicit exposure and cannot embed a legacy view, so that admin page fails to render (HTTP 500).'
 
 **Fix**: Set `exposure_policy = "explicit"` on the widget and return what its template reads from `get_context_data()`. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V032"]}`.
+
+### V033: a legacy-policy handler strict dispatch would refuse
+
+**Severity**: Warning
+
+**What causes it**: a handler that runs under the legacy parameter policy (`parameter_policy="legacy"` or the project's `LIVEVIEW_CONFIG['event_parameter_policy']`) and whose signature does not compile under the strict policy: a parameter without a supported annotation, one that starts with `_`, or one named `view_id` or `component_id`. Strict is the only policy in djust 2.0.0, so every call to the handler would be refused. djust's own handlers are not reported. Message: '<handler>: runs under the legacy parameter policy, and strict dispatch, the only policy in djust 2.0.0, would refuse every call to it: ...'
+
+**Fix**: annotate every parameter with `str`, `int`, `float`, `bool`, `Decimal`, `UUID`, `date`, `Optional[T]`, `list[T]`, `dict[str, T]` or `Any`, rename a parameter that starts with `_` or is named `view_id` / `component_id`, then delete the legacy pin. See the [migration guide](website/guides/migrating-to-2.0.md). Suppress with `DJUST_CONFIG = {"suppress_checks": ["V033"]}`.
+
+### V034: a handler uses `_target`
+
+**Severity**: Warning
+
+**What causes it**: a handler that declares a `_target` parameter or reads the string `"_target"` from its source (`kwargs.get("_target")`). Only the legacy parameter policy sends `_target`; a strict client sends `field` for `dj-input`, `dj-change`, `dj-blur` and `dj-focus`. A `_target` parameter under the strict policy is a `djust.V016` error and is not repeated here. Message: '<handler>: reads _target, which a strict client never sends; djust 2.0.0 removes the legacy parameter policy that sent it.'
+
+**Fix**: declare `field: str = ""` instead. A `dj-submit` handler receives the pressed submit button as one of its form fields (its `name=value`). Suppress with `DJUST_CONFIG = {"suppress_checks": ["V034"]}`.
+
+### V035: an explicit sticky child overrides `_on_sticky_update`
+
+**Severity**: Warning
+
+**What causes it**: a `LiveView` that overrides `_on_sticky_update`, is explicit-exposure and does not name `sticky_update_inputs`. As a sticky child it is remounted whenever a `{% live_render %}` input changes, so the hook is never called (it ran only for legacy children). Reported once, under the class that defines the hook. Message: '<view> overrides _on_sticky_update, but it is an explicit-exposure view: as a sticky child it is remounted whenever a {% live_render %} input changes, so djust never calls the hook (it ran only for legacy children).'
+
+**Fix**: name the inputs the hook takes with `sticky_update_inputs = ("title",)` (a change to those reuses the child and calls the hook), or delete the hook and read the inputs in `mount()`. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V035"]}`.
+
+### V036: a view or handler uses an attribute or decorator argument djust 2.0.0 removes
+
+**Severity**: Warning
+
+**What causes it**: a `LiveView` whose own body sets `cancel_async_on_disconnect`, or an `@event_handler` / `@server_function` with `parameter_policy="legacy"`. djust 2.0.0 refuses both when the class or decorator is created (#4199); until then they still work and this check lists them. Message: '<handler>: @event_handler(parameter_policy="legacy"), which djust 2.0.0 removes: annotate the handler's parameters ... and delete parameter_policy="legacy".'
+
+**Fix**: delete `cancel_async_on_disconnect` (an explicit view's background work is cancelled when its connection closes; work that must finish belongs in a task queue), and annotate the handler's parameters (`djust.V033` lists what the strict policy would refuse) before deleting `parameter_policy="legacy"`. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V036"]}`.
+
+### V037: `sw_cacheable = True` on a per-visitor page
+
+**Severity**: Warning
+
+**What causes it**: A view opts its page into service-worker caching with `sw_cacheable = True`, but it reads the user, the session or persisted state, so its HTML differs per visitor. Message: '<view> sets sw_cacheable = True, but its code reads request.user; the service worker would keep this page's HTML for anyone who opens the URL in that browser.'
+
+**Fix**: Remove `sw_cacheable = True`, or render the same HTML for every visitor. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V037"]}` if the read cannot change the HTML.
 
 <!-- END GENERATED check-sections:V -->
 
@@ -1659,6 +1707,22 @@ render time for those too, and `DJUST_UNSUPPLIED_NAMES = "error"` in your test
 settings turns it into an error that fails the test that renders it. Suppress with
 `DJUST_CONFIG = {"suppress_checks": ["T027"]}` or a
 `{# djust_typecheck: noqa count #}` template comment.
+
+### T028: a template binding the strict policy would refuse
+
+**Severity**: Warning
+
+**What causes it**: an event binding whose handler runs under the legacy parameter policy and which sends something the strict policy would refuse: a `data-*` argument (strict handlers receive only `dj-value-*`), an argument the handler does not declare, or a value its annotation cannot accept. The same rules as `djust.T020` and `djust.T021`, applied to a handler that is still legacy, so the change can be made before strict becomes the only policy. A noqa comment works as for T020: `{# noqa: T028 -- reason #}`. Message: '<handler>() runs under the legacy parameter policy; under strict, the only policy in djust 2.0.0: ...'
+
+**Fix**: pass arguments with `dj-value-*` instead of `data-*` and make the handler's declared parameters match what the binding sends. Suppress with `DJUST_CONFIG = {"suppress_checks": ["T028"]}`.
+
+### T029: Python code emits a `data-*` event argument
+
+**Severity**: Warning
+
+**What causes it**: a string literal or f-string in a `LiveView`, `LiveComponent` or `Component` class, or in a template-tag module, that builds an element with a `dj-*` event binding and a `data-*` attribute naming an argument of the bound handler. A strict handler never receives `data-*` arguments. Markup assembled by concatenation across literals, built by helper functions outside the scanned classes and libraries, or with dynamic attribute names is not seen. Message: '<file>:<line>: Python code emits data-item-id on an element bound by dj-click="pick"; under the strict policy, the only one in djust 2.0.0, a handler never receives data-* arguments.'
+
+**Fix**: emit `dj-value-<name>` instead (`format_html('... dj-value-item-id="{}"', value)`). A `data-*` attribute that only styles or scripts the element can stay. Suppress with `DJUST_CONFIG = {"suppress_checks": ["T029"]}`.
 
 <!-- END GENERATED check-sections:T -->
 

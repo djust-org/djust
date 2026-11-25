@@ -1,5 +1,5 @@
 """
-PostProcessingMixin - Debug info, React hydration, and client script injection for LiveView.
+PostProcessingMixin - Debug info and client script injection for LiveView.
 """
 
 import json
@@ -143,7 +143,7 @@ def bug_capture_scrub() -> List[str]:
 
 
 class PostProcessingMixin:
-    """Post-processing: get_debug_info, _hydrate_react_components, _inject_client_script."""
+    """Post-processing: get_debug_info, _inject_client_script."""
 
     if TYPE_CHECKING:
         # Cooperating method supplied by the host class (LiveView via
@@ -376,50 +376,6 @@ class PostProcessingMixin:
             # Sizes describe the exported value only; hidden values are not read.
             sizes[name] = {"memory": None, "serialized": None if redacted else size}
         return {"view_class": type(self).__name__, "variables": variables, "state_sizes": sizes}
-
-    def _hydrate_react_components(self, html: str) -> str:
-        """
-        Post-process HTML to hydrate React component placeholders.
-        """
-        from ..react import react_components
-        import html as html_module
-        import json as json_module
-
-        pattern = r'<div data-react-component="([^"]+)" data-react-props=\'([^\']+)\'>(.*?)</div>'
-
-        def replace_component(match: "re.Match[str]") -> str:
-            component_name = match.group(1)
-            # The renderer entity-escapes the attribute value.
-            props_json = html_module.unescape(match.group(2))
-            children = match.group(3)
-
-            try:
-                props = json_module.loads(props_json)
-            except json_module.JSONDecodeError:
-                props = {}
-
-            # The template renderer already resolved `{{ var }}` props from
-            # the view context. Don't resolve again here: a resolved value is
-            # user data, and one that reads `{{ other }}` must stay literal.
-            resolved_props = props
-
-            renderer = react_components.get(component_name)
-
-            if renderer:
-                rendered_content = renderer(resolved_props, children)
-                # Single-quoted attribute: escape `'` too, not only `"`.
-                resolved_props_json = html_module.escape(
-                    json_module.dumps(resolved_props), quote=True
-                )
-                return f"<div data-react-component=\"{component_name}\" data-react-props='{resolved_props_json}'>{rendered_content}</div>"
-            else:
-                return match.group(0)
-
-        from .._render_provenance import sub
-
-        html = sub(pattern, replace_component, html, flags=re.DOTALL)
-
-        return html
 
     def _inject_client_script(self, html: str) -> str:
         """Inject the LiveView client JavaScript into the HTML"""

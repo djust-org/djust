@@ -73,7 +73,6 @@ if TYPE_CHECKING:
         background,
     )
     from .auth import LoginRequiredMixin, PermissionRequiredMixin
-    from .react import react_components, register_react_component, ReactMixin
     from .forms import FormMixin
     from .wizard import WizardMixin
     from .drafts import DraftModeMixin
@@ -137,9 +136,6 @@ _LAZY: dict[str, tuple[str, str]] = {
     "background": ("djust.decorators", "background"),
     "LoginRequiredMixin": ("djust.auth", "LoginRequiredMixin"),
     "PermissionRequiredMixin": ("djust.auth", "PermissionRequiredMixin"),
-    "react_components": ("djust.react", "react_components"),
-    "register_react_component": ("djust.react", "register_react_component"),
-    "ReactMixin": ("djust.react", "ReactMixin"),
     "FormMixin": ("djust.forms", "FormMixin"),
     "WizardMixin": ("djust.wizard", "WizardMixin"),
     "DraftModeMixin": ("djust.drafts", "DraftModeMixin"),
@@ -441,9 +437,6 @@ __all__ = [
     "render_template",
     "diff_html",
     "RustLiveView",
-    "react_components",
-    "register_react_component",
-    "ReactMixin",
     "FormMixin",
     "WizardMixin",
     "DraftModeMixin",

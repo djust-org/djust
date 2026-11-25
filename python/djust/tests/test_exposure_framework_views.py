@@ -352,7 +352,7 @@ class LoggingTerminal(TtydTerminalView):
         super().mount(request, **kwargs)
         self.session_log = []
 
-    def on_ttyd_connect(self, timestamp="", user_agent="", **kwargs):
+    def on_ttyd_connect(self, timestamp: str = "", user_agent: str = "", **kwargs):
         super().on_ttyd_connect(timestamp=timestamp, user_agent=user_agent, **kwargs)
         self.session_log.append("Connected at %s" % timestamp)
 

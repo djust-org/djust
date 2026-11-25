@@ -56,7 +56,7 @@ class NotificationsView(LiveView):
         self.notifications = [{"id": 1, "text": "a"}, {"id": 2, "text": "b"}]
 
     @event_handler()
-    def dismiss(self, id="", **kwargs):
+    def dismiss(self, id: int = 0, **kwargs):
         try:
             t = int(id)
         except (TypeError, ValueError):
@@ -261,7 +261,10 @@ def test_handle_event_autoskip_snapshots_target_view_source():
     """
     import djust.runtime as rt_mod
 
-    source = inspect.getsource(rt_mod.ViewRuntime._dispatch_sticky_child_event)
+    # #4179 split the dispatch: resolution here, the run in ``_run_child_event``.
+    source = inspect.getsource(rt_mod.ViewRuntime._dispatch_sticky_child_event) + inspect.getsource(
+        rt_mod.ViewRuntime._run_child_event
+    )
     # The child (target_view) is resolved from the registry and is the handler +
     # render subject — NOT the parent self.view_instance.
     assert "target_view = all_children.get(view_id)" in source, (

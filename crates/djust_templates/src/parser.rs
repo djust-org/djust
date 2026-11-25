@@ -141,11 +141,6 @@ pub enum Node {
         assignments: Vec<(String, String)>, // var_name, expression
         nodes: Vec<Node>,
     },
-    ReactComponent {
-        name: String,
-        props: Vec<(String, String)>,
-        children: Vec<Node>,
-    },
     /// Custom template tag handled by a Python callback.
     ///
     /// This is used for Django-specific tags like `{% url %}` and `{% static %}`
@@ -576,8 +571,7 @@ macro_rules! child_lists {
             | Node::Spaceless { nodes }
             | Node::AutoEscape { nodes, .. }
             | Node::Filter { nodes, .. } => [Some(nodes), None],
-            Node::ReactComponent { children, .. }
-            | Node::BlockCustomTag { children, .. }
+            Node::BlockCustomTag { children, .. }
             | Node::PartialDef { children, .. }
             | Node::Language { children, .. }
             | Node::Timezone { children, .. }
@@ -932,7 +926,7 @@ pub fn template_hash_hex(source: &str) -> String {
 ///
 /// Recurses into all Node variants that can hold child nodes:
 /// `If`, `For`, `Block`, `With`, `Spaceless`, and the BlockCustomTag /
-/// ReactComponent children. Variants that can't hold child Nodes
+/// PartialDef children. Variants that can't hold child Nodes
 /// (Text, Variable, Static, etc.) are leaves and don't recurse.
 pub(crate) fn assign_if_marker_ids(nodes: &mut [Node], prefix: &str, counter: &mut usize) {
     let mut includes = 0usize;
@@ -1007,9 +1001,6 @@ fn assign_marker_ids_inner(
             | Node::Timezone { children, .. }
             | Node::Localize { children, .. }
             | Node::LocalTime { children, .. } => {
-                assign_marker_ids_inner(children, prefix, counter, includes);
-            }
-            Node::ReactComponent { children, .. } => {
                 assign_marker_ids_inner(children, prefix, counter, includes);
             }
             // Leaf or non-AST-bearing variants — no recursion needed.
@@ -1139,9 +1130,7 @@ fn resolve_cycle_nodes(
             | Node::LocalTime { children, .. } => {
                 resolve_cycle_nodes(children, prefix, state)?;
             }
-            Node::BlockCustomTag { children, .. }
-            | Node::PartialDef { children, .. }
-            | Node::ReactComponent { children, .. } => {
+            Node::BlockCustomTag { children, .. } | Node::PartialDef { children, .. } => {
                 resolve_cycle_nodes(children, prefix, state)?;
             }
             // `{% ifchanged %}` is BOTH an id consumer and a container, so it
@@ -1191,6 +1180,24 @@ fn line_at(spans: &[Span], source: &str, i: usize) -> usize {
         .filter(|&&b| b == b'\n')
         .count()
         + 1
+}
+
+/// The error for a capitalized `<Name ...>` tag (#4006).
+fn capitalized_tag_error(name: &str, line: Option<usize>) -> DjangoRustError {
+    let at = line.map(|n| format!(" on line {n}")).unwrap_or_default();
+    if name.starts_with("Rust") {
+        return DjangoRustError::TemplateError(format!(
+            "<{name} /> component tags were removed in djust 2.0{at}. \
+             Use a djust component template tag or a Python component instead."
+        ));
+    }
+    DjangoRustError::TemplateError(format!(
+        "<{name}>{at} is a capitalized (JSX-style) component tag. React component tags were removed in \
+         djust 2.0 with djust.react and ReactMixin (#4006). Mount the widget with a JavaScript hook \
+         instead: dj-hook=\"{name}\" on an ordinary element, with the hook registered in \
+         window.djust.hooks (https://docs.djust.org/guides/hooks/). Write HTML element names in \
+         lowercase (<button>, not <Button>)."
+    ))
 }
 
 /// Django's invalid-tag diagnostic, including the terminators accepted by
@@ -2484,35 +2491,10 @@ fn parse_token_inner(
             }
         }
 
-        Token::JsxComponent {
+        Token::CapitalizedTag(name) => Err(capitalized_tag_error(
             name,
-            props,
-            children,
-            ..
-        } => {
-            // `<RustButton …/>`-style tags rendered `djust_components::ui`
-            // server-side until 2.0. Refuse them by name rather than turning
-            // them into React placeholders that render as an empty div.
-            if name.starts_with("Rust") {
-                return Err(DjangoRustError::TemplateError(format!(
-                    "<{name} /> component tags were removed in djust 2.0. \
-                     Use a djust component template tag or a Python component instead."
-                )));
-            }
-            // Convert token children to Node children for React components
-            let mut child_nodes = Vec::new();
-            for child in children {
-                if let Token::Text(text) = child {
-                    child_nodes.push(Node::Text(text.clone()));
-                }
-            }
-
-            Ok(Some(Node::ReactComponent {
-                name: name.clone(),
-                props: props.clone(),
-                children: child_nodes,
-            }))
-        }
+            Some(line_at(spans, source, *i)),
+        )),
 
         // Inline comments create no Django node. Block comments do, and
         // therefore count as content for the extends must-be-first rule.
@@ -2932,7 +2914,7 @@ fn collect_nested_raw_source(
                 content.push_str(text);
                 content.push_str("#}");
             }
-            _ => {}
+            Token::CapitalizedTag(name) => return Err(capitalized_tag_error(name, None)),
         }
         j += 1;
     }
@@ -3770,18 +3752,6 @@ fn extract_from_nodes(
                 for (root, paths) in body {
                     variables.entry(root).or_default().extend(paths);
                 }
-            }
-            Node::ReactComponent {
-                props,
-                children,
-                name: _,
-            } => {
-                // Extract from component props
-                for (_prop_name, prop_value) in props {
-                    extract_from_operand(prop_value, variables);
-                }
-                // Recurse into children
-                extract_from_nodes(children, variables);
             }
             Node::AssignTag { args, name: _ } => {
                 // Extract variable references from the assign tag's
@@ -7190,7 +7160,6 @@ mod dep_tests {
             Node::DjustAudio => "DjustAudio",
             Node::Static(_) => "Static",
             Node::With { .. } => "With",
-            Node::ReactComponent { .. } => "ReactComponent",
             Node::CustomTag { .. } => "CustomTag",
             Node::PartialCall { .. } => "PartialCall",
             Node::PartialDef { .. } => "PartialDef",
@@ -7280,11 +7249,6 @@ mod dep_tests {
             Node::With {
                 assignments: vec![("x".into(), "y".into())],
                 nodes: vec![],
-            },
-            Node::ReactComponent {
-                name: "MyComp".into(),
-                props: vec![("foo".into(), "bar".into())],
-                children: vec![],
             },
             Node::CustomTag {
                 name: "url".into(),

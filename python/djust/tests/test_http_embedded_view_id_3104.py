@@ -142,12 +142,40 @@ class ExplicitParentPage(Page):
         "</div>"
     )
 
+    def get_context_data(self, **kwargs):
+        # An explicit page reserves ``view``: the page must render, so the
+        # refusal below is the mixed-policy rule's, not a render error (#4173).
+        return LiveView.get_context_data(self, **kwargs)
+
 
 class MixedPage(Page):
     template = (
         "{% load live_tags %}"
         '<div dj-root dj-view="' + MOD + '.MixedPage">'
         '{% live_render "' + MOD + '.ExplicitChild" view_id="ekid" %}'
+        "</div>"
+    )
+
+
+class LazyTagPage(Page):
+    template = (
+        "{% load live_tags %}"
+        '<div dj-root dj-view="' + MOD + '.LazyTagPage">'
+        '{% live_render "' + MOD + '.Child" lazy=True %}'
+        "</div>"
+    )
+
+
+class LazyEagerTagPage(Page):
+    """A lazy and an eager tag with one view and arguments, and two identical
+    lazy tags (#4173 review): every one gets its own id."""
+
+    template = (
+        "{% load live_tags %}"
+        '<div dj-root dj-view="' + MOD + '.LazyEagerTagPage">'
+        '{% live_render "' + MOD + '.Child" lazy=True %}'
+        '{% live_render "' + MOD + '.Child" %}'
+        '{% live_render "' + MOD + '.Child" lazy=True %}'
         "</div>"
     )
 
@@ -407,8 +435,8 @@ def test_an_empty_view_id_is_the_parent_as_on_the_socket_runtime(session, flat, 
 
 @pytest.mark.django_db
 def test_an_explicit_exposure_child_is_not_routed_over_http(session):
-    """An explicit child's turn is authorized against a mount binding a
-    stateless request has not: it stays refused (fail closed)."""
+    """A mixed-policy pair is not routed: a legacy page's explicit child stays
+    refused. Explicit pairs are covered in ``test_http_explicit_child_4173.py``."""
     _page(session, MixedPage)
     response = _post(session, {"view_id": "ekid"}, view_class=MixedPage)
     assert response.status_code == 400
@@ -417,10 +445,37 @@ def test_an_explicit_exposure_child_is_not_routed_over_http(session):
 
 @pytest.mark.django_db
 def test_nothing_is_routed_for_an_explicit_exposure_page(session):
+    """A mixed-policy pair is not routed: an explicit page's legacy child stays
+    refused. Explicit pairs are covered in ``test_http_explicit_child_4173.py``."""
     _page(session, ExplicitParentPage)
     response = _post(session, {"view_id": "legacy-kid"}, view_class=ExplicitParentPage)
     assert response.status_code == 400
     assert json.loads(response.content) == {"error": "Embedded view not found"}
+
+
+@pytest.mark.django_db
+def test_a_lazy_tag_child_is_routed_over_http(session):
+    """``{% live_render lazy %}``: its fill runs only on the GET, so the POST
+    mounts that slot's child to route its event (#4173 follow-up)."""
+    ids = _page(session, LazyTagPage)
+    assert len(ids) == 1
+    response = _post(session, {"view_id": ids[0]}, view_class=LazyTagPage)
+    assert response.status_code == 200, response.content
+    data = json.loads(response.content)
+    assert data["type"] == "embedded_update" and data["view_id"] == ids[0]
+    assert "click" in _html(response)
+
+
+@pytest.mark.django_db
+def test_lazy_and_eager_twins_get_distinct_ids_and_each_is_routed(session):
+    ids = _page(session, LazyEagerTagPage)
+    assert len(ids) == 3 and len(set(ids)) == 3, ids
+    for view_id in ids:
+        response = _post(session, {"view_id": view_id}, view_class=LazyEagerTagPage)
+        assert response.status_code == 200, (view_id, response.content)
+        data = json.loads(response.content)
+        assert data["view_id"] == view_id
+        assert "click" in _html(response)
 
 
 # --------------------------------------------------------------------------- #

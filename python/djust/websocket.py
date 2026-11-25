@@ -11,6 +11,7 @@ import logging
 import msgpack
 import uuid
 import weakref
+import zlib
 from typing import (
     Any,
     Awaitable,
@@ -1389,7 +1390,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 future = asyncio.ensure_future(
                     self._run_async_work(task_name, callback, args, kwargs, event_name=event_name)
                 )
-                track_async_task(self.view_instance, future)
+                track_async_task(self.view_instance, future, callback)
                 track_running_async_task(self.view_instance, task_name, future)
             # Clear all scheduled tasks
             self.view_instance._async_tasks = {}
@@ -1820,7 +1821,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         # request_html path), so the attribute is str | None across its lifetime.
         self._recovery_html: Optional[str] = html
         self._recovery_version = getattr(self, "_last_sent_version", 0)
-        self._recovery_contracts: Optional[str] = None
+        self._recovery_contracts: Optional[bytes] = None
         view = getattr(self, "view_instance", None)
         try:
             self._recovery_owner = weakref.ref(view) if view is not None else None
@@ -1835,11 +1836,18 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             and frame.get("version") == getattr(self, "_recovery_version", None)
             and "parameter_contracts" in frame
         ):
-            self._recovery_contracts = json.dumps(
-                {
-                    "parameter_contracts": frame["parameter_contracts"],
-                    "parameter_contract_view": frame["parameter_contract_view"],
-                }
+            # Held for the life of the connection, once per view. Every owner
+            # repeats its handlers' metadata, so a page of 20 components is
+            # ~8 KB of JSON that deflates to a few hundred bytes (#4189); it
+            # is inflated only on the rare html_recovery request.
+            self._recovery_contracts = zlib.compress(
+                json.dumps(
+                    {
+                        "parameter_contracts": frame["parameter_contracts"],
+                        "parameter_contract_view": frame["parameter_contract_view"],
+                    }
+                ).encode("utf-8"),
+                6,
             )
 
     def _next_version_armed(self, html: str) -> int:
@@ -2048,6 +2056,39 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             await self.send_json(response)
             await self._flush_all_pending()
 
+    async def _dispatch_released_child_event(
+        self,
+        target_view: Any,
+        event_name: str,
+        params: Dict[str, Any],
+        event_ref: Optional[int] = None,
+    ) -> None:
+        """Release an event queued on an embedded child's activity (#4179).
+
+        The root's authority is freshly checked first (a revoked one is denied
+        and closed 4403, as for a root event); the child's own checks, handler,
+        render and ``embedded_update`` are the runtime's child path. A child no
+        longer on the page is dropped without an error frame.
+        """
+        from ._exposure import uses_legacy_exposure
+        from .runtime import _still_owned
+
+        root = self.view_instance
+        runtime = getattr(self, "_runtime", None)
+        if root is None or runtime is None or not _still_owned(root, target_view):
+            logger.debug(
+                "Released activity event for an embedded view no longer on the page dropped"
+            )
+            return
+        if not uses_legacy_exposure(root) and not await self._authorize_released_explicit_event(
+            root
+        ):
+            return  # root authority revoked: denied and closed 4403, as for a root event
+        try:
+            await runtime._dispatch_released_child_event(target_view, event_name, params, event_ref)
+        finally:
+            self._end_explicit_turn(root)
+
     async def _authorize_released_explicit_event(self, target_view: Any) -> bool:
         """Freshly authorize an explicit view's queued event released here (ADR-038).
 
@@ -2056,7 +2097,9 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         from ``db_notify`` with no authorized turn, so each released event gets
         the runtime's check — ``authorize_event`` on a fresh request against the
         mount binding — and the runtime's fail-closed outcome. Only the mounted
-        root carries that binding; any other nonlegacy target is refused.
+        root carries that binding, so it is only called with the root: children
+        are dispatched through the runtime's child path under the root's fresh
+        authority (``_dispatch_released_child_event``, #4179).
         """
         if self.view_instance is None:
             # Already denied (or torn down) earlier in this drain.
@@ -2262,6 +2305,12 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         # are dispatched. For an explicit view that includes fresh
         # authorization, which this drain (run from db_notify, outside any
         # authorized runtime turn) must apply itself.
+        root = self.view_instance
+        if target_view is not root:
+            # #4179: an event queued on an embedded child's activity goes
+            # through the runtime's child path under the root's authority.
+            await self._dispatch_released_child_event(target_view, event_name, params, event_ref)
+            return
         if not uses_legacy_exposure(target_view):
             if not await self._authorize_released_explicit_event(target_view):
                 return
@@ -3690,6 +3739,16 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             logger.debug("failed to read the session key: %s", exc)
         return None
 
+    def _upload_owner(self) -> Optional[Dict[str, str]]:
+        """The owner an upload registered here is bound to: the explicit mount
+        binding's principal and view (#4175). None for a legacy view (its key
+        is the session alone)."""
+        from .uploads.resumable import upload_owner
+
+        runtime = getattr(self, "_runtime", None)
+        binding = getattr(runtime, "_explicit_mount_binding", None)
+        return upload_owner(binding) if binding is not None else None
+
     async def _handle_upload_register(self, data: Dict[str, Any]) -> None:
         """Handle upload_register message: client announces a file to upload."""
         if not self.view_instance:
@@ -3717,6 +3776,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             client_type=data.get("client_type", ""),
             client_size=data.get("client_size", 0),
             session_key=self._scope_session_key(),
+            owner=self._upload_owner(),
         )
 
         if entry:
@@ -3746,10 +3806,12 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
              "status": "resumed" | "not_found" | "locked",
              "bytes_received": N, "chunks_received": [0, 1, 2, ...]}
 
-        Session-scoped access: the state entry's stored ``session_key``
-        must be present and match the current WS session, else we reply
-        ``not_found`` (same response as missing, so the reply does not
-        reveal whether the id exists).
+        Owner-scoped access: the state entry's stored ``session_key`` must
+        be present and match the current WS session and, for an explicit
+        view, its stored owner must match this connection's mount binding
+        (principal and view, #4175), else we reply ``not_found`` (same
+        response as missing, so the reply does not reveal whether the id
+        exists).
         """
         from .uploads.resumable import resolve_resume_request
 
@@ -3758,27 +3820,8 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             await self.send_error("upload_resume requires a ref")
             return
 
-        # ADR-038 decision D-g: an explicit view does not preserve uploads in
-        # flight across a reconnect. Answer exactly as for an unknown ref,
-        # without consulting the resumable state store, so the client falls
-        # back to a fresh ``upload_register``.
-        view = self.view_instance
-        if view is not None:
-            from ._exposure import uses_legacy_exposure
-
-            if not uses_legacy_exposure(view):
-                await self.send_json(
-                    {
-                        "type": "upload_resumed",
-                        "ref": upload_id,
-                        "status": "not_found",
-                        "bytes_received": 0,
-                        "chunks_received": [],
-                    }
-                )
-                return
-
         session_key = self._scope_session_key()
+        owner = self._upload_owner()
 
         # Active-ref check: is another in-flight upload using this id?
         active = False
@@ -3803,6 +3846,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             upload_id=upload_id,
             session_key=session_key,
             active_refs=_active_ref,
+            owner=owner,
         )
         if (
             payload.get("status") == "resumed"
@@ -3832,7 +3876,9 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 if mgr is not None:
                     # Off the event loop: re-attaching may abort expired
                     # suspended uploads, which can be network I/O (S3).
-                    resumed = await sync_to_async(mgr.resume_entry)(upload_id, session_key)
+                    resumed = await sync_to_async(mgr.resume_entry)(
+                        upload_id, session_key, owner=owner
+                    )
             except Exception:  # noqa: BLE001 — resume must never crash the consumer
                 logger.exception("upload_resume: re-attaching the upload failed")
             if resumed is None:
@@ -3943,12 +3989,14 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             return
 
         ref = frame["ref"]
+        # Every frame is checked against the upload's owner (#4175).
+        owner = self._upload_owner()
 
         if frame["type"] == "chunk":
             # add_chunk() internally dispatches to either the disk-buffer
             # path or (when the upload slot was configured with writer=)
             # the writer's write_chunk() — no disk I/O on the writer path.
-            progress = mgr.add_chunk(ref, frame["chunk_index"], frame["data"])
+            progress = mgr.add_chunk(ref, frame["chunk_index"], frame["data"], owner=owner)
             if progress is not None:
                 # Send progress update (throttle to every 10%)
                 entry = mgr._entries.get(ref)
@@ -3966,7 +4014,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
 
         elif frame["type"] == "complete":
             _real_consumer(self)._forget_upload(ref)
-            entry = mgr.complete_upload(ref)
+            entry = mgr.complete_upload(ref, owner=owner)
             if entry:
                 await self.send_json(build_progress_message(ref, 100, "complete"))
             else:
@@ -3984,7 +4032,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
 
         elif frame["type"] == "cancel":
             _real_consumer(self)._forget_upload(ref)
-            mgr.cancel_upload(ref)
+            mgr.cancel_upload(ref, owner=owner)
             await self.send_json(build_progress_message(ref, 0, "cancelled"))
 
     async def close(self, code: Optional[int] = None, reason: Optional[str] = None) -> None:
@@ -5254,7 +5302,10 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         # version which is DISCARDED for the wire — sending it would desync the
         # client against the consumer counter.
         version = getattr(self, "_recovery_version", 0)
-        contracts = getattr(self, "_recovery_contracts", None)
+        packed = getattr(self, "_recovery_contracts", None)
+        contracts: Optional[str] = (
+            zlib.decompress(packed).decode("utf-8") if packed is not None else None
+        )
         runtime = getattr(self, "_runtime", None)
 
         def contract_snapshot() -> Optional[str]:
@@ -6284,7 +6335,17 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         current = self.view_instance
         if current is not None and hasattr(current, "_flush_deferred_activity_events"):
             try:
+                from .runtime import _owned_descendants
+
+                # Owned embedded children too (#4179): snapshot first, so a
+                # child a released handler disposes reaches the ownership check.
+                children = _owned_descendants(current)
                 await current._flush_deferred_activity_events(self)
+                for child in children:
+                    if getattr(child, "_deferred_activity_events", None) and hasattr(
+                        child, "_flush_deferred_activity_events"
+                    ):
+                        await child._flush_deferred_activity_events(self)
             except Exception as exc:  # noqa: BLE001
                 self._log_view_hook_failure(
                     view,

@@ -100,8 +100,20 @@ def test_initial_page_carries_root_contracts_outside_the_live_root():
     assert html.index("data-djust-parameter-contracts") > root_end
 
 
+@pytest.fixture
+def legacy_project():
+    """An all-legacy page needs a legacy project policy: the page's own handlers
+    (``update_model``) inherit it, and strict became the default in #4189."""
+    from djust.config import config
+
+    previous = config.get("event_parameter_policy", "strict")
+    config.set("event_parameter_policy", "legacy")
+    yield
+    config.set("event_parameter_policy", previous)
+
+
 @pytest.mark.django_db
-def test_all_legacy_page_is_unchanged():
+def test_all_legacy_page_is_unchanged(legacy_project):
     _, html = _get(LegacyPage)
     assert "djust-parameter-contracts" not in html
 
@@ -134,7 +146,9 @@ def test_http_render_responses_carry_the_rendered_snapshot(event, params):
 @pytest.mark.django_db
 @pytest.mark.parametrize("event,params", [("choose", {"value": "7"}), ("quiet", {})])
 @pytest.mark.parametrize("header", [False, True])
-def test_legacy_responses_omit_contracts_unless_the_client_scope_is_strict(event, params, header):
+def test_legacy_responses_omit_contracts_unless_the_client_scope_is_strict(
+    legacy_project, event, params, header
+):
     request, _ = _get(LegacyPage)
     status, body = _post(LegacyPage, request, event, params, header=header)
     assert status == 200, body

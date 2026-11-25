@@ -314,3 +314,41 @@ async def test_first_strict_recovery_requires_later_explicit_clear():
     frame = await rendered(consumer, runtime, transport)
     assert "parameter_contracts" in frame
     assert frame["parameter_contracts"] is None
+
+
+def test_held_recovery_contracts_are_deflated_and_round_trip():
+    """The snapshot lives as long as the connection, once per view; a page of
+    components repeats every handler's metadata per owner, so it is held deflated
+    (the view-memory guide's "view and consumer" row, #4189)."""
+    import json
+    import zlib
+
+    from djust.websocket import LiveViewConsumer
+
+    handler = {"policy": "strict", "coerce_types": True, "parameters": [{"name": "value"}] * 5}
+    contracts = {
+        "version": 1,
+        "owners": [
+            {
+                "view_id": None,
+                "component_id": f"c{i}",
+                "handlers": {f"h{j}": handler for j in range(6)},
+            }
+            for i in range(20)
+        ],
+    }
+    frame = {
+        "type": "patch",
+        "version": 3,
+        "parameter_contracts": contracts,
+        "parameter_contract_view": "x.V",
+    }
+    consumer = LiveViewConsumer.__new__(LiveViewConsumer)
+    consumer._recovery_version = 3
+    consumer._capture_recovery_contracts(frame)
+
+    held = consumer._recovery_contracts
+    assert isinstance(held, bytes)
+    plain = json.dumps({"parameter_contracts": contracts, "parameter_contract_view": "x.V"})
+    assert len(held) < len(plain) / 4
+    assert json.loads(zlib.decompress(held)) == json.loads(plain)

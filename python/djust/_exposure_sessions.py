@@ -235,6 +235,28 @@ def _request_principal(request: Any) -> tuple[str, str]:
     return user_id, tenant_id
 
 
+def principal_digest(session: str, user: str, tenant: str) -> str:
+    """A comparison token for one principal: session, user and tenant (#4175).
+
+    Not a signature or an authorization proof; the inputs are already
+    canonical identifiers (see :class:`StateBinding`).
+    """
+    encoded = json.dumps([session, user, tenant], separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def request_principal_digest(request: Any) -> str:
+    """:func:`principal_digest` of a plain HTTP request (the upload status
+    endpoint, #4175). Raises :class:`ExposureError` as :func:`request_binding`
+    does when the request's principal cannot be derived."""
+    user_id, tenant_id = _request_principal(request)
+    session = getattr(request, "session", None)
+    session_key = getattr(session, "session_key", None)
+    if type(session_key) is not str or not session_key:
+        raise ExposureError("Upload owner check requires an established session")
+    return principal_digest(session_key, user_id, tenant_id)
+
+
 def request_binding(request: Any) -> "StateBinding":
     """Bind an established server session to the current principal and route.
 
@@ -623,6 +645,11 @@ class StateBinding:
                 value.encode("utf-8")
             except UnicodeEncodeError:
                 raise ExposureError("State binding contains an invalid encoding") from None
+
+    @property
+    def principal(self) -> str:
+        """:func:`principal_digest` of this binding's session, user and tenant."""
+        return principal_digest(self.session, self.user, self.tenant)
 
     @property
     def digest(self) -> str:

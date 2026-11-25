@@ -1,40 +1,3 @@
-
-// Track which Counter containers have been initialized to prevent duplicate listeners
-// on each server response. WeakSet entries are GC'd when the container is removed.
-const _initializedCounters = new WeakSet();
-
-// Client-side React Counter component (vanilla JS implementation)
-function initReactCounters() {
-    document.querySelectorAll('[data-react-component="Counter"]').forEach(container => {
-        // Skip containers already initialized — prevents N listeners after N server responses
-        if (_initializedCounters.has(container)) return;
-        _initializedCounters.add(container);
-
-        const propsJson = container.dataset.reactProps;
-        let props = {};
-        try {
-            // `dataset` has already decoded the attribute's entities.
-            props = JSON.parse(propsJson);
-        } catch { }
-
-        let count = props.initialCount || 0;
-        const display = container.querySelector('.counter-display');
-        const minusBtn = container.querySelectorAll('.btn-sm')[0];
-        const plusBtn = container.querySelectorAll('.btn-sm')[1];
-
-        if (display && minusBtn && plusBtn) {
-            minusBtn.addEventListener('click', () => {
-                count--;
-                display.textContent = count;
-            });
-            plusBtn.addEventListener('click', () => {
-                count++;
-                display.textContent = count;
-            });
-        }
-    });
-}
-
 // Smart default rate limiting by input type
 // Prevents VDOM version mismatches from high-frequency events.
 // Click-fired widgets (radio/checkbox/select) commit one value per user
@@ -220,7 +183,6 @@ function parseSingleArgument(value) {
 // re-init hooks) must be attached to the namespace here.
 window.djust = window.djust || {};
 window.djust.parseEventHandler = parseEventHandler;
-window.djust.initReactCounters = initReactCounters;
 
 /**
  * Extract parameters from element data-* attributes with optional type coercion.

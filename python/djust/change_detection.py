@@ -575,6 +575,7 @@ CHANGE_DETECTION_IGNORED: frozenset = frozenset(
         "_djust_slot_target",
         # The HTTP fallback's per-render child id counter (``_assign_view_id``).
         "_render_child_ids",
+        "_render_assigned_ids",
         # The SSE transport's stream id (``on_view_mounted``), the twin of
         # ``_websocket_session_id`` (#3248 review).
         "_sse_session_id",

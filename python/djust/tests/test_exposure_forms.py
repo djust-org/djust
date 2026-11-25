@@ -15,6 +15,7 @@ the real HTTP POST fallback. The Rust renderer has no handler for the
 ``{% live_form %}`` family, so templates use plain variables.
 """
 
+from typing import Any
 import contextlib
 import json
 import re
@@ -538,7 +539,7 @@ class ExplicitRecheckView(ModelFormMixin, LiveView):
         return True
 
     @event_handler()
-    def touch(self, change="", other=None, **kwargs):
+    def touch(self, change: str = "", other: Any = None, **kwargs):
         """Declared read-only (so it reuses), and changes the record as asked: the NEXT
         read-only event must see the change and check the record in full."""
         obj = self.object

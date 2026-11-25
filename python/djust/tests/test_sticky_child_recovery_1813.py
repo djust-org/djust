@@ -66,7 +66,7 @@ class NotificationsView(LiveView):
     def mount(self, request, **kwargs):
         self.notifications = [{"id": 1, "text": "a"}, {"id": 2, "text": "b"}]
 
-    @event_handler()
+    @event_handler(parameter_policy="legacy")  # legacy params until #4192-#4198 (#4189)
     def dismiss(self, id="", **kwargs):
         try:
             t = int(id)

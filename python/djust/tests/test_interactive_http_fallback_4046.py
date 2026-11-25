@@ -971,7 +971,9 @@ def test_a_tampered_record_rejects_the_whole_envelope(routes, change):
 
 
 @pytest.mark.django_db(transaction=True)
-def test_component_records_over_the_limit_are_left_out_without_an_error_loop(routes, caplog):
+def test_component_records_over_the_limit_are_left_out_without_an_error_loop(
+    routes, caplog, legacy_project_policy
+):
     page = FallbackPage("/huge/")
     key = page.client.session.session_key
     assert _envelope(key)["rows"] is None

@@ -5,15 +5,19 @@ carry the restriction across async and sync_to_async work without sharing it
 with another request, connection or sibling mount.
 """
 
+import logging
+import sys
 import weakref
 from contextlib import contextmanager
 from contextvars import ContextVar
 from functools import wraps
-from typing import Any, Awaitable, Callable, Iterator, TypeVar
+from typing import Any, Awaitable, Callable, Iterator, Optional, TypeVar
 
 from ._exposure import ExposureError, states_exposure_policy, uses_legacy_exposure
 
 PROTECTED_FAILURE = "Protected view operation failed"
+
+_log = logging.getLogger(__name__)
 
 _T = TypeVar("_T")
 
@@ -132,6 +136,55 @@ def diagnostics_allowed() -> bool:
     return _details_allowed.get() is True
 
 
+def server_exception_detail_enabled() -> bool:
+    """Whether ``LIVEVIEW_CONFIG["log_exception_detail"]`` is on (#4180).
+
+    The opt-in reaches server sinks only: log records and the
+    ``got_request_exception`` signal read by error trackers. It never grants
+    details to a client frame or an HTTP response, so
+    :func:`diagnostics_allowed` and :func:`exception_details_allowed_for` do
+    not consult it. An unreadable config reads as off.
+    """
+    try:
+        from .config import get_config
+
+        return get_config().get("log_exception_detail", False) is True
+    except Exception:  # noqa: BLE001 — an unreadable config grants nothing
+        return False
+
+
+def send_request_exception(exc: BaseException, request: Any = None) -> None:
+    """Send ``got_request_exception`` while ``exc`` is the handled exception.
+
+    Receivers (Sentry's, for one) read ``sys.exc_info()``. WebSocket and SSE
+    turns have no Django request, so ``request`` is ``None`` there. A failing
+    receiver is logged with static text and never breaks the error path.
+
+    Receivers run inline, as Django runs them for a request; on the WebSocket
+    and SSE that is the event loop, so a receiver must be quick (an error
+    tracker's, which queues the event, is). Re-raising ``exc`` to make it the
+    handled exception leaves its context and traceback as they were.
+    """
+    from django.core.signals import got_request_exception
+
+    try:
+        if sys.exc_info()[1] is exc:
+            got_request_exception.send(sender=None, request=request)
+        else:
+            context, cause = exc.__context__, exc.__cause__
+            suppress, traceback = exc.__suppress_context__, exc.__traceback__
+            try:
+                raise exc
+            except type(exc):
+                got_request_exception.send(sender=None, request=request)
+            finally:
+                exc.__context__, exc.__cause__ = context, cause
+                exc.__suppress_context__ = suppress
+                exc.__traceback__ = traceback
+    except Exception:  # noqa: BLE001 — a broken receiver must not break the error path
+        _log.warning("got_request_exception receiver failed")
+
+
 def log_failure(
     log: Any,
     exc: BaseException,
@@ -146,11 +199,13 @@ def log_failure(
     call does not consult ``diagnostics_allowed()``, and undeclared state can
     occur in an exception's message and traceback. ``msg``/``args``/``level`` are
     what the call site passed to its logger and ``traceback=True`` stands for
-    ``logger.exception``, so output is unchanged wherever details are allowed.
+    ``logger.exception``, so output is unchanged wherever details are allowed,
+    or when ``LIVEVIEW_CONFIG['log_exception_detail']`` is on (server log only,
+    #4180).
     """
     from ._exposure import ExposureConfigurationError
 
-    if diagnostics_allowed():
+    if diagnostics_allowed() or server_exception_detail_enabled():
         getattr(log, level)(msg, *args, exc_info=exc if traceback else None)
     elif isinstance(exc, ExposureConfigurationError):
         # Framework-authored and value-free (``protected_http_outcome`` lets
@@ -252,7 +307,12 @@ def protected_http_outcome(exc: BaseException) -> str:
     return "server_error"
 
 
-def protected_server_error(request: Any, log: Any, outcome: str = "server_error") -> Any:
+def protected_server_error(
+    request: Any,
+    log: Any,
+    outcome: str = "server_error",
+    exc: Optional[BaseException] = None,
+) -> Any:
     """ADR-038 D-a: the HTTP/SSE response for a nonlegacy owner's failure.
 
     Call it after the failing ``except`` block has exited. It logs a static
@@ -263,14 +323,24 @@ def protected_server_error(request: Any, log: Any, outcome: str = "server_error"
     which shows the exception and its frames' locals, is never rendered. An
     ``outcome`` of ``"bad_request"`` (see :func:`protected_http_outcome`)
     returns a plain 400 instead, without the signal, as Django does.
+
+    ``exc`` is passed only under ``LIVEVIEW_CONFIG["log_exception_detail"]``
+    (#4180): the log line then carries the traceback, and the signal is sent
+    with the real exception. The response stays generic either way.
     """
     from django.core.signals import got_request_exception
     from django.http import HttpResponseBadRequest
 
-    log.error(PROTECTED_FAILURE)
+    if exc is not None:
+        log.error("%s", PROTECTED_FAILURE, exc_info=(type(exc), exc, exc.__traceback__))
+    else:
+        log.error(PROTECTED_FAILURE)
     if outcome == "bad_request":
         # Django sends no signal for a 400 either.
         return HttpResponseBadRequest("<h1>Bad Request (400)</h1>", content_type="text/html")
+    if exc is not None:
+        send_request_exception(exc, request)
+        return _generic_server_error(request, log)
     try:
         raise ExposureError(PROTECTED_FAILURE) from None
     except ExposureError:

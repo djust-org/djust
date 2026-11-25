@@ -652,7 +652,6 @@ fn node_is_element_bearing(node: &Node) -> bool {
         | Node::PartialCall { .. }
         | Node::PartialDef { .. }
         | Node::Include { .. }
-        | Node::ReactComponent { .. }
         | Node::CustomTag { .. }
         | Node::BlockCustomTag { .. }
         | Node::RawBlockCustomTag { .. }
@@ -4796,69 +4795,6 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             }
         }
 
-        Node::ReactComponent {
-            name,
-            props,
-            children,
-        } => {
-            // Render React component as data attributes for client-side hydration
-            let mut output = R::default();
-            output.push_str(&format!("<div data-react-component=\"{name}\""));
-
-            // Add props as data attributes
-            if !props.is_empty() {
-                output.push_str(" data-react-props='");
-                let props_json: Vec<String> = props
-                    .iter()
-                    .map(|(k, v)| {
-                        // Resolve Django template variable syntax: {{ var.path }}
-                        let resolved_value = if v.starts_with("{{") && v.ends_with("}}") {
-                            // Extract variable name from {{ ... }}
-                            let var_name = v.trim_start_matches("{{").trim_end_matches("}}").trim();
-
-                            // Try to resolve from context
-                            if let Some(ctx_value) = context.get(var_name) {
-                                ctx_value.to_string()
-                            } else {
-                                // Keep the original template syntax for Python-side resolution
-                                v.clone()
-                            }
-                        } else if let Some(ctx_value) = context.get(v) {
-                            // Direct variable reference (no {{ }})
-                            ctx_value.to_string()
-                        } else {
-                            v.clone()
-                        };
-                        // serde_json escapes backslashes and control
-                        // characters, not just `"`.
-                        format!(
-                            "{}:{}",
-                            serde_json::Value::String(k.clone()),
-                            serde_json::Value::String(resolved_value)
-                        )
-                    })
-                    .collect();
-                // The attribute is single-quoted: escape `'` along with the
-                // rest, or a prop value can close it. Readers see the JSON
-                // again after entity decoding (`dataset`, `html.unescape`).
-                output.push_str(&filters::html_escape_attr(&format!(
-                    "{{{}}}",
-                    props_json.join(",")
-                )));
-                output.push_str("'");
-            }
-
-            output.push_str(">");
-
-            // Render children
-            for child in children {
-                output.append(&render_node_output::<L, R>(child, context, loader)?);
-            }
-
-            output.push_str("</div>");
-            Ok(output)
-        }
-
         Node::CsrfToken => {
             // Render CSRF token hidden input if a real token is available.
             // When no token is in context (e.g., LiveView re-render without
@@ -7853,25 +7789,6 @@ mod tests {
         context.set("name".to_string(), Value::String("World".to_string()));
         let result = render_nodes(&nodes, &context).unwrap();
         assert_eq!(result, "World");
-    }
-
-    /// React props are JSON inside a single-quoted attribute: the JSON is
-    /// built by an encoder and the whole value is entity-escaped.
-    #[test]
-    fn react_component_props_are_encoded_json_in_an_escaped_attribute() {
-        let tokens = tokenize(r#"<Greeting who="{{ name }}" />"#).unwrap();
-        let nodes = parse(&tokens).unwrap();
-        let mut context = Context::new();
-        context.set(
-            "name".to_string(),
-            Value::String("it's \"q\" <b> a\\b\n".to_string()),
-        );
-        let result = render_nodes(&nodes, &context).unwrap();
-        assert_eq!(
-            result,
-            "<div data-react-component=\"Greeting\" data-react-props='{&quot;who&quot;:\
-             &quot;it&#x27;s \\&quot;q\\&quot; &lt;b&gt; a\\\\b\\n&quot;}'></div>"
-        );
     }
 
     #[test]

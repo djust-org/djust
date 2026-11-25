@@ -352,7 +352,7 @@ def select_service(self, service_id: str):
 Key rules:
 
 1. **`@event_handler` is required** — without it, the method won't be discoverable as an event handler
-2. **Declare what the binding sends, with annotations** — the signature is the event's contract (the strict parameter policy, `LIVEVIEW_CONFIG = {"event_parameter_policy": "strict"}`, set up in [Installation](../getting-started/installation.md#3-configure-django); see [Typed event parameters](../core-concepts/events.md#typed-event-parameters-strict-policy)). The browser sends `value`, `field` and form fields only to a handler that declares them, so no `**kwargs` is needed. `manage.py check` reports a binding its handler would reject (`djust.T020`)
+2. **Declare what the binding sends, with annotations** — the signature is the event's contract (the strict parameter policy, the default since djust 2.0; see [Typed event parameters](../core-concepts/events.md#typed-event-parameters-strict-policy)). The browser sends `value`, `field` and form fields only to a handler that declares them, so no `**kwargs` is needed. `manage.py check` reports a binding its handler would reject (`djust.T020`)
 3. **Give defaults only where a binding may omit a parameter** — a default added just to survive a malformed event hides a bug
 4. **Use `value` for input/change events** — `dj-input` and `dj-change` send the input value as `value`
 

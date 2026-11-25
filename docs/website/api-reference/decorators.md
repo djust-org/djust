@@ -307,6 +307,17 @@ def cancel_operation(self):
     self.cancel_async("long_operation")
 ```
 
+**Work that must finish: `@background(survive_disconnect=True)`**
+
+By default the work is cancelled when the connection closes. With `survive_disconnect=True` it runs to completion after the user disconnects or navigates away (#4182); its result is then discarded, and setting declared state, `push_event()` or scheduling more work on the disposed view raises `ViewDisposedError`. `@background` and `@background()` keep the default. See [Work that must finish](../guides/loading-states.md#work-that-must-finish-survive_disconnecttrue).
+
+```python
+@event_handler
+@background(survive_disconnect=True)
+def charge(self, order_id: int = 0):
+    Payment.objects.charge(order_id)
+```
+
 **Combining with other decorators:**
 
 ```python

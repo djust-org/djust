@@ -622,7 +622,13 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     ),
     (
         "runtime.py",
-        "ViewRuntime._dispatch_sticky_child_event",
+        "ViewRuntime._run_child_event",
+        "render_embedded_child_html",
+    ): plumbing(_RENDER, _GET_TEMPLATE),
+    # #4181: a carried sticky child re-rendered after the navigation's mount frame.
+    (
+        "runtime.py",
+        "ViewRuntime._dispatch_mount_body",
         "render_embedded_child_html",
     ): plumbing(_RENDER, _GET_TEMPLATE),
     (
@@ -647,10 +653,8 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     ): plumbing(_STATE),
     ("runtime.py", "ViewRuntime._dispatch_mount_body", "render_view_with_diff"): plumbing(_RENDER),
     ("runtime.py", "ViewRuntime._dispatch_mount_body", "mount_frame_metadata"): plumbing(_RENDER),
-    ("runtime.py", "ViewRuntime._dispatch_sticky_child_event", "resolve_explicit_child"): plumbing(
-        _STATE
-    ),
-    ("runtime.py", "ViewRuntime._dispatch_sticky_child_event", "enforce_object_permission"): leaf(),
+    ("runtime.py", "ViewRuntime._run_child_event", "resolve_explicit_child"): plumbing(_STATE),
+    ("runtime.py", "ViewRuntime._run_child_event", "enforce_object_permission"): leaf(),
     ("runtime.py", "ViewRuntime._dispatch_url_change_inner", "enforce_object_permission"): leaf(),
     (
         "runtime.py",
@@ -985,7 +989,6 @@ HOOKS: Dict[str, str] = {
         "the view's own selection and reuse checks in the thread of the check that asked; it "
         "reads view state (its docstring says not to query) and no thread hand-off names it"
     ),
-    "ReactMixin.get_react_components": "unwrapped:not-threaded:no framework code calls it (render_react_component is an app helper), so it runs wherever the app calls it; the step is whatever that is",
     # ---- the data table ----
     "DataTableMixin.handle_cell_edit": (
         "inside:event@components/mixins/data_table.py::DataTableMixin.on_table_cell_edit"

@@ -1,11 +1,11 @@
-"""djust event parameter contract checks, ``djust.V016``, ``V018`` and ``V031`` (ADR-036).
+"""djust event parameter contract checks, ``djust.V016``, ``V018``, ``V031`` and ``V033`` (ADR-036).
 
 A strict-policy handler's declaration problems surface at startup instead of
 on the first event. Each check calls the runtime's own resolvers
 (``get_handler_parameter_policy`` and ``get_strict_handler_contract``) on the
 same bound shape dispatch uses, so the check and the runtime share one cached
-contract and cannot disagree. Legacy-policy handlers are never reported:
-legacy is the default and its behavior is unchanged. The project-level policy
+contract and cannot disagree. A legacy-policy handler is compiled as strict only
+to report, as ``djust.V033``, what the strict policy would refuse. The project-level policy
 value is ``djust.C022`` in ``configuration.py``. V016 also covers ADR-034
 output-subscription callbacks, whose payload is bound by the same strict
 contract with the source component as trusted framework context. Handlers
@@ -27,6 +27,7 @@ from typing import Any, Callable, Optional
 
 from django.core.checks import CheckMessage, register
 
+from djust._framework_code import is_djust_module
 from djust.checks.utils import (
     DjustError,
     DjustWarning,
@@ -69,6 +70,30 @@ def _explicit_param_names(function: Any) -> Optional[list[str]]:
     return list(names) if names is not None and list(names) != derived else None
 
 
+def _v033(label: str, function: Any, exc: Exception, inherited: bool) -> CheckMessage:
+    """The one constructor of ``djust.V033`` (#4190): a legacy handler strict would refuse."""
+    from djust._removed_settings import MIGRATION_GUIDE_URL
+
+    file_path, line_number = _location(function)
+    where = (
+        "LIVEVIEW_CONFIG['event_parameter_policy']" if inherited else "parameter_policy='legacy'"
+    )
+    return DjustWarning(
+        "%s: runs under the legacy parameter policy, and strict dispatch, the only policy in "
+        "djust 2.0.0, would refuse every call to it: %s" % (label, exc),
+        hint=(
+            "Annotate every parameter with str, int, float, bool, Decimal, UUID, date, "
+            "Optional[T], list[T], dict[str, T] or Any, and rename a parameter that starts with "
+            "'_' or is named view_id or component_id. Then delete %s. See %s"
+            % (where, MIGRATION_GUIDE_URL)
+        ),
+        id="djust.V033",
+        fix_hint="Make the signature of `%s` valid under the strict policy." % label,
+        file_path=file_path,
+        line_number=line_number,
+    )
+
+
 def _handler_messages(
     cls: type,
     name: str,
@@ -103,6 +128,15 @@ def _handler_messages(
     try:
         policy = get_handler_parameter_policy(function)
         if policy != "strict":
+            if (
+                first_report
+                and not _is_check_suppressed("djust.V033")
+                and not is_djust_module(getattr(cls, "__module__", "") or "")
+            ):
+                try:
+                    get_strict_handler_contract(_bound(member, function, cls))
+                except ContractError as exc:
+                    messages.append(_v033(label, function, exc, own_policy is None))
             return messages
         handler = _bound(member, function, cls)
         contract = get_strict_handler_contract(handler)
@@ -316,8 +350,9 @@ def _v031(
                 "list of str for a checkbox group or a multiple select) and "
                 "data_attrs the container's data-* attributes. Declare only the "
                 "one you use; the browser sends only declared names. The handler "
-                "needs the strict policy (parameter_policy='strict', or "
-                "event_parameter_policy='strict' for the project)." % (name, _RECOVERY_SIGNATURE)
+                "needs the strict policy, the default: remove parameter_policy='legacy' "
+                "from it and the event_parameter_policy key from LIVEVIEW_CONFIG."
+                % (name, _RECOVERY_SIGNATURE)
             ),
             id="djust.V031",
             fix_hint="Replace %s with `%s` on `%s`."
@@ -350,11 +385,12 @@ def _v031(
         % (label, target, " / ".join(p.name for p in parameters)),
         hint=(
             "Recovery values arrive as declared parameters only under the strict "
-            "policy. Add parameter_policy='strict' to the handler's @event_handler, "
-            "or set LIVEVIEW_CONFIG['event_parameter_policy'] = 'strict'."
+            "policy, the default. Remove parameter_policy='legacy' from the handler's "
+            "@event_handler, and the event_parameter_policy key from LIVEVIEW_CONFIG."
         ),
         id="djust.V031",
-        fix_hint='Add `parameter_policy="strict"` to the `@event_handler` on `%s`.' % label,
+        fix_hint='Remove `parameter_policy="legacy"` (or the `event_parameter_policy` key) for `%s`.'
+        % label,
         file_path=file_path,
         line_number=line_number,
     )

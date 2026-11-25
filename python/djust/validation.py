@@ -77,7 +77,7 @@ def get_project_parameter_policy() -> str:
     from .config import config
     from ._parameter_contract import ContractError
 
-    policy = config.get("event_parameter_policy", "legacy")
+    policy = config.get("event_parameter_policy", "strict")
     if policy not in ("legacy", "strict"):
         raise ContractError("event_parameter_policy must be 'legacy' or 'strict'.")
     return str(policy)
@@ -259,6 +259,23 @@ def bind_declared_component_name(handler: Callable, params: Any) -> tuple[Any, D
     return remaining, {ROUTED_COMPONENT_PARAMETER: target}
 
 
+def _flat_arguments(bound: Any) -> Dict[str, Any]:
+    """``bound.arguments`` with a ``**kwargs`` parameter's entries spread into
+    the mapping, the shape legacy ``coerced_params`` always had: the params the
+    handler received by name, which waiters and hooks are handed (``{"a": 1}``,
+    not ``{"kwargs": {"a": 1}}``)."""
+    flat: Dict[str, Any] = {}
+    parameters = bound.signature.parameters
+    for name, value in bound.arguments.items():
+        if parameters[name].kind is inspect.Parameter.VAR_KEYWORD:
+            flat.update(value)
+        elif parameters[name].kind is inspect.Parameter.VAR_POSITIONAL:
+            continue
+        else:
+            flat[name] = value
+    return flat
+
+
 def _validate_strict_handler_params(
     handler: Callable, params: Dict[str, Any], coerce: bool, positional_args: Any
 ) -> Dict[str, Any]:
@@ -313,9 +330,9 @@ def _validate_strict_handler_params(
         "valid": True,
         "error": None,
         "expected": expected,
-        "provided": list(bound.arguments),
+        "provided": list(_flat_arguments(bound)),
         "type_errors": None,
-        "coerced_params": dict(bound.arguments),
+        "coerced_params": _flat_arguments(bound),
         "bound_arguments": bound,
     }
 

@@ -47,7 +47,10 @@ class ObservabilityLogHandler(logging.Handler):
         # Attach exception info when present.
         if record.exc_info:
             entry["exc_type"] = record.exc_info[0].__name__ if record.exc_info[0] else None
-            entry["exc_message"] = str(record.exc_info[1]) if record.exc_info[1] else None
+            try:
+                entry["exc_message"] = str(record.exc_info[1]) if record.exc_info[1] else None
+            except Exception:  # noqa: BLE001 — a raising __str__ must not break logging
+                entry["exc_message"] = "<unprintable exception>"
 
         with _lock:
             _buffer.append(entry)

@@ -143,11 +143,11 @@ class KanbanTabsView(LiveView):
 
     # --- event handlers ---
 
-    @event_handler
+    @event_handler(parameter_policy="legacy")  # legacy params until #4192-#4198 (#4189)
     def switch_tab(self, tab):
         self.active_tab = int(tab)
 
-    @event_handler
+    @event_handler(parameter_policy="legacy")  # legacy params until #4192-#4198 (#4189)
     def move_card(self, card_id, to_column, to_index=0):
         """Move a card to ``to_column`` at ``to_index`` (cross-column move).
 

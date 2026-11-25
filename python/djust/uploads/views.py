@@ -15,6 +15,9 @@ Access control:
 2. The state entry's ``session_key`` must match the requester's session
    — we return ``404`` on mismatch so cross-user probes can't detect
    whether an ``upload_id`` exists.
+3. An upload an explicit view registered (#4175) also records its owner's
+   principal (session, user, tenant): the requester's must match, or the
+   answer is the same ``404``.
 
 Wire the view up via ``django.urls.path``::
 
@@ -127,6 +130,19 @@ class UploadStatusView(View):
         if stored_session is None or stored_session != session_key:
             # Cross-session probe — same response as missing.
             return _not_found_response()
+
+        owner = entry.get("owner")
+        if owner is not None:
+            # An explicit view's upload (#4175): another user or tenant in the
+            # same session is refused as a missing id is.
+            try:
+                from .._exposure_sessions import request_principal_digest
+
+                principal = request_principal_digest(request)
+            except Exception:  # noqa: BLE001 — an underivable principal owns nothing
+                return _not_found_response()
+            if not isinstance(owner, dict) or owner.get("principal") != principal:
+                return _not_found_response()
 
         payload = {
             "upload_id": entry.get("upload_id", upload_id),

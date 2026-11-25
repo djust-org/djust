@@ -149,7 +149,7 @@ view ≈ 41 KB + P × page_bytes + S × state_bytes
 
 Two shortcuts that follow from it:
 
-- a page of static markup with a few values: **41 KB + 13.6 × page_bytes**. A 50 KB page is about 0.76 MB per view;
+- a page of static markup with a few values: **41 KB + 13.6 × page_bytes**. A 50 KB page is about 0.77 MB per view;
 - a table whose rows are all in state: **about 5.0 KB per row**. 500 rows (a 56 KB page) is about 2.6 MB per view, 1,000 rows about 5.2 MB.
 
 <!-- view-memory: base_kb=41 static_page=13.6 table_page=28 state=5.1 row_kb=5.0 static_total=13.6 -->
@@ -162,12 +162,12 @@ Two shortcuts that follow from it:
 | Rust: copy of the state | 1,810 | 1,810 | 1,207,514 | 8,547 | 4,447 |
 | Rust: text-node index | 217 | 67,167 | 403,889 | 5,015 | 294 |
 | Rust: last HTML, per-node HTML cache, loop cache, fragment map | 464 | 100,464 | 377,033 | 3,494 | 1,030 |
-| Python: the view's state | 11,571 | 11,527 | 398,309 | 29,166 | 18,585 |
-| Python: change-detection fingerprints | 1,310 | 1,310 | 369,968 | 9,762 | 3,698 |
+| Python: the view's state | 11,588 | 11,544 | 398,326 | 29,324 | 18,602 |
+| Python: change-detection fingerprints | 1,298 | 1,298 | 369,964 | 9,750 | 3,682 |
 | Python: recovery HTML | 116 | 53,007 | 112,919 | 1,993 | 312 |
-| Python: view and consumer, everything else | 22,670 | 22,512 | 32,412 | 22,102 | 23,447 |
-| Rust: everything else | 3,623 | 3,623 | 3,623 | 5,861 | 3,623 |
-| **Total** | **42 KB** | **0.76 MB** | **5.2 MB** | **118 KB** | **58 KB** |
+| Python: view and consumer, everything else | 25,246 | 25,099 | 35,016 | 24,275 | 26,083 |
+| Rust: everything else | 3,251 | 3,251 | 3,251 | 5,489 | 3,251 |
+| **Total** | **45 KB** | **0.77 MB** | **5.2 MB** | **120 KB** | **60 KB** |
 
 Read it this way:
 
@@ -185,7 +185,7 @@ These are counted bytes. What the allocator takes for them is higher: block roun
 
 - **Render less of the list.** Memory follows the rows in state and the nodes on the page. Paginate, or follow [Large lists](large-lists.md): streams and `temporary_assigns` keep the rows out of the view's state.
 - **Keep large data out of state.** Plain data the view holds and renders costs about five times its Python size. Hold an id and query on demand.
-- **Budget sockets per process from the formula.** At 0.76 MB a view, 1,000 open sockets of a 50 KB page are about 0.8 GB before the allocator's share; at 5 MB a view the same thousand need 5 GB, which is a reason to change the page, not the pod. `worker_threads` does not change this number: it sets how many turns run at once, not what a parked socket holds.
+- **Budget sockets per process from the formula.** At 0.77 MB a view, 1,000 open sockets of a 50 KB page are about 0.8 GB before the allocator's share; at 5 MB a view the same thousand need 5 GB, which is a reason to change the page, not the pod. `worker_threads` does not change this number: it sets how many turns run at once, not what a parked socket holds.
 - **A list over the fingerprint budget** (20,000 nodes, about 1,500 rows of five fields) holds no fingerprint at all and is re-sent to the renderer on every turn instead. It costs less memory and more CPU per event; the framework logs it once per view class.
 
 There is no built-in per-view memory limit or warning in 2.0. A view can report its own Rust side with `self._rust_view.retained_bytes()` if you want to sample it in your own metrics: a dict of byte counts and node counts per owner, with no addresses or content in it.

@@ -302,7 +302,10 @@ def _unload(module: types.ModuleType) -> None:
 
 @pytest.fixture
 def fixture_module(tmp_path):
-    old_policy = config.get("event_parameter_policy", "legacy")
+    old_policy = config.get("event_parameter_policy", "strict")
+    # This module's subject is the policy interplay: its unannotated handlers
+    # inherit a legacy project policy until a test sets another (#4189).
+    config.set("event_parameter_policy", "legacy")
     module = _load(tmp_path)
     try:
         yield module
@@ -325,6 +328,10 @@ def _messages(module: types.ModuleType) -> dict[str, list[tuple[str, str]]]:
     """This module's messages, keyed by the owner-qualified handler label."""
     found: dict[str, list[tuple[str, str]]] = {}
     for message in check_event_parameter_contracts(None):
+        # V033 (a legacy handler strict would refuse) has its own tests, in
+        # test_upgrade_checks_4190.py.
+        if message.id == "djust.V033":
+            continue
         if message.msg.startswith(MODULE + "."):
             label, _, tail = message.msg.partition(": ")
             found.setdefault(label, []).append((message.id, tail))
@@ -392,6 +399,10 @@ def test_project_strict_policy_reports_inheriting_handlers_but_not_legacy_overri
 
 
 def test_invalid_project_policy_is_one_configuration_error(fixture_module):
+    # check_configuration imports djust.presence lazily, and an @event_handler
+    # resolves the project policy when it is decorated (#4189): import it first.
+    import djust.presence  # noqa: F401
+
     config.set("event_parameter_policy", "Strict")
     c022 = [m for m in check_configuration(None) if m.id == "djust.C022"]
     assert [m.msg for m in c022] == [

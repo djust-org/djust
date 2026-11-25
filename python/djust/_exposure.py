@@ -122,6 +122,7 @@ RESERVED_STATE_NAMES: frozenset[str] = frozenset(
         "page_title",
         "params_form",
         "params_form_fallback",
+        "sw_cacheable",
         "permission_required",
         "query_budget",
         "room_clock",
@@ -429,21 +430,33 @@ def uses_legacy_exposure(view: Any) -> bool:
         return False
 
 
+def _sw_cacheable_node(view: Any) -> bool:
+    """One view's own eligibility: a legacy view (until the legacy arm goes), or a
+    view whose class sets ``sw_cacheable = True`` (#4176). Fails closed."""
+    if uses_legacy_exposure(view):
+        return True
+    cls = view if isinstance(view, type) else type(view)
+    try:
+        return getattr(cls, "sw_cacheable", False) is True
+    except Exception:  # noqa: BLE001 — an unreadable class attribute cannot opt in
+        return False
+
+
 def service_worker_cache_eligible(view: Any) -> bool:
     """Whether a page's HTML may be written to the worker's VDOM/shell caches.
 
-    ADR-038 D-b: only a legacy view whose registered children are all legacy
-    is eligible. The rendered HTML includes every child, so one nonlegacy
-    child makes the page ineligible. Unreadable children fail closed.
+    ADR-038 D-b, #4176: the page and every registered child must each be
+    eligible (``_sw_cacheable_node``); the rendered HTML includes every child.
+    Unreadable children fail closed.
     """
-    if not uses_legacy_exposure(view):
+    if not _sw_cacheable_node(view):
         return False
     getter = getattr(view, "_get_all_child_views", None)
     if getter is None:
         return True
     try:
         children = getter()
-        return all(uses_legacy_exposure(child) for child in dict(children).values())
+        return all(_sw_cacheable_node(child) for child in dict(children).values())
     except Exception:  # noqa: BLE001 — unknown children cannot prove eligibility
         return False
 

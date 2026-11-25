@@ -325,6 +325,7 @@ def test_the_handler_signature_is_computed_once_per_function(monkeypatch):
         return real(obj, *a, **k)
 
     class _V:
+        @event_handler(parameter_policy="legacy")  # legacy params until #4192-#4198 (#4189)
         def handler(self, amount: int = 0, **kwargs):
             pass
 
@@ -520,7 +521,11 @@ def test_type_hints_are_resolved_once_and_failures_are_not_cached(monkeypatch):
     assert len(calls) == 2
 
 
-def test_the_near_miss_warning_still_fires_once_with_the_fast_key_path(caplog):
+def test_the_near_miss_warning_still_fires_once_with_the_fast_key_path(
+    caplog, legacy_project_policy
+):
+    # The near-miss warning belongs to the legacy binder (#2144); strict
+    # sends only generated keys, so it has no silent-mismatch to report.
     from djust import validation
 
     class _V:

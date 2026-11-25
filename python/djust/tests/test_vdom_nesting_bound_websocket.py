@@ -50,7 +50,7 @@ class _DeepView(LiveView):
         self.body = ""
         self.n = 0
 
-    @event_handler()
+    @event_handler(parameter_policy="legacy")  # legacy params until #4192-#4198 (#4189)
     def deep(self, kind="spans", **kwargs):
         self.n += 1
         self.body = _body(kind, str(self.n))

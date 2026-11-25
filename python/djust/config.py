@@ -38,7 +38,7 @@ _STATUS_MAP_KEY = "http_status_of_state"
 #: Every key whose written value is sanitized, so what a reload replays is what is stored (#3858).
 #: On/off switches whose value must be a real ``bool`` (train/2.0-ai review N1): ``bool("false")``
 #: is ``True``, so a kill-switch read from an environment variable would silently stay on.
-_BOOL_SWITCH_KEYS = ("state_models_as_handles",)
+_BOOL_SWITCH_KEYS = ("state_models_as_handles", "log_exception_detail")
 _FALSE_SPELLINGS = frozenset({"false", "0", "no", "off"})
 _TRUE_SPELLINGS = frozenset({"true", "1", "yes", "on"})
 _SANITIZED_KEYS = _FORM_LIMIT_KEYS + (_STATUS_MAP_KEY,) + _BOOL_SWITCH_KEYS
@@ -178,8 +178,9 @@ class LiveViewConfig:
         # ``event_security`` was removed in 2.0 (#4101): only @event_handler
         # methods are client events, on every transport. "open" / "warn" fail
         # startup (``djust._removed_settings``); "strict" is accepted and ignored.
-        # ADR-036: opt-in predictable signature binding and bounded conversion.
-        "event_parameter_policy": "legacy",
+        # ADR-036: strict event parameters, the default since 2.0 (#4189). "legacy" is
+        # deprecated and removed before 2.0.0 (#4199).
+        "event_parameter_policy": "strict",
         # LiveView transport mode
         "use_websocket": True,  # Set to False to use HTTP polling instead of WebSocket
         # WebSocket per-message compression advisory flag (v0.6.0).
@@ -338,6 +339,12 @@ class LiveViewConfig:
         # (a filtered rebinding of one then renders empty on an explicit view,
         # and a custom filter or tag is handed a ``dict``).
         "state_models_as_handles": True,
+        # Keep exception text and tracebacks of an explicit view's failures in
+        # production server logs and fire Django's ``got_request_exception``
+        # (error trackers such as Sentry) on every transport (#4180). Server log
+        # and error-tracker sinks only: client frames and HTTP responses stay
+        # generic either way. Off by default.
+        "log_exception_detail": False,
         # Seconds one page-POST fallback request waits, in total, for the
         # ``start_async`` / ``@background`` work it runs before answering
         # (#3634). ``None`` (default) = no deadline: a task that does not return

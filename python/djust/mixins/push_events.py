@@ -15,6 +15,8 @@ execution — see ADR-002 Phase 1a.
 
 from typing import TYPE_CHECKING, Any, Dict, List, Tuple
 
+from .._surviving_work import refuse_if_disposed
+
 if TYPE_CHECKING:
     from djust.js import JSChain
 
@@ -50,6 +52,7 @@ class PushEventMixin:
                 self.push_event("flash", {"message": "Saved!", "type": "success"})
                 self.push_event("scroll_to", {"selector": "#result"})
         """
+        refuse_if_disposed(self, "push events")
         if payload is None:
             payload = {}
         self._pending_push_events.append((event, payload))

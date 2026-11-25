@@ -25,7 +25,7 @@ class ImageLightbox(Component):
     first image sends ``-1``) and ignore anything that is not an integer::
 
         @event_handler()
-        def lightbox_navigate(self, value=0, **kwargs):
+        def lightbox_navigate(self, value: int = 0, **kwargs):
             try:
                 self.active = max(0, min(int(value), len(self.images) - 1))
             except (TypeError, ValueError):

@@ -34,7 +34,7 @@ class DeferredLegacy(LiveView):
     def get_context_data(self, **kwargs):
         return super().get_context_data(count=self.count, label=self.label, **kwargs)
 
-    @event_handler()
+    @event_handler(parameter_policy="legacy")  # legacy params until #4192-#4198 (#4189)
     def change(self, quiet=False, **kwargs):
         self.count += 1
         self.label = "updated"

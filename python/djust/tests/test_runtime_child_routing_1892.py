@@ -223,7 +223,9 @@ class TestRuntimeStickyChildRouting:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("removed", [False, True])
     @pytest.mark.parametrize("strict", [False, True])
-    async def test_background_work_belongs_to_selected_child(self, monkeypatch, removed, strict):
+    async def test_background_work_belongs_to_selected_child(
+        self, monkeypatch, removed, strict, legacy_project_policy
+    ):
         import asyncio
 
         parent, child = _make_sticky_parent()

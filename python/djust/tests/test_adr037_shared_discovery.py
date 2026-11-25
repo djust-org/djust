@@ -159,7 +159,7 @@ def test_class_discovery_equals_dispatch_on_an_instance(collect):
             pass
 
         @staticmethod
-        @event_handler
+        @event_handler(parameter_policy="legacy")  # legacy params until #4192-#4198 (#4189)
         def static(self_less=None):
             pass
 

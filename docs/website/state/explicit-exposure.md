@@ -249,6 +249,10 @@ token = state("", persist="server", render=False)  # handlers only, never templa
   technical 500 page, detailed error frames and dev overlay, and full log lines.
   With `DEBUG = False` it is value-free: a generic 500 page or error frame and
   a static log line. The debug panel always shows redacted values.
+  To keep exception text and tracebacks in production server logs and error
+  trackers (Sentry's `got_request_exception`), set
+  `LIVEVIEW_CONFIG = {"log_exception_detail": True}`. Client frames and HTTP
+  responses stay generic.
 - **Service-worker caches.** Explicit pages are never written to the worker's
   page-shell or VDOM caches. The caches are cleared when the logged-in identity
   changes.
@@ -300,8 +304,8 @@ token = state("", persist="server", render=False)  # handlers only, never templa
   middleware is refused.
 - **Uploads.** `uploads` renders each entry's progress and a sanitized file
   name. The raw client file name and the writer's result are not included.
-  Uploads in flight are not resumed after a reconnect; the client registers
-  them again.
+  An upload in flight resumes after a reconnect, for the same session, user,
+  tenant and page (`ResumableUploadWriter`, `resumable=True`).
 - **Components.** Declare a `LiveComponent` at class level (`nav = Tabs(...)`).
   Each view gets its own copy, and its events reach it by `component_id`. A
   State-less `LiveComponent` (no `State` class) that a handler changes in place
@@ -332,7 +336,10 @@ token = state("", persist="server", render=False)  # handlers only, never templa
   them in `get_context_data()`.
 - **Embedded children.** Sticky explicit children persist their declared
   fields. Non-sticky explicit children are transient and may not declare
-  persisted fields.
+  persisted fields. A sticky child's `{% live_render %}` inputs are part of
+  its identity, except those it names in `sticky_update_inputs`, which reach
+  its `_on_sticky_update` hook instead (see
+  [Sticky LiveViews](../guides/sticky-liveviews.md)).
 - **`lazy=True` children.** A lazy explicit child is a transient child that
   mounts when its slot is filled, on the plain page render and on the
   streaming GET. The fill reads the session and user from storage again and
@@ -349,7 +356,14 @@ token = state("", persist="server", render=False)  # handlers only, never templa
   object permission, a `mount()` raising `Http404` or `PermissionDenied`)
   shows `child '<view path>' denied access` as on the page GET; any other
   failure shows `Lazy child <id> failed.` (`Lazy child failed.` when the tag
-  has no `view_id=`). Either way it receives no events.
+  has no `view_id=`). Either way it receives no events. On the page-POST
+  fallback an event from the child mounts that one slot's child again under
+  the POST's request, with the same checks, and runs on it (#4173). The
+  attribute form (`<div dj-view="..." dj-lazy>`) on an explicit page
+  hydrates over the page POST too (#4174): it is mounted with the checks of
+  an eager child under its lazy address, and keeps exactly its
+  `persist="server"` fields between POSTs; its other state starts again
+  from `mount()`.
 - **Tenancy.** The configured tenant resolver is applied to every request,
   including WebSocket mounts, whether or not `TenantMiddleware` is installed.
 - **Invalidation.** Change detection is unchanged. After mutating an object in

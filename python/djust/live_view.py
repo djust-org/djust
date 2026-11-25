@@ -202,6 +202,7 @@ def _protect_http_entry(cls: type, view: Callable[..., Any]) -> Callable[..., An
         protected_http_outcome,
         protected_server_error,
         restrict_diagnostics,
+        server_exception_detail_enabled,
     )
 
     if iscoroutinefunction(view):
@@ -217,9 +218,14 @@ def _protect_http_entry(cls: type, view: Callable[..., Any]) -> Callable[..., An
                     outcome = protected_http_outcome(exc)
                     if diagnostics_allowed() or outcome == "raise":
                         raise
+                    # #4180: the server-side opt-in keeps the real exception for
+                    # the log and the signal; the response stays generic.
+                    failure = exc if server_exception_detail_enabled() else None
                     del exc
             # Outside the except block: the signal's exception has no context.
-            return await sync_to_async(protected_server_error)(request, logger, outcome)
+            return await sync_to_async(protected_server_error)(
+                request, logger, outcome, exc=failure
+            )
 
         markcoroutinefunction(protected_async)
         _PROTECTED_HTTP_ENTRIES.add(protected_async)
@@ -235,8 +241,9 @@ def _protect_http_entry(cls: type, view: Callable[..., Any]) -> Callable[..., An
                 outcome = protected_http_outcome(exc)
                 if diagnostics_allowed() or outcome == "raise":
                     raise
+                failure = exc if server_exception_detail_enabled() else None
                 del exc
-        return protected_server_error(request, logger, outcome)
+        return protected_server_error(request, logger, outcome, exc=failure)
 
     _PROTECTED_HTTP_ENTRIES.add(protected)
     return protected
@@ -306,6 +313,28 @@ def _refuse_reserved_state_names(cls: type) -> None:
             seen.add(name)
             if name in reserved and issubclass(type(value), StateProperty):
                 raise reserved_state_field_error(cls, owner, name)
+
+
+def _warn_ignored_sticky_update_inputs(cls: type) -> None:
+    """Warn when a class states ``sticky_update_inputs`` where it is ignored (#4181).
+
+    Only an explicit sticky child uses it: on a non-sticky child or a legacy
+    one (whose inputs are not part of an identity) it does nothing.
+    """
+    if not cls.__dict__.get("sticky_update_inputs"):
+        return
+    from ._exposure import uses_legacy_exposure
+
+    if getattr(cls, "sticky", False) is True and not uses_legacy_exposure(cls):
+        return
+    import warnings
+
+    warnings.warn(
+        "%s.%s sets sticky_update_inputs, which only an explicit-exposure sticky "
+        "child (sticky = True) uses; it is ignored here." % (cls.__module__, cls.__qualname__),
+        UserWarning,
+        stacklevel=3,
+    )
 
 
 def _warn_legacy_exposure_policy(cls: type, *, at_class_statement: bool) -> None:
@@ -598,6 +627,12 @@ class LiveView(
     # A mixin that sets it must come BEFORE ``LiveView`` in the bases.
     params_form_fallback: str = "initial"
 
+    # Service-worker caching of this page's HTML (#4176). True lets the opt-in service
+    # worker keep the page in its VDOM and shell caches: only for a page that renders the
+    # same HTML for every visitor (djust.V037 reports one that reads the user, the session
+    # or persisted state). Read from the class; ``self.sw_cacheable = True`` does nothing.
+    sw_cacheable: bool = False
+
     # Per-view query budget (#3686, #3701). ``None`` (the default) leaves the
     # view on the smoke test's class-wide ``max_queries`` and measures nothing
     # at run time. An int caps mount + first render combined; a dict caps the
@@ -794,6 +829,7 @@ class LiveView(
         _warn_legacy_exposure_policy(cls, at_class_statement=True)
         # #4070: a state() field may not take a reserved name.
         _refuse_reserved_state_names(cls)
+        _warn_ignored_sticky_update_inputs(cls)
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)

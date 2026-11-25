@@ -31,6 +31,18 @@ from djust.validation import validate_handler_params
 
 
 @pytest.fixture(autouse=True)
+def _legacy_parameter_policy():
+    """This module tests the legacy parameter path; strict became the default in #4189.
+    Removed with the legacy path (#4198/#4205)."""
+    from djust.config import config
+
+    previous = config.get("event_parameter_policy", "strict")
+    config.set("event_parameter_policy", "legacy")
+    yield
+    config.set("event_parameter_policy", previous)
+
+
+@pytest.fixture(autouse=True)
 def _clear_warned_cache():
     """The warn-once cache is module-global, so a leak across tests would make
     a later test pass because an earlier one already warned."""

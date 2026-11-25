@@ -1,14 +1,16 @@
-"""ADR-038 E2-6: uploads under the explicit exposure policy (decision D-g).
+"""ADR-038 E2-6: uploads under the explicit exposure policy.
 
 An explicit view renders upload progress from a registered ``djust.uploads``
 provider, a render-only projection of ``UploadManager.get_upload_state()``
 that drops the raw client-supplied ``client_name`` (templates get the
 sanitized ``safe_client_name``) and the server-side ``writer_result``.
 
-D-g: entries in flight are not preserved across reconnect. The remount starts
-with an empty upload manager, the ``upload_resume`` handshake answers
-``not_found`` for an explicit view without consulting the resumable state
-store, and the client falls back to ``upload_register``, which still works.
+Uploads in flight resume across a reconnect on both policies (#4175, which
+replaced ADR-038 D-g): a ``ResumableUploadWriter`` records the upload, bound
+to the session and, for an explicit view, to the mount binding's principal and
+view, and the ``upload_resume`` handshake re-attaches the parked writer. A
+plain upload's entry is not preserved: the remount starts with an empty upload
+manager and the client falls back to ``upload_register``, which still works.
 
 Legacy views keep their exact behaviour (no ``uploads`` context, store-backed
 resume); each explicit case pins a legacy control. Only the staged
@@ -285,7 +287,7 @@ async def test_explicit_upload_entries_never_reach_state_destinations(staged, rf
 
 
 # ---------------------------------------------------------------------------
-# D-g: reconnect starts over.
+# Reconnect: a plain upload starts over; a resumable one resumes (#4175).
 # ---------------------------------------------------------------------------
 
 
@@ -364,22 +366,17 @@ async def test_upload_resume_then_reregister(staged, monkeypatch, resumable_stor
     await consumer._handle_upload_resume({"type": "upload_resume", "ref": "ref-resume"})
     reply = consumer.send_json.await_args.args[0]
     assert reply["type"] == "upload_resumed" and reply["ref"] == "ref-resume"
-    if policy == "legacy":
-        # Control: legacy consults the resumable state store. Since #2972 a
-        # resume also needs the upload's live writer parked in this process;
-        # a bare state entry (no writer) answers not_found.
-        assert consulted == ["ref-resume"]
-        assert reply["status"] == "not_found"
-    else:
-        # D-g: the state store is never consulted for an explicit view.
-        assert consulted == []
-        assert reply == {
-            "type": "upload_resumed",
-            "ref": "ref-resume",
-            "status": "not_found",
-            "bytes_received": 0,
-            "chunks_received": [],
-        }
+    # Both policies consult the resumable state store (#4175). Since #2972 a
+    # resume also needs the upload's live writer parked in this process; a
+    # bare state entry (no writer) answers not_found.
+    assert consulted == ["ref-resume"]
+    assert reply == {
+        "type": "upload_resumed",
+        "ref": "ref-resume",
+        "status": "not_found",
+        "bytes_received": 0,
+        "chunks_received": [],
+    }
     assert "RAWDIR_SENTINEL" not in json.dumps(reply)
 
     # The client's fallback: a fresh registration with a new ref.
@@ -403,10 +400,10 @@ async def test_upload_resume_then_reregister(staged, monkeypatch, resumable_stor
 
 
 @pytest.mark.parametrize("policy", ["legacy", "explicit"])
-def test_explicit_uploads_never_write_resume_state(staged, monkeypatch, policy):
-    """D-g: uploads in flight are not resumed for explicit views, so their
-    resumable writer must not record the upload (client filename, progress) in
-    the resume store at all; nothing would ever read it back."""
+def test_resumable_writers_record_resume_state_for_both_policies(staged, monkeypatch, policy):
+    """#4175: an explicit view resumes uploads in flight too, so its
+    resumable writer records the upload in the resume store as a legacy
+    view's does."""
     from djust.tests.test_resumable_uploads_821 import _RecordingInnerWriter
     from djust.uploads.resumable import ResumableUploadWriter
 
@@ -419,19 +416,14 @@ def test_explicit_uploads_never_write_resume_state(staged, monkeypatch, policy):
     assert entry is not None
     view._upload_manager.add_chunk("ref-w", 0, b"0123456789")
     assert entry.writer_instance is not None, "the writer never received the chunk"
-    stored = store.get("ref-w")
-    if policy == "legacy":
-        assert stored is not None  # control: the resume record is written
-    else:
-        assert stored is None
+    assert store.get("ref-w") is not None
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("policy", ["legacy", "explicit"])
 async def test_upload_resume_with_a_parked_writer(staged, monkeypatch, policy):
-    """Legacy control that can actually resume: since #2972 a resume needs
-    the upload's live writer parked in this process. Legacy re-attaches it;
-    an explicit view answers not_found without touching the store (D-g)."""
+    """Since #2972 a resume needs the upload's live writer parked in this
+    process; both policies re-attach it (#4175)."""
     from djust.uploads import resumable
     from djust.uploads.storage import (
         InMemoryUploadState,
@@ -455,13 +447,217 @@ async def test_upload_resume_with_a_parked_writer(staged, monkeypatch, policy):
         consumer = _consumer(view)
         await consumer._handle_upload_resume({"type": "upload_resume", "ref": entry.ref})
         reply = consumer.send_json.await_args.args[0]
-        if policy == "legacy":
-            assert reply["status"] == "resumed", reply
-            assert reply["chunks_received"] == [0, 1]
-            assert entry.ref in view._upload_manager._entries
-        else:
-            assert reply["status"] == "not_found"
-            assert entry.ref not in view._upload_manager._entries
+        assert reply["status"] == "resumed", reply
+        assert reply["chunks_received"] == [0, 1]
+        assert entry.ref in view._upload_manager._entries
     finally:
         resumable._reset_suspended_uploads()
         _reset_default_store_for_tests()
+
+
+# ---------------------------------------------------------------------------
+# #4175: an explicit view resumes an upload across a real WebSocket reconnect,
+# for its owner only.
+# ---------------------------------------------------------------------------
+
+import struct  # noqa: E402
+import types  # noqa: E402
+import uuid  # noqa: E402
+
+from django.contrib.auth import get_user_model  # noqa: E402
+from django.urls import path  # noqa: E402
+
+from djust.testing import open_live_page  # noqa: E402
+from djust.tests.test_resumable_uploads_821 import _RecordingInnerWriter  # noqa: E402
+from djust.uploads import FRAME_CHUNK, FRAME_COMPLETE  # noqa: E402
+from djust.uploads.resumable import ResumableUploadWriter  # noqa: E402
+from djust.uploads.views import upload_status_urlpatterns  # noqa: E402
+
+#: Every byte the inner writers received, in order.
+WRITTEN: list = []
+
+
+class _CollectingInnerWriter(_RecordingInnerWriter):
+    def write_chunk(self, chunk):
+        super().write_chunk(chunk)
+        WRITTEN.append(bytes(chunk))
+
+
+_RESUMABLE_VIDEO = ResumableUploadWriter.with_inner(_CollectingInnerWriter)
+
+
+class UploadResumePage(UploadMixin, LiveView):
+    exposure_policy = "explicit"
+    template = "<div dj-root>up</div>"
+
+    def mount(self, request, **kwargs):
+        self.allow_upload(
+            "video",
+            accept=".mp4",
+            max_file_size=1_000_000,
+            writer=_RESUMABLE_VIDEO,
+            resumable=True,
+        )
+
+
+RESUME_URLCONF = types.ModuleType("upload_resume_urls")
+RESUME_URLCONF.urlpatterns = [  # type: ignore[attr-defined]
+    path("t/upload/", UploadResumePage.as_view()),
+    path("t/upload-elsewhere/", UploadResumePage.as_view()),
+    *upload_status_urlpatterns(),
+]
+
+
+@pytest.fixture
+def resume_site():
+    from djust.uploads import resumable
+    from djust.uploads.storage import _reset_default_store_for_tests
+
+    _reset_default_store_for_tests()
+    resumable._reset_suspended_uploads()
+    WRITTEN.clear()
+    with override_settings(
+        ROOT_URLCONF=RESUME_URLCONF,
+        ALLOWED_HOSTS=["*"],
+        DEBUG=False,
+        LIVEVIEW_ALLOWED_MODULES=["djust.tests"],
+    ):
+        yield
+    resumable._reset_suspended_uploads()
+    _reset_default_store_for_tests()
+
+
+def _chunk(ref, i, data):
+    return bytes([FRAME_CHUNK]) + uuid.UUID(ref).bytes + struct.pack(">I", i) + data
+
+
+def _complete(ref):
+    return bytes([FRAME_COMPLETE]) + uuid.UUID(ref).bytes
+
+
+def _user(name):
+    return get_user_model().objects.create_user(username=name, password="x")
+
+
+async def _upload_two_chunks(page):
+    """Register a 40-byte upload and send its first two 4-byte chunks."""
+    ref = str(uuid.uuid4())
+    socket = await page.connect()
+    await socket.send(
+        {
+            "type": "upload_register",
+            "upload_name": "video",
+            "ref": ref,
+            "client_name": "clip.mp4",
+            "client_type": "video/mp4",
+            "client_size": 40,
+        }
+    )
+    registered = await socket.receive(("upload_registered", "error"))
+    assert registered["type"] == "upload_registered", registered
+    for i, progress in ((0, 10), (1, 20)):
+        await socket.communicator.send_to(bytes_data=_chunk(ref, i, b"%04d" % i))
+        frame = await socket.receive(("upload_progress",))
+        assert frame["progress"] == progress, frame
+    return ref, socket
+
+
+async def _resume(page, ref):
+    socket = await page.connect()
+    await socket.send({"type": "upload_resume", "ref": ref})
+    return socket, await socket.receive(("upload_resumed",))
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_explicit_view_resumes_an_upload_after_a_websocket_reconnect(resume_site):
+    alice = await sync_to_async(_user)("alice")
+    page = await sync_to_async(open_live_page)("/t/upload/", user=alice)
+    ref, first = await _upload_two_chunks(page)
+    await first.disconnect()
+
+    second, answer = await _resume(page, ref)
+    assert answer["status"] == "resumed", answer
+    assert answer["chunks_received"] == [0, 1]
+    for i in range(2, 10):
+        await second.communicator.send_to(bytes_data=_chunk(ref, i, b"%04d" % i))
+    await second.communicator.send_to(bytes_data=_complete(ref))
+    done = await second.receive(("upload_progress",))
+    while done.get("status") != "complete":
+        assert done.get("status") != "error", done
+        done = await second.receive(("upload_progress",))
+    await second.disconnect()
+    assert b"".join(WRITTEN) == b"".join(b"%04d" % i for i in range(10))
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_another_user_or_session_cannot_resume_it(resume_site):
+    alice = await sync_to_async(_user)("alice")
+    bob = await sync_to_async(_user)("bob")
+    page = await sync_to_async(open_live_page)("/t/upload/", user=alice)
+    ref, first = await _upload_two_chunks(page)
+    await first.disconnect()
+
+    for other in (
+        await sync_to_async(open_live_page)("/t/upload/", user=bob),
+        await sync_to_async(open_live_page)("/t/upload/"),
+    ):
+        socket, answer = await _resume(other, ref)
+        assert answer["status"] == "not_found", answer
+        assert answer["chunks_received"] == [] and answer["bytes_received"] == 0
+        await socket.disconnect()
+
+    # The refusals left the parked writer alone: alice still resumes.
+    socket, answer = await _resume(page, ref)
+    assert answer["status"] == "resumed", answer
+    await socket.disconnect()
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_status_endpoint_is_bound_to_the_owner(resume_site):
+    alice = await sync_to_async(_user)("alice")
+    bob = await sync_to_async(_user)("bob")
+    page = await sync_to_async(open_live_page)("/t/upload/", user=alice)
+    ref, socket = await _upload_two_chunks(page)
+    url = "/djust/uploads/%s/status" % ref
+
+    mine = await sync_to_async(page.client.get)(url)
+    assert mine.status_code == 200, mine.content
+    assert json.loads(mine.content)["chunks_received"] == [0, 1]
+    bobs = await sync_to_async(open_live_page)("/t/upload/", user=bob)
+    assert (await sync_to_async(bobs.client.get)(url)).status_code == 404
+    await socket.disconnect()
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_the_record_is_bound_to_the_mount_owner_not_only_the_session(resume_site):
+    """Same browser session and user, another page: the session check alone
+    would let it resume; the owner binding (principal + view) does not."""
+    from django.contrib.sessions.backends.db import SessionStore
+    from django.test import RequestFactory
+
+    from djust._exposure_sessions import request_principal_digest
+    from djust.uploads.storage import get_default_store as current_store
+
+    alice = await sync_to_async(_user)("alice")
+    page = await sync_to_async(open_live_page)("/t/upload/", user=alice)
+    ref, first = await _upload_two_chunks(page)
+    await first.disconnect()
+
+    def principal():
+        request = RequestFactory().get("/t/upload/")
+        request.session = SessionStore(page.client.session.session_key)
+        request.user = alice
+        return request_principal_digest(request)
+
+    owner = current_store().get(ref)["owner"]
+    assert owner == {"principal": await sync_to_async(principal)(), "view": "/t/upload/"}
+
+    elsewhere = await sync_to_async(open_live_page)("/t/upload-elsewhere/", client=page.client)
+    assert elsewhere.session.session_key == page.session.session_key
+    socket, answer = await _resume(elsewhere, ref)
+    assert answer["status"] == "not_found", answer
+    await socket.disconnect()
+
+    socket, answer = await _resume(page, ref)
+    assert answer["status"] == "resumed", answer
+    await socket.disconnect()

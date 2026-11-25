@@ -152,8 +152,18 @@ window.djust.wsUrl = function wsUrl() {
 //
 // console.warn / console.error are NOT guarded — those indicate real problems
 // and should be visible in prod.
+//
+// A page may wrap console.log (a test harness that joins its arguments, say).
+// Strict event params are null-prototype objects, which `args.join(' ')`
+// cannot stringify, so such a wrapper throws. Diagnostics must never abort the
+// code path being logged, so a throwing console is swallowed here.
 window.djLog = function djLog(...args) {
-    if (globalThis.djustDebug) console.log(...args);
+    if (!globalThis.djustDebug) return;
+    try {
+        console.log(...args);
+    } catch (_) {
+        /* a page-installed console.log hook threw; logging is best-effort */
+    }
 };
 
 // ============================================================================
@@ -4823,43 +4833,6 @@ function _restoreFormData(container, data) {
         djLog('[DraftMode] Restored form data:', data);
     }
 }
-
-// Track which Counter containers have been initialized to prevent duplicate listeners
-// on each server response. WeakSet entries are GC'd when the container is removed.
-const _initializedCounters = new WeakSet();
-
-// Client-side React Counter component (vanilla JS implementation)
-function initReactCounters() {
-    document.querySelectorAll('[data-react-component="Counter"]').forEach(container => {
-        // Skip containers already initialized — prevents N listeners after N server responses
-        if (_initializedCounters.has(container)) return;
-        _initializedCounters.add(container);
-
-        const propsJson = container.dataset.reactProps;
-        let props = {};
-        try {
-            // `dataset` has already decoded the attribute's entities.
-            props = JSON.parse(propsJson);
-        } catch { }
-
-        let count = props.initialCount || 0;
-        const display = container.querySelector('.counter-display');
-        const minusBtn = container.querySelectorAll('.btn-sm')[0];
-        const plusBtn = container.querySelectorAll('.btn-sm')[1];
-
-        if (display && minusBtn && plusBtn) {
-            minusBtn.addEventListener('click', () => {
-                count--;
-                display.textContent = count;
-            });
-            plusBtn.addEventListener('click', () => {
-                count++;
-                display.textContent = count;
-            });
-        }
-    });
-}
-
 // Smart default rate limiting by input type
 // Prevents VDOM version mismatches from high-frequency events.
 // Click-fired widgets (radio/checkbox/select) commit one value per user
@@ -5045,7 +5018,6 @@ function parseSingleArgument(value) {
 // re-init hooks) must be attached to the namespace here.
 window.djust = window.djust || {};
 window.djust.parseEventHandler = parseEventHandler;
-window.djust.initReactCounters = initReactCounters;
 
 /**
  * Extract parameters from element data-* attributes with optional type coercion.
@@ -7941,7 +7913,7 @@ function clearOptimisticState(eventName) {
  *
  * Call this after any operation that replaces or morphs DOM content
  * (html_update, html_recovery, TurboNav, embedded view update, etc.)
- * instead of manually calling initReactCounters +
+ * instead of manually calling
  * bindLiveViewEvents + updateHooks + bindModelElements individually.
  */
 // WeakSet to track elements that have already been scrolled into view.
@@ -7950,7 +7922,6 @@ function clearOptimisticState(eventName) {
 const _scrolledElements = new WeakSet();
 
 function reinitAfterDOMUpdate(scope) {
-    initReactCounters();
     bindLiveViewEvents(scope);
     // A clear_draft() from an event handler arrives in a patch (#2971).
     applyDraftClearFlag();
@@ -13474,9 +13445,6 @@ function djustInit() {
     if (!_startPageTransport(eagerContainers) && lazyContainers.length > 0) {
         if (globalThis.djustDebug) console.log('[LiveView] Deferring WebSocket connection until lazy elements are needed');
     }
-
-    // Initialize React counters (if any)
-    initReactCounters();
 
     // Bind initial events
     bindLiveViewEvents();

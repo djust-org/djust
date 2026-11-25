@@ -143,7 +143,9 @@ class TestServerPushHandler:
         consumer = self._make_consumer()
         call_log = []
 
-        @event_handler
+        # A selfless function set on the instance: strict treats its first parameter as
+        # ``self``, so it stays on the legacy binding (#4189).
+        @event_handler(parameter_policy="legacy")
         def on_msg(text):
             call_log.append(text)
 

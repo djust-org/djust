@@ -83,7 +83,7 @@ class ImageUploadPreview(Component):
                 return {**super().get_context_data(**kwargs), "upload": self._upload}
 
             @event_handler()
-            def photos_uploaded(self, count=0, **kwargs):
+            def photos_uploaded(self, count: int = 0, **kwargs):
                 for entry in self.consume_uploaded_entries("photos"):
                     path = default_storage.save(
                         f"photos/{uuid4().hex}/{entry.safe_client_name}", entry.file
