@@ -89,7 +89,7 @@ async def test_over_the_limit_the_backlog_is_dropped_and_the_stream_ends(caplog)
         while not session._outbound_overflowed:
             session.push(_frame(n, pad=150))
             n += 1
-            assert session.queue.queued_bytes <= 1000, "memory bound"
+            assert session.queue.backlog_bytes <= 1000, "memory bound"
     assert 800 < session.queue.peak_bytes <= 1000
     assert "not reading fast enough" in caplog.text
     # Only the close sentinel is left: the stream ends at its next read.
@@ -114,6 +114,47 @@ async def test_no_limit_when_configured_zero():
         session.push(_frame(n, pad=1000))
     assert not session._outbound_overflowed
     assert len(_drain(session)) == 100
+
+
+@pytest.mark.asyncio
+async def test_a_frame_pushed_from_another_loop_is_counted(monkeypatch):
+    """Review 4: a push from another event loop's thread (``djust serve
+    --loops``) was queued as 0 bytes, so it escaped the limit."""
+    import djust.multiloop
+
+    monkeypatch.setattr(djust.multiloop, "is_multi_loop", lambda: True)
+    session = _session(10_000)
+    session.push(_frame(0))  # the head, on the session's loop
+    frame = _frame(1, pad=200)
+    await asyncio.to_thread(session.push, frame)
+    await asyncio.sleep(0)  # one loop turn: run the hand-over callback
+    assert session.queue.qsize() == 2
+    assert session.queue.backlog_bytes == _size(frame)
+
+
+@pytest.mark.asyncio
+async def test_frames_pushed_from_another_loop_end_the_stream_past_the_limit(monkeypatch):
+    import djust.multiloop
+
+    monkeypatch.setattr(djust.multiloop, "is_multi_loop", lambda: True)
+    session = _session(1000)
+    session.push(_frame(0))
+    for n in range(1, 10):
+        await asyncio.to_thread(session.push, _frame(n, pad=200))
+        await asyncio.sleep(0)
+    assert session._outbound_overflowed
+    assert _drain(session) == [None]
+
+
+@pytest.mark.asyncio
+async def test_one_oversize_frame_at_the_head_does_not_end_a_healthy_stream():
+    """Review 5 on SSE: the head frame is its own allowance."""
+    session = _session(1000)
+    session.queue.put_sized(_frame(0, pad=5000), _size(_frame(0, pad=5000)))
+    session.push(_frame(1))
+    assert not session._outbound_overflowed
+    assert session.queue.backlog_bytes == _size(_frame(1))
+    assert [m["n"] for m in _drain(session)] == [0, 1]
 
 
 # -- end to end: the stream ends, the client reconnects --------------------

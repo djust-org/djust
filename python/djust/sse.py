@@ -996,7 +996,12 @@ class SSESession:
                 # in full too (#4307).
                 if isinstance(msg, dict) and "parameter_contracts" in msg:
                     self._parameter_contract_sent = None
-                loop.call_soon_threadsafe(self.queue.put_nowait, msg)
+                if msg is None or not self._outbound_limit:
+                    loop.call_soon_threadsafe(self.queue.put_nowait, msg)
+                else:
+                    # Measured here, counted on the session's loop (#3658).
+                    size = len(json.dumps(msg, cls=DjangoJSONEncoder).encode("utf-8"))
+                    loop.call_soon_threadsafe(self._put_measured, msg, size)
                 return
         sent = None
         if msg is not None:
@@ -1008,17 +1013,29 @@ class SSESession:
             if self._outbound_limit and not self.queue.empty():
                 # The stream is behind (#3658): count what waits, in bytes.
                 size = len(json.dumps(msg, cls=DjangoJSONEncoder).encode("utf-8"))
-                pending = self.queue.queued_bytes + size
-                if pending > self._outbound_limit:
-                    self._end_slow_stream(pending)
-                    return
-                self.queue.put_sized(msg, size)
-                if sent is not None:
+                if self._put_measured(msg, size) and sent is not None:
                     self._parameter_contract_sent = sent
                 return
         self.queue.put_nowait(msg)
         if sent is not None:
             self._parameter_contract_sent = sent
+
+    def _put_measured(self, msg: Dict[str, Any], size: int) -> bool:
+        """Queue *msg* counting its *size*, or end the stream past the limit (#3658).
+
+        Runs on the session's loop. The head frame (the stream's next write)
+        is not counted, so one large frame alone always goes. ``False`` when
+        the frame was dropped.
+        """
+        if self._outbound_overflowed:
+            return False
+        if not self.queue.empty():
+            pending = self.queue.backlog_bytes + size
+            if pending > self._outbound_limit:
+                self._end_slow_stream(pending)
+                return False
+        self.queue.put_sized(msg, size)
+        return True
 
     def _end_slow_stream(self, pending: int) -> None:
         """The client is not reading: end its stream so it reconnects (#3658).
