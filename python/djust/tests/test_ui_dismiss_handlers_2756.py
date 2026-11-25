@@ -279,7 +279,7 @@ def _mounted_component(cls):
         owner = type(
             "CatalogueAuditOwner",
             (LiveView,),
-            {"exposure_policy": "legacy", "component": cls(**kwargs)},
+            {"exposure_policy": "explicit", "component": cls(**kwargs)},
         )()
         bound = owner.component
         if isinstance(bound, DropdownMenu):
@@ -336,6 +336,8 @@ def _self_targeting_controls() -> list:
     """``(cls, framework, attr, target, tag_html)`` for every rendered
     ``dj-click`` / ``dj-change`` / ``dj-input`` whose target is a handler name
     (bare or call-form), across every HTML-rendering component in the package."""
+    from djust._component_state import wire_id
+
     rows = []
     for cls in _live_components():
         for framework in _FRAMEWORKS:
@@ -349,9 +351,7 @@ def _self_targeting_controls() -> list:
                     # target is the component's own; an expression is
                     # client-side and out of scope.
                     if target is not None and _TARGET.match(target):
-                        rows.append(
-                            (cls, framework, attr, target, tag, routed_id, comp.component_id)
-                        )
+                        rows.append((cls, framework, attr, target, tag, routed_id, wire_id(comp)))
     return rows
 
 

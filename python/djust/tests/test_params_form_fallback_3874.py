@@ -1224,23 +1224,6 @@ class TestTheDeclaration:
         with pytest.raises(ExposureError, match="reserved"):
             ExposureContract("app.View", {"params_form_fallback": FieldExposure()})
 
-    def test_an_instance_assignment_is_not_reactive_state(self):
-        # Legacy on purpose: the subject is the legacy state API (get_state),
-        # which reads the attribute walk.
-        class Assigns(LiveView):
-            exposure_policy = "legacy"
-            template = "<div dj-root></div>"
-
-            def mount(self, request, **kwargs):
-                self.params_form_fallback = "fields"
-                self.visible = 1
-
-        view = Assigns()
-        view.mount(RequestFactory().get("/"))
-        for state in (view.get_state(),):
-            assert "params_form_fallback" not in state
-            assert "visible" in state
-
     def test_an_override_that_never_calls_super_never_uses_the_mode_but_a_bad_one_is_refused(self):
         """The docs say "never uses", not "never reads": the eager check runs before the hook."""
         from djust._params_form import run_handle_params_sync

@@ -498,24 +498,19 @@ def page_dir():
         yield tmp
 
 
-def _view_class(template_name, explicit=False):
-    attrs = {"template_name": template_name}
-    if explicit:
-        from djust.decorators import state
+def _view_class(template_name):
+    from djust.decorators import state
 
-        def get_context_data(self, **kwargs):
-            return super(type(self), self).get_context_data(count=self.count, **kwargs)
+    def get_context_data(self, **kwargs):
+        return super(type(self), self).get_context_data(count=self.count, **kwargs)
 
-        attrs["exposure_policy"] = "explicit"
-        attrs["count"] = state(0, persist="server")
-        attrs["get_context_data"] = get_context_data
-    else:
-
-        def mount(self, request, **kwargs):
-            self.count = 0
-
-        attrs["mount"] = mount
-    return type("V3028", (LiveView,), {"exposure_policy": "legacy", **attrs})
+    attrs = {
+        "template_name": template_name,
+        "exposure_policy": "explicit",
+        "count": state(0, persist="server"),
+        "get_context_data": get_context_data,
+    }
+    return type("V3028", (LiveView,), attrs)
 
 
 def _mounted(view_cls, request):
@@ -580,24 +575,6 @@ class TestRustPath:
         assert spies["theme_panel"].call_count == 1
         assert spies["theme_mode_toggle"].call_count == 0
         assert spies["theme_preset_selector"].call_count == 0
-
-    def test_explicit_views_leave_an_unused_chunk_alone_too(self, page_dir, spies):
-        _clear_template_caches()
-        with override_settings(TEMPLATES=_rust_templates(page_dir)):
-            request = _request()
-            view = _mounted(_view_class("_3028_unused.html", explicit=True), request)
-            html = view.render(request=request)
-        assert "Count: 0" in html
-        assert _total_renders(spies) == 0
-
-    def test_explicit_views_render_a_used_chunk(self, page_dir, spies):
-        _clear_template_caches()
-        with override_settings(TEMPLATES=_rust_templates(page_dir)):
-            request = _request(nonce="explicit-nonce")
-            view = _mounted(_view_class("_3028_used.html", explicit=True), request)
-            html = view.render(request=request)
-        assert 'nonce="explicit-nonce"' in html and "theme-switcher" in html
-        assert spies["theme_head"].call_count == 1
 
     def test_a_live_preset_switch_updates_the_rendered_head(self, page_dir):
         _clear_template_caches()

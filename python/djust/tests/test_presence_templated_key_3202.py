@@ -23,16 +23,17 @@ from django.test import override_settings
 from djust import LiveView
 from djust.decorators import event_handler
 from djust.presence import PresenceManager, PresenceMixin
+from djust.testing import with_live_session
 
 from ._ws_frames import drain_extra, has_frame, has_type, receive_settled
 
 pytest.importorskip("channels")
 
-pytestmark = pytest.mark.django_db
+pytestmark = pytest.mark.django_db(transaction=True)
 
 
 class _RoomChatView(PresenceMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     login_required = False
     presence_key = "chat:{room}"
     template = '<div dj-view="chat" dj-id="0">{{ room }}</div>'
@@ -40,6 +41,13 @@ class _RoomChatView(PresenceMixin, LiveView):
     def mount(self, request, room="lobby", **kwargs):
         self.room = room
         self.track_presence(meta={})
+
+    def get_context_data(self, **kwargs):
+        # ``presence_key`` is formatted from the plain attribute ``mount()`` sets;
+        # an explicit view renders only what it supplies.
+        context = super().get_context_data(**kwargs)
+        context["room"] = self.room
+        return context
 
     def get_presence_user_id(self):
         # The bare test socket carries no auth middleware (no request.user).
@@ -69,7 +77,7 @@ async def _connect():
 
     from djust.websocket import LiveViewConsumer
 
-    communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+    communicator = with_live_session(WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/"))
     connected, _ = await communicator.connect()
     assert connected
     await communicator.receive_json_from()  # connect ack

@@ -20,7 +20,7 @@ from django.db import connection, models
 from django.test import override_settings
 
 from djust import LiveView
-from djust.decorators import event_handler
+from djust.decorators import event_handler, state
 
 pytestmark = [pytest.mark.django_db(transaction=True)]
 
@@ -87,12 +87,14 @@ def _make_view(name: str, relation: bool, select: bool = True) -> str:
     rel_cell = "<td>{{ row.author.email }}</td>" if relation else ""
 
     class _V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template = (
             f'<div dj-view="{MOD}.{name}" dj-id="0"><p>{{{{ label }}}}</p><table><tbody>'
             "{% for row in rows %}<tr><td>{{ row.title }}</td><td>{{ row.views }}</td>"
             f"{rel_cell}</tr>{{% endfor %}}</tbody></table></div>"
         )
+
+        label = state("v0")
 
         def mount(self, request: Any, **kwargs: Any) -> None:
             LAST_VIEW[:] = [self]
@@ -100,8 +102,13 @@ def _make_view(name: str, relation: bool, select: bool = True) -> str:
             qs = Post2536.objects.order_by("id")
             if select:
                 qs = qs.select_related("author")
-            self.rows = list(qs)
-            self.label = "v0"
+            self._rows = list(qs)
+
+        def get_context_data(self, **kwargs: Any) -> Dict[str, Any]:
+            # An explicit view renders only what it declares or supplies here.
+            context = super().get_context_data(**kwargs)
+            context["rows"] = self._rows
+            return context
 
         @event_handler()
         def text_change(self, **kwargs: Any) -> None:
@@ -110,10 +117,9 @@ def _make_view(name: str, relation: bool, select: bool = True) -> str:
         @event_handler()
         def bump_row(self, **kwargs: Any) -> None:
             # In-memory only — no save(). Django's engine renders this value.
-            # A model instance is an identity leaf for change detection, so
-            # the documented hatch marks the attr changed (#2664 / #2682).
-            self.rows[3].views = 999_999
-            self.set_changed_keys("rows")
+            self._rows[3].views = 999_999
+            # Nothing declared changed: the documented way to render anyway.
+            self.request_full_render()
 
     _V.__name__ = name
     _V.__qualname__ = name
@@ -143,9 +149,10 @@ async def _recv_until(comm: Any, wanted: str, *, ref: Any = None) -> Dict[str, A
 async def _drive(cls_name: str, events: List[str]) -> Dict[str, Any]:
     from channels.testing import WebsocketCommunicator
 
+    from djust.testing import with_live_session
     from djust.websocket import LiveViewConsumer
 
-    comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+    comm = with_live_session(WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/"))
     connected, _ = await comm.connect()
     assert connected
     await comm.receive_json_from()

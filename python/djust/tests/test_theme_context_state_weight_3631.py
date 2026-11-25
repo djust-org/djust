@@ -31,6 +31,7 @@ from django.test import RequestFactory
 
 from djust import LiveView
 from djust.decorators import event_handler
+from djust.decorators import state as declared
 from djust.theming import context_processors as cp
 from djust.theming.manager import ThemeManager
 
@@ -42,11 +43,10 @@ PROCESSOR = "djust.theming.context_processors.theme_context"
 class Counter(LiveView):
     """The issue's reproduction: no theme mixin, one counter, no theme variable."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<html><head></head><body><div dj-root>C{{ count }}</div></body></html>"
 
-    def mount(self, request, **kwargs):
-        self.count = 0
+    count = declared(0)
 
     @event_handler()
     def bump(self, **kwargs):
@@ -56,7 +56,7 @@ class Counter(LiveView):
 class ReadsPresets(LiveView):
     """A page that reads the list in the dj-root and in the page shell."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         "<html><head>[S{{ theme_presets|length }}]</head><body><div dj-root>"
         "C{{ count }}|n{{ theme_presets|length }}|first={{ theme_presets.0.name }}"
@@ -65,8 +65,7 @@ class ReadsPresets(LiveView):
         "</div></body></html>"
     )
 
-    def mount(self, request, **kwargs):
-        self.count = 0
+    count = declared(0)
 
 
 def _request():
@@ -200,11 +199,10 @@ def shell_templates(settings):
 
 
 class ShellView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template_name = "child_3631.html"
 
-    def mount(self, request, **kwargs):
-        self.count = 3
+    count = declared(3)
 
 
 class TestThePageShell:
@@ -413,9 +411,7 @@ class TestRequestScopedList:
         from djust.request_scoped import RequestScopedList
 
         class Assigns(Counter):
-            def mount(self, request, **kwargs):
-                self.count = 0
-                self.mine = RequestScopedList([{"k": "v" * 40}])
+            mine = declared(default_factory=lambda: RequestScopedList([{"k": "v" * 40}]))
 
         view, _request_, _response = _get(Assigns)
         _blob, state = _snapshot(view)
@@ -427,15 +423,13 @@ class TestTheThemeMixinSuppliesTheSameType:
         from djust.theming import ThemeMixin
 
         class Mixed(ThemeMixin, LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = (
                 "<html><head></head><body><div dj-root>C{{ count }}"
                 '{{ theme_presets|json_script:"p" }}</div></body></html>'
             )
 
-            def mount(self, request, **kwargs):
-                super().mount(request, **kwargs)
-                self.count = 0
+            count = declared(0)
 
         view, request, response = _get(Mixed)
         _blob, state = _snapshot(view)

@@ -389,7 +389,7 @@ class TestRefreshCost:
 
 
 class Grows(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         f'<div dj-view="{MODULE}.Grows" dj-id="0">'
         "{% for r in rows %}<p>{{ r }}</p>{% endfor %}|{{ n }}</div>"

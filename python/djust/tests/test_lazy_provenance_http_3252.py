@@ -7,13 +7,14 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.sessions.backends.db import SessionStore
-from django.test import RequestFactory
+from django.test import RequestFactory, override_settings
 from django.urls import path as url_path
 
 from djust import LiveView
 from djust._rust import RustLiveView, authored_lazy_elements
-from djust.decorators import event_handler
+from djust.decorators import event_handler, state
 from djust.tenants.mixin import TenantMixin
+from djust.tenants.resolvers import TenantInfo
 
 MOD = __name__
 TAG = '<div dj-view="' + MOD + '.Child" dj-lazy></div>'
@@ -24,7 +25,7 @@ def test_moduleless_parent_registers_without_crashing():
     from djust._render_provenance import RenderedHTML
 
     # Match #2488's names-only eval namespace: type() cannot copy __name__.
-    cls = eval('type("Moduleless", (), {"exposure_policy": "legacy"})', {})  # noqa: S307
+    cls = eval('type("Moduleless", (), {"exposure_policy": "explicit"})', {})  # noqa: S307
     assert not hasattr(cls, "__module__")
     parent = cls()
     html, spans, _ = render(TAG)
@@ -35,53 +36,23 @@ def test_moduleless_parent_registers_without_crashing():
     assert 'data-djust-lazy-id="lazy_' in registered
 
 
-@pytest.mark.django_db
-def test_lazy_child_decimal_public_and_private_state_survives_session_json():
-    from decimal import Decimal
-
-    from djust._lazy_containers import LazyContainer, mount_http_lazy, save_http_lazy
-
-    session = SessionStore()
-    session.create()
-    parent = Page()
-    registry = {"lazy_decimal": LazyContainer(Child, "liveview_decimal", "")}
-    parent._http_lazy_containers = registry
-    req = request("get", session)
-    child = mount_http_lazy(parent, req, "lazy_decimal")
-    exact = Decimal("12345678901234567890.123456789")
-    child.count = {"nested": [exact]}
-    child._private_count = exact
-    save_http_lazy(parent, req, "lazy_decimal", child)
-    session.save()  # Django's encoder-less JSON boundary, then a fresh read.
-    fresh_parent = Page()
-    fresh_parent._http_lazy_containers = registry
-    restored = mount_http_lazy(
-        fresh_parent, request("get", SessionStore(session.session_key)), "lazy_decimal"
-    )
-    assert restored.count == {"nested": [exact]}
-    assert isinstance(restored.count["nested"][0], Decimal)
-    assert restored._private_count == exact and isinstance(restored._private_count, Decimal)
-
-
 class Child(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div><span class="count">{{ count }}</span><button dj-click="inc">+</button></div>'
     mounts = 0
+    # An explicit lazy child keeps exactly its persist="server" fields between POSTs.
+    count = state(0, persist="server")
 
     def mount(self, request, **kwargs):
         type(self).mounts += 1
-        self.count = 0
-        self._private_count = 0
 
-    @event_handler
+    @event_handler()
     def inc(self, **kwargs):
         self.count += 1
-        self._private_count += 1
-        assert self.count == self._private_count
 
 
 class Page(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         '<div dj-root><section id="one">'
         + TAG
@@ -89,20 +60,23 @@ class Page(LiveView):
         + TAG
         + "</section></div>"
     )
-
-    def mount(self, request, **kwargs):
-        self.extra = "é"
+    extra = state("é")
 
 
 urlpatterns = [url_path("lazy/", Page.as_view())]
 
 
+@pytest.fixture(autouse=True)
+def _allowed_modules():
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=["djust", MOD], DEBUG=False):
+        yield
+
+
 @pytest.mark.django_db
-def test_real_http_middleware_signed_cookie_session_keeps_stable_addresses(settings):
+def test_real_http_middleware_session_keeps_stable_addresses(settings):
     from django.test import Client
 
     settings.ROOT_URLCONF = __name__
-    settings.SESSION_ENGINE = "django.contrib.sessions.backends.signed_cookies"
     client = Client(enforce_csrf_checks=True)
     response = client.get("/lazy/")
     ids = re.findall(r'data-djust-lazy-id="([^"]+)"', response.content.decode())
@@ -252,12 +226,17 @@ def request(method, session, body=None, user=None, tenant=None):
         else factory.post("/lazy/", json.dumps(body), content_type="application/json")
     )
     req.META["HTTP_X_TENANT"] = tenant
+    # An explicit child's identity is bound to the request's tenant object (TenantMiddleware's).
+    req.tenant = TenantInfo(tenant) if tenant else None
     req.session = session
     req.user = user or AnonymousUser()
     return req
 
 
 def get_ids(session, cls=Page, user=None, tenant=None):
+    session = SessionStore(
+        session.session_key
+    )  # a fresh read: it must not overwrite saved child state
     response = cls.as_view()(request("get", session, user=user, tenant=tenant))
     assert response.status_code == 200, response.content
     session.save()
@@ -265,6 +244,8 @@ def get_ids(session, cls=Page, user=None, tenant=None):
 
 
 def post(session, view_id, event="inc", cls=Page, user=None, tenant=None):
+    # A fresh read of the stored session per request, as a browser's would be.
+    session = SessionStore(session.session_key)
     response = cls.as_view()(
         request("post", session, {"event": event, "params": {"view_id": view_id}}, user, tenant)
     )
@@ -325,6 +306,8 @@ def test_registration_applies_child_auth_and_object_permission(view):
 
 
 class TenantChild(Child):
+    count = state(0, persist="server")  # inherited grants must be redeclared
+
     def get_state_key_prefix(self):
         return self.request.META.get("HTTP_X_TENANT")
 
@@ -338,12 +321,11 @@ class TenantPage(Page):
 
 class ResolvedTenantChild(TenantMixin, Child):
     tenant_required = True
+    count = state(0, persist="server")  # inherited grants must be redeclared
 
     def resolve_tenant(self, request):
-        from types import SimpleNamespace
-
         value = request.META.get("HTTP_X_TENANT")
-        return SimpleNamespace(id=value) if value else None
+        return TenantInfo(value) if value else None
 
 
 @pytest.mark.django_db
@@ -360,7 +342,8 @@ def test_child_tenant_resolves_before_mount_and_unresolved_child_is_refused():
     b = get_ids(session, ChildTenantPage, tenant="B")
     assert a and b and a != b
     assert post(session, a[0], cls=ChildTenantPage, tenant="B").status_code == 400
-    for ids, tenant, count in [(a, "A", 1), (b, "B", 1), (a, "A", 2)]:
+    # One binding counts on; the other starts from its own zero (state is not shared).
+    for ids, tenant, count in [(a, "A", 1), (a, "A", 2), (b, "B", 1)]:
         response = post(session, ids[0], cls=ChildTenantPage, tenant=tenant)
         assert response.status_code == 200, response.content
         assert re.search(
@@ -383,7 +366,7 @@ def test_same_session_user_and_tenant_bindings_do_not_share_state(django_user_mo
     assert ta and tb and ta != tb
     assert post(session, ta[0], cls=TenantPage, user=first, tenant="tenant:B").status_code == 400
     assert get_ids(session, TenantPage, first) == []
-    for ids, tenant, count in [(ta, "tenant:A", 1), (tb, "tenant:B", 1), (ta, "tenant:A", 2)]:
+    for ids, tenant, count in [(ta, "tenant:A", 1), (ta, "tenant:A", 2), (tb, "tenant:B", 1)]:
         response = post(session, ids[0], cls=TenantPage, user=first, tenant=tenant)
         assert response.status_code == 200, response.content
         assert re.search(
@@ -419,6 +402,8 @@ def test_rendered_page_loop_keys_and_safe_forgery_counts(forged, count):
             + TAG
             + "{% endfor %}{{ forged|safe }}</div>"
         )
+        forged = state("")
+        numbers = state(default_factory=list)
 
         def mount(self, request, **kwargs):
             self.forged = forged
@@ -453,6 +438,7 @@ def test_http_registration_from_inherited_page_shell_and_included_root(tmp_path,
     class FilePage(Page):
         template = None
         template_name = "page3252.html"
+        numbers = state(default_factory=list)
 
         def mount(self, request, **kwargs):
             self.numbers = [1, 0, 2]
@@ -508,6 +494,7 @@ def test_probe4_tokens_cannot_borrow_another_tag_authored_ranges(source, payload
 
 class Evil(Child):
     mounts = 0
+    count = state(0, persist="server")  # inherited grants must be redeclared
 
 
 @pytest.mark.django_db
@@ -518,6 +505,7 @@ def test_http_probe4_mount_is_refused():
             + MOD
             + '.Child" dj-lazy data-q="{{ q|safe }}"></div>\';</script></div>'
         )
+        q = state("")
 
         def mount(self, request, **kwargs):
             self.q = "</script><div dj-view=" + MOD + '.Evil dj-lazy z=a"b c=x'
@@ -533,7 +521,7 @@ def test_http_probe4_mount_is_refused():
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("tag", [TAG, TAG.replace(" dj-view", ' class="{{ extra }}" dj-view')])
-def test_conditional_container_identity_keeps_the_remaining_child_state(tag):
+def test_conditional_container_identity_keeps_the_remaining_childs_address(tag):
     class ConditionalPage(Page):
         template = "<div dj-root>{% if first %}" + tag + "{% endif %}" + tag + "</div>"
 
@@ -549,12 +537,15 @@ def test_conditional_container_identity_keeps_the_remaining_child_state(tag):
     for _ in range(5):
         assert post(session, ids[0], cls=ConditionalPage).status_code == 200
     assert post(session, ids[1], cls=ConditionalPage).status_code == 200
+    session = SessionStore(session.session_key)
     session["show_first"] = False
     session.save()
     assert get_ids(session, ConditionalPage) == [ids[1]]
     response = post(session, ids[1], cls=ConditionalPage)
     assert response.status_code == 200
-    assert re.search(r'class="count"[^>]*>2</span>', json.loads(response.content)["html"])
+    # The address survives the removal of its sibling. An explicit child's state belongs to
+    # one page load, so the new page's child starts from zero.
+    assert re.search(r'class="count"[^>]*>1</span>', json.loads(response.content)["html"])
     assert post(session, ids[0], cls=ConditionalPage).status_code == 400
 
 
@@ -674,6 +665,7 @@ def test_old_occurrence_address_is_refused():
     session = SessionStore()
     session.create()
     ids = get_ids(session)
+    session = SessionStore(session.session_key)
     old = "lazy_" + _child_identity(
         MOD + ".Child",
         {
@@ -734,10 +726,11 @@ def test_conditional_loop_container_identity_uses_original_loop_index_path():
     for _ in range(4):
         assert post(session, ids[0], cls=ConditionalLoopPage).status_code == 200
     assert post(session, ids[1], cls=ConditionalLoopPage).status_code == 200
+    session = SessionStore(session.session_key)
     session["numbers"] = [0, 1, 1]
     session.save()
     assert get_ids(session, ConditionalLoopPage) == ids[1:]
     response = post(session, ids[1], cls=ConditionalLoopPage)
     assert response.status_code == 200
-    assert re.search(r'class="count"[^>]*>2</span>', json.loads(response.content)["html"])
+    assert re.search(r'class="count"[^>]*>1</span>', json.loads(response.content)["html"])
     assert post(session, ids[0], cls=ConditionalLoopPage).status_code == 400

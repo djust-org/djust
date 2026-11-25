@@ -34,7 +34,6 @@ from typing import Any, Dict, Optional, Tuple
 from unittest.mock import patch
 
 import pytest
-from asgiref.sync import sync_to_async
 
 from djust import LiveView
 from djust import config as config_module
@@ -69,27 +68,13 @@ async def _receive_until(communicator, wanted_type, *, tries=8, timeout=30):
     return last
 
 
-class _ScopeSession:
-    def __init__(self, key):
-        self.session_key = key
-
-
 async def _connect_and_mount(view_path: str, url: str = "/t/"):
     pytest.importorskip("channels")
     from channels.testing import WebsocketCommunicator
-    from django.contrib.sessions.backends.db import SessionStore
-
+    from djust.testing import with_live_session
     from djust.websocket import LiveViewConsumer
 
-    def _create_session():
-        s = SessionStore()
-        s.create()
-        return s.session_key
-
-    session_key = await sync_to_async(_create_session)()
-
-    communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
-    communicator.scope["session"] = _ScopeSession(session_key)
+    communicator = with_live_session(WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/"))
 
     connected, _ = await communicator.connect()
     assert connected, "WebsocketCommunicator must connect"
@@ -180,14 +165,13 @@ class SelectableTableHostView(LiveView):
     """Renders the table (so the response HTML carries ``checked``) and a
     ``sel=`` summary of ``selected_rows`` for the assertions."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         f'<div dj-root dj-view="{_MODULE}.SelectableTableHostView" dj-id="0">'
         "<p>sel={{ sel }}</p>{{ table.render }}</div>"
     )
 
-    def mount(self, request, **kwargs):
-        self.table = _table()
+    table = _table()
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
@@ -284,7 +268,7 @@ class TestRowSelectionOverWebSocket:
                 {
                     "type": "event",
                     "event": "sort_by",
-                    "params": {"component_id": "t1", "column": "id"},
+                    "params": {"component_id": "table", "column": "id"},
                     "ref": 2,
                 }
             )
@@ -299,7 +283,7 @@ class TestRowSelectionOverWebSocket:
         communicator, _ = await _open("plain")
         try:
             await communicator.send_json_to(
-                {"type": "event", "event": "not_a_handler", "params": {"component_id": "t1"}}
+                {"type": "event", "event": "not_a_handler", "params": {"component_id": "table"}}
             )
             resp = await communicator.receive_json_from()
         finally:
@@ -481,14 +465,14 @@ class TestTriggerUpdateReachesTheParentRender:
         view = SelectableTableHostView()
         view.request = RequestFactory().get("/t/")
         view.mount(view.request)
-        view.get_context_data()  # the registration walk (mixins/context.py)
+        view.table  # an explicit view binds (and registers) a declared component on first access
         return view
 
     def test_registration_records_parent_and_attr_name(self):
         view = self._host()
         assert view.table._parent is view
         assert view.table._parent_attr == "table"
-        assert view._components["t1"] is view.table
+        assert view._components["table"] is view.table
 
     def test_trigger_update_marks_the_attr_changed(self):
         view = self._host()

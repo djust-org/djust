@@ -57,7 +57,7 @@ INSTANCES: list = []
 
 
 class _Base(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     login_required = False
 
     @event_handler()
@@ -138,11 +138,9 @@ class _Plain(LiveView):
     """A view with NO override, for the unchanged-baseline check."""
 
     login_required = False
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-view="' + MOD + '._Plain">{{ n }}</div>'
-
-    def mount(self, request, **kwargs):
-        self.n = 1
+    n = state(1)
 
 
 urlpatterns.append(path("plain/", _Plain.as_view()))
@@ -187,7 +185,7 @@ class _ModelShell(LiveView):
     """
 
     login_required = False
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template_name = "t3725/model_page.html"
 
     def mount(self, request, **kwargs):

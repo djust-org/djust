@@ -47,6 +47,8 @@ import pytest
 from django.test import override_settings
 
 from djust import LiveView
+from djust.decorators import state
+from djust.testing import with_live_session
 from djust._rust import RustLiveView, root_content_range, root_element_span
 from djust.mixins.template import _DJ_ROOT_RE, _DJ_VIEW_RE, _search_dj_root_open
 
@@ -175,7 +177,7 @@ _MODULE = "djust.tests.test_root_selection_3031"
 class ChildP3031(LiveView):
     """A child whose own template declares a ``dj-root``."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root><p class="child-body">child</p></div>'
 
     def mount(self, request, **kwargs):
@@ -186,21 +188,24 @@ class ParentP3031(LiveView):
     """A parent whose root is declared with ``dj-view`` only (the auto-inferred
     root) and which embeds the child above."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         '{% load live_tags %}<div dj-view="' + _MODULE + '.ParentP3031">'
         '<p class="count">{{ n }}</p>{% live_render "' + _MODULE + '.ChildP3031" %}</div>'
     )
 
+    n = state(1)
+
     def mount(self, request, **kwargs):
         self.n = 1
 
 
+@pytest.mark.django_db
 @override_settings(DJUST_LIVE_RENDER_ALLOWED_MODULES=[_MODULE])
 def test_parent_with_embedded_dj_root_child_patches_through_the_view(rf):
     """The whole pipeline (Python extraction, Rust VDOM): the parent's own change
     produces a patch, and the VDOM is rooted at the parent, not the child."""
-    request = rf.get("/")
+    request = with_live_session(rf.get("/"))
     view = ParentP3031()
     view.request = request
     view.mount(request)

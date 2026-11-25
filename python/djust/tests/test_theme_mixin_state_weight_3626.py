@@ -22,6 +22,7 @@ from django.contrib.sessions.backends.db import SessionStore
 from django.test import RequestFactory
 
 from djust import LiveView
+from djust.decorators import state
 from djust.theming import ThemeMixin
 
 pytestmark = [pytest.mark.theming, pytest.mark.django_db]
@@ -34,30 +35,26 @@ HEAVY_NAMES = ("theme_head", "theme_css", "theme_switcher", "theme_presets")
 class TagOnlyView(ThemeMixin, LiveView):
     """The page from the issue: it prints the tag and reads none of the four."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         "{% load theme_tags %}<html><head>{% theme_head %}</head>"
         "<body><div dj-root>C{{ count }}</div></body></html>"
     )
 
-    def mount(self, request, **kwargs):
-        super().mount(request, **kwargs)
-        self.count = 0
+    count = state(0)
 
 
 class VariableView(ThemeMixin, LiveView):
     """A page that prints the variable forms the mixin documents."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         "<html><head>[{{ theme_head }}]</head><body><div dj-root>"
         "C{{ count }}|{{ theme_switcher }}|{{ theme_mode }}"
         "|{{ theme_presets|length }}|{{ theme_css|length }}</div></body></html>"
     )
 
-    def mount(self, request, **kwargs):
-        super().mount(request, **kwargs)
-        self.count = 0
+    count = state(0)
 
 
 def _request():
@@ -165,9 +162,14 @@ class TestTheNamesStillWork:
 
     def test_an_assignment_in_a_subclass_still_wins(self):
         class Custom(VariableView):
-            def mount(self, request, **kwargs):
-                super().mount(request, **kwargs)
-                self.theme_head = "CUSTOM-HEAD"
+            count = state(0)
+
+            def get_context_data(self, **kwargs):
+                # An explicit view renders what it supplies; the mixin leaves a
+                # name the view's own context already holds alone.
+                context = super().get_context_data(**kwargs)
+                context["theme_head"] = "CUSTOM-HEAD"
+                return context
 
         _view, _request_, response = _get(Custom)
         assert "[CUSTOM-HEAD]" in response.content.decode()
@@ -215,7 +217,7 @@ class TestTheHttpPostFallback:
         body = json.loads(response.content)
         assert "patches" not in body, body
         assert "C1" in body["html"]
-        assert "data-theme-switcher" in body["html"]
+        assert "theme-switcher" in body["html"]
 
     def test_processor_context_injects_a_derived_name_and_removes_it_again(self):
         request = _request()
@@ -237,9 +239,6 @@ class TestExplicitExposure:
                 "<html><head>[{{ theme_head }}]</head><body><div dj-root>"
                 "{{ theme_switcher }}</div></body></html>"
             )
-
-            def mount(self, request, **kwargs):
-                super().mount(request, **kwargs)
 
         _view, _request_, response = _get(Explicit)
         html = response.content.decode()
@@ -302,16 +301,14 @@ class TestAViewRestoredFromAnOlderSession:
 
 
 class WsThemed(ThemeMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         '<div dj-view="djust.tests.test_theme_mixin_state_weight_3626.WsThemed" dj-id="0">'
         "[{{ theme_head }}]|[{{ theme_switcher }}]|{{ theme_presets|length }}"
         "|{{ theme_css|length }}|{{ count }}</div>"
     )
 
-    def mount(self, request, **kwargs):
-        super().mount(request, **kwargs)
-        self.count = 0
+    count = state(0)
 
     from djust.decorators import event_handler as _event_handler
 

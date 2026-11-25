@@ -144,22 +144,6 @@ class ClientCounter(Counter):
     label = state("a", persist="client", client=True)
 
 
-class LegacyCounter(_Base):
-    exposure_policy = "legacy"
-    template = "<div dj-root><p>Count: {{ count }}</p><i>{{ label }}</i></div>"
-
-    def mount(self, request, **kwargs):
-        self.count = 0
-        self.label = "a"
-
-    inc = Counter.__dict__["inc"]
-    relabel = Counter.__dict__["relabel"]
-    nothing = Counter.__dict__["nothing"]
-    same = Counter.__dict__["same"]
-    forced = Counter.__dict__["forced"]
-    skipped = Counter.__dict__["skipped"]
-
-
 COUNTER_SCRIPT = [
     ("event", "inc"),
     ("event", "nothing"),
@@ -223,29 +207,6 @@ class Table(_Base):
     @event_handler()
     def clear(self, **kwargs):
         self.items.clear()
-
-
-class LegacyTable(_Base):
-    exposure_policy = "legacy"
-    template = Table.template
-
-    def mount(self, request, **kwargs):
-        self.title = "Inventory"
-        self.items = rows(40)
-
-    for _name in (
-        "cell",
-        "nested",
-        "append",
-        "rebind",
-        "swap",
-        "retitle",
-        "both",
-        "nothing",
-        "clear",
-    ):
-        locals()[_name] = Table.__dict__[_name]
-    del _name
 
 
 TABLE_SCRIPT = [
@@ -341,7 +302,7 @@ class Thing:
 
 
 class Opaque(_Base):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         "<div dj-root><p>{{ current.label }}</p><b>{{ things|length }}</b><i>{{ n }}</i></div>"
     )
@@ -392,7 +353,7 @@ OPAQUE_SCRIPT = [
 
 
 class Models(_Base):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         "<div dj-root><p>{{ who.first_name }}</p><ul>{% for p in people %}"
         "<li>{{ p.first_name }}</li>{% endfor %}</ul><i>{{ n }}</i></div>"
@@ -439,7 +400,7 @@ MODELS_SCRIPT = [
 
 
 class Feed(_Base):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     temporary_assigns = {"rows": []}
     template = (
         '<div dj-root><ul id="feed" dj-update="append">{% for r in rows %}'
@@ -517,7 +478,7 @@ class Tabs(LiveComponent):
 
 
 class ComponentPage(_Base):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><h1>{{ title }}</h1>{{ nav }}<i>{{ note }}</i></div>"
     nav = Tabs()
 
@@ -718,7 +679,7 @@ FORM_SCRIPT = [
 
 
 class StreamView(_Base):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         '<div dj-root><div id="list" dj-stream="rows">'
         '{% for r in streams.rows %}<div id="rows-{{ r.id }}">{{ r.body }}</div>{% endfor %}'
@@ -929,9 +890,7 @@ WS_CASES: List[Tuple[str, type, Script]] = [
     ("counter", Counter, COUNTER_SCRIPT),
     ("counter_server", ServerCounter, COUNTER_SCRIPT),
     ("counter_client", ClientCounter, COUNTER_SCRIPT),
-    ("counter_legacy", LegacyCounter, COUNTER_SCRIPT),
     ("table", Table, TABLE_SCRIPT),
-    ("table_legacy", LegacyTable, TABLE_SCRIPT),
     ("derived", Derived, DERIVED_SCRIPT),
     ("opaque", Opaque, OPAQUE_SCRIPT),
     ("models", Models, MODELS_SCRIPT),
@@ -1150,7 +1109,6 @@ class ServerDerived(Derived):
 HTTP_CASES = [
     ("counter", Counter, COUNTER_SCRIPT),
     ("counter_server", ServerCounter, COUNTER_SCRIPT),
-    ("counter_legacy", LegacyCounter, COUNTER_SCRIPT),
     ("table", ServerTable, TABLE_SCRIPT),
     ("derived", ServerDerived, DERIVED_SCRIPT),
     ("processors", Processors, COUNTER_SCRIPT),
@@ -1359,7 +1317,7 @@ def clock_processor(request):
 
 
 class ClockPage(_Base):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><h1>{{ now }}</h1>{{ nav }}<i>{{ title }}</i></div>"
     nav = Tabs()
 

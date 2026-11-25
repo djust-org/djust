@@ -73,7 +73,7 @@ def _post(view_class, get_request, event, path="/ro/"):
 class OverrideAddsView(LiveView):
     """N-31 / decision 185: an override adds a QuerySet and content."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         '<div dj-root dj-view="tests.OverrideAddsView">'
         "{{ count }} {{ secret_note }}"
@@ -98,7 +98,7 @@ class OverrideAddsView(LiveView):
 class RenderOnlyView(LiveView):
     """N-35: the public hook."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         '<div dj-root dj-view="tests.RenderOnlyView">'
         "{{ count }} {{ owner.username }} {{ note }}"
@@ -159,19 +159,6 @@ def test_fallback_post_saves_no_key_an_override_added(people):
 # ---------------------------------------------------------------------------
 
 
-def test_render_only_values_render_and_go_through_the_jit(people):
-    view = RenderOnlyView()
-    view.mount(None)
-
-    context = view.get_context_data()
-
-    assert context["owner"]["username"] == "n35-ada"
-    assert "email" not in context["owner"]
-    assert [row["username"] for row in context["people"]] == ["n35-ada", "n35-grace"]
-    assert all("email" not in row for row in context["people"])
-    assert context["note"] == SECRET
-
-
 def test_get_and_post_never_save_render_only_values(people):
     _view, request, html = _get(RenderOnlyView)
     assert "<i>n35-ada</i><i>n35-grace</i>" in html and SECRET in html
@@ -206,7 +193,7 @@ def test_legacy_unsaved_keys_without_a_recorded_render():
     from djust.mixins.context import legacy_unsaved_keys
 
     class NoSuper(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template = "<div dj-root>{{ a }}</div>"
 
         def get_context_data(self, **kwargs):

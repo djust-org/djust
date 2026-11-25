@@ -50,7 +50,7 @@ Shadowed = str
 
 
 class Valid(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root></div>"
     ItemId = int
     Shadowed = int
@@ -112,18 +112,18 @@ class StrictMixin:
 
 
 class UsesMixin(StrictMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root></div>"
 
 
 class Sibling(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root></div>"
     SiblingOnly = int
 
 
 class Invalid(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root></div>"
 
     @event_handler(parameter_policy="strict")
@@ -192,7 +192,7 @@ class InheritsInvalid(Invalid):
 
 
 class AsyncView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root></div>"
 
     @event_handler(parameter_policy="strict")
@@ -209,7 +209,7 @@ class AsyncView(LiveView):
 
 
 class Subscribed(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>{{ menu }}</div>"
     menu = DropdownMenu(label="Menu", items=[{"label": "Edit", "value": "edit"}])
     other = DropdownMenu(label="Other", items=[{"label": "Edit", "value": "edit"}])

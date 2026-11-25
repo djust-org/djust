@@ -36,7 +36,7 @@ def _tpl(name):
 class _ScopedRoomView(PresenceMixin, LiveView):
     """Snake's shape: push_scope = room, presence key per room."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = _tpl("_ScopedRoomView")
     presence_key = "room3095:{room}"
     presence_unique_per_connection = True
@@ -47,6 +47,14 @@ class _ScopedRoomView(PresenceMixin, LiveView):
         self.changes = 0
         self.online_count = 0
         self.track_presence()
+
+    def get_context_data(self, **kwargs):
+        # An explicit view renders only what it supplies (``online_count`` comes
+        # from the mixin).
+        context = super().get_context_data(**kwargs)
+        context["room"] = self.room
+        context["changes"] = self.changes
+        return context
 
     @event_handler
     def _on_presence_change(self, **kwargs):
