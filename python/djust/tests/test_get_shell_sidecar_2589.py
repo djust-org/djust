@@ -131,7 +131,8 @@ def test_authenticated_page_request_sidecar_is_transient_and_replaced(templates)
     view.request = None
     view._cached_context = None
     view._sync_state_to_rust()
-    # With no request, the bridge sees the current None rather than a stale
-    # request from the prior render.
-    with pytest.raises(AttributeError, match="GET"):
+    # With no request, the bridge sees no request rather than a stale one from
+    # the prior render (an explicit view leaves a None request out of the
+    # context, so the tag finds no ``request`` at all).
+    with pytest.raises(AttributeError, match="request"):
         view._rust_view.render_full_provenance()

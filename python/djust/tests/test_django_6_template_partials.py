@@ -183,7 +183,7 @@ def test_partial_ifchanged_has_fresh_render_context(tmp_path):
 def test_forward_partial_queryset_loop_survives_liveview_update():
     from django.contrib.auth.models import Permission
 
-    from djust import LiveView
+    from djust import LiveView, state
     from djust.decorators import event_handler
 
     permission = Permission.objects.select_related("content_type").first()
@@ -198,9 +198,12 @@ def test_forward_partial_queryset_loop_survives_liveview_update():
             "{% partialdef cell %}<b>{{ row.content_type.app_label }}</b>{% endpartialdef %}</div>"
         )
 
-        def mount(self, request, **kwargs):
-            self.rows = Permission.objects.filter(pk=permission.pk)
-            self.label = "before"
+        label = state("before")
+
+        def get_context_data(self, **kwargs):
+            context = super().get_context_data(**kwargs)
+            context["rows"] = Permission.objects.filter(pk=permission.pk)
+            return context
 
         @event_handler()
         def change(self):
@@ -375,7 +378,7 @@ def test_flattened_inheritance_preserves_partial_definition_ownership(tmp_path):
 def test_liveview_root_extraction_keeps_partial_definitions(tmp_path, root_in_child):
     from django.test import override_settings
 
-    from djust import LiveView
+    from djust import LiveView, state
 
     base_body = "{% block body %}{% endblock %}"
     base = base_body if root_in_child else "<main dj-root>" + base_body + "</main>"
@@ -399,9 +402,7 @@ def test_liveview_root_extraction_keeps_partial_definitions(tmp_path, root_in_ch
     class NamedPartialView(LiveView):
         exposure_policy = "explicit"
         template_name = "child.html"
-
-        def mount(self, request, **kwargs):
-            self.value = "works"
+        value = state("works")
 
     with override_settings(TEMPLATES=templates):
         view = NamedPartialView()
@@ -476,8 +477,11 @@ async def test_uncalled_partial_does_not_hide_websocket_root_or_events(tmp_path)
     from channels.testing import WebsocketCommunicator
     from django.test import override_settings
 
-    from djust import LiveView
+    from djust import LiveView, state
     from djust.decorators import event_handler
+    from asgiref.sync import sync_to_async
+
+    from djust.testing import with_live_session
     from djust.websocket import LiveViewConsumer
 
     (tmp_path / "page.html").write_text(
@@ -490,7 +494,7 @@ async def test_uncalled_partial_does_not_hide_websocket_root_or_events(tmp_path)
     class PartialRootSocketView(LiveView):
         exposure_policy = "explicit"
         template_name = "page.html"
-        changed = False
+        changed = state(False)
 
         @event_handler()
         def change(self):
@@ -506,7 +510,9 @@ async def test_uncalled_partial_does_not_hide_websocket_root_or_events(tmp_path)
         }
     ]
     with override_settings(TEMPLATES=templates, LIVEVIEW_ALLOWED_MODULES=[__name__], DEBUG=False):
-        comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+        comm = await sync_to_async(with_live_session)(
+            WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+        )
         try:
             connected, _ = await comm.connect()
             assert connected
