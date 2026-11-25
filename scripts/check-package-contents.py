@@ -25,7 +25,18 @@ FORBIDDEN = [
     (re.compile(r"(^|/)djust/static/djust/src/"), "client source modules (client.js ships them)"),
     (re.compile(r"\.backup$"), "an editor/dev backup (#3295)"),
 ]
-REQUIRED = ["djust/static/djust/client.js", "djust/static/djust/client.min.js"]
+REQUIRED = [
+    "djust/static/djust/client.js",
+    "djust/static/djust/client.min.js",
+    # The default injected bundle and the chunks it loads on demand (#4007).
+    "djust/static/djust/client-core.js",
+    "djust/static/djust/client-core.min.js",
+    "djust/static/djust/chunks/uploads.min.js",
+    "djust/static/djust/chunks/virtual-list.min.js",
+    "djust/static/djust/chunks/cursor-overlay.min.js",
+    "djust/static/djust/chunks/tutorial.min.js",
+    "djust/static/djust/chunks/service-worker.min.js",
+]
 
 
 def names(path: str) -> list[str]:

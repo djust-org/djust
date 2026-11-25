@@ -61,11 +61,14 @@ window.addEventListener('turbo:load', function(_event) {
         return;
     }
 
-    try {
-        reinitLiveViewForTurboNav();
-    } catch (error) {
-        console.error('[LiveView:TurboNav] Error during reinit:', error);
-    }
+    // #4007: the new page's client chunks load before it is bound.
+    _djustWithChunks(document, function () {
+        try {
+            reinitLiveViewForTurboNav();
+        } catch (error) {
+            console.error('[LiveView:TurboNav] Error during reinit:', error);
+        }
+    });
 });
 
 // Reinitialize LiveView after TurboNav navigation

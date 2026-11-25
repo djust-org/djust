@@ -47,7 +47,10 @@ class CounterView(LiveView):
 - **One codebase.** Views, state and event handlers are Python. No API layer, no frontend build.
 - **Small wire traffic.** A Rust virtual DOM diffs each render and sends only the changed patches.
 - **Fast templates.** A Rust template engine renders Django templates 7–11x faster on variable- and filter-heavy pages ([Performance](#performance)).
-- **Tiny client.** ~87 KB gzipped runtime, injected automatically. Nothing to bundle.
+- **Injected client, no bundler.** The core runtime is ~77 KB gzipped <!-- size-claim: core -->
+  and loads uploads, virtual lists, the cursor overlay, the tutorial bubble and service-worker support only on pages that use them.
+  The single full bundle is ~88 KB gzipped <!-- size-claim: full -->
+  ([client bundle](docs/website/guides/client-bundle.md)). Nothing to bundle.
 - **Django all the way down.** Your templates, forms, auth, permissions and ORM work as they are, with CSRF, escaping and per-view authorization built in.
 - **Resilient transport.** WebSocket with automatic reconnection and an HTTP fallback.
 
@@ -238,7 +241,7 @@ examples live in [examples/demo_project](examples/demo_project).
 ## Architecture
 
 ```
-Browser        client runtime (~87 KB gz) ── events up, patches down
+Browser        client runtime (core + on-demand chunks) ── events up, patches down
    ↕ WebSocket (or HTTP fallback)
 Django         LiveView classes, event handlers, state (Python, Channels)
    ↕ PyO3

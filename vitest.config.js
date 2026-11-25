@@ -31,6 +31,25 @@ import { defineConfig, configDefaults } from 'vitest/config';
  * TODO(#1186 v0.9.4+): replace WebSocket filter with a proper happy-dom
  * WebSocket stub or upstream-fixed happy-dom version.
  */
+// The tests of the chunked modules (#4007), also run against the split build.
+const SPLIT_BUILD_TESTS = [
+  'tests/js/uploads.test.js',
+  'tests/js/upload_resume.test.js',
+  'tests/js/upload_progress_ui.test.js',
+  'tests/js/dj-paste.test.js',
+  'tests/js/component_batch5_image_upload_2985.test.js',
+  'tests/js/virtual_list.test.js',
+  'tests/js/virtual-keyed-ops-2017.test.js',
+  'tests/js/dj-virtual-teardown-2033.test.js',
+  'tests/js/dj-virtual-path-fallback-2113.test.js',
+  'tests/js/dj-virtual-patch-miss-diagnostic-2017.test.js',
+  'tests/js/stream-ops-dj-virtual-2017.test.js',
+  'tests/js/service_worker.test.js',
+  'tests/js/sw_advanced.test.js',
+  'tests/js/cursor-overlay.test.js',
+  'tests/js/tutorial-bubble.test.js',
+];
+
 export default defineConfig({
   test: {
     environment: 'happy-dom',
@@ -44,6 +63,20 @@ export default defineConfig({
     // checkout `make django-template-suite` creates carries Django's own
     // QUnit admin tests, which cannot run under vitest and are not ours.
     exclude: [...configDefaults.exclude, '**/.claude/**', '**/.django-src/**'],
+    // #4007: the tests of the modules built as client chunks run twice: once
+    // against the full bundle (client.js) and once, in `split-build`, against
+    // client-core.js followed by the chunks (tests/js/_split_build_setup.js).
+    projects: [
+      { extends: true, test: { name: 'default' } },
+      {
+        extends: true,
+        test: {
+          name: 'split-build',
+          setupFiles: ['tests/js/_split_build_setup.js'],
+          include: SPLIT_BUILD_TESTS,
+        },
+      },
+    ],
     onUnhandledError(error) {
       const msg = String(error && error.message ? error.message : '');
       const stack = String(error && error.stack ? error.stack : '');

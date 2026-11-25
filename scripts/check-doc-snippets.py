@@ -532,6 +532,11 @@ _SIZE_MARKER_RE = re.compile(r"<!--\s*size-claim:\s*([\w-]+)\s*-->", re.IGNORECA
 _SIZE_ARTIFACT_BY_MARKER = {
     "unminified": ("unminified", "gz_kb"),
     "shipped": ("shipped", "kb"),
+    # #4007: the injected client is a core bundle plus chunks loaded on use.
+    # `full` names the single bundle (client.min.js, the `shipped` section);
+    # `core` names client-core.min.js. A claim about either says which.
+    "full": ("shipped", "kb"),
+    "core": ("core", "kb"),
 }
 _SIZE_HISTORICAL_MARKER = "size-claim: historical"
 _SIZE_MARKER_VALUES = frozenset({*_SIZE_ARTIFACT_BY_MARKER, "historical"})

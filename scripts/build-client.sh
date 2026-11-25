@@ -3,9 +3,14 @@
 # pre-compressed siblings for production serving.
 #
 # Output files (under python/djust/static/djust/):
-#   client.js       — readable concat of 35+ source modules; auditable,
-#                     served in DEBUG mode, used as source-map target
-#   client.min.js   — terser-minified; default served in production
+#   client.js       — FULL bundle: readable concat of every source module;
+#                     auditable, used as source-map target
+#   client.min.js   — the full bundle, terser-minified
+#   client-core.js / client-core.min.js — CORE bundle (#4007): every module
+#                     except the chunks; the default the LiveView injects
+#                     (readable in DEBUG, minified in production)
+#   chunks/<name>.js / .min.js — optional feature modules the core loads when
+#                     the page uses them (see CHUNK_SPECS below)
 #   client.min.js.gz  — gzip-precompressed sibling (whitenoise picks automatically)
 #   client.min.js.br  — brotli-precompressed sibling (when `brotli` command available)
 #   client.min.js.map — terser source map (dev aid; DevTools only). NOT
@@ -123,26 +128,137 @@ minify_and_compress() {
 # guard short-circuits the re-init. Modules export their public API via
 # explicit `window.*` / `globalThis.djust.*` assignments, which still run
 # inside the IIFE, so nothing observable changes.
+# --- client chunks (#4007) ----------------------------------------------
+#
+# The full bundle (client.js / client.min.js) holds every module; it is what a
+# hand-written <script src="djust/client.js"> loads and what
+# LIVEVIEW_CONFIG['client_bundle'] = 'full' injects. The CORE bundle
+# (client-core.js / client-core.min.js) is the default the LiveView
+# post-processing injects: every module EXCEPT those listed here, which are
+# built as chunks/<name>.js and loaded by src/13c-chunk-loader.js only when the
+# page uses them.
+#
+# Spec: "<chunk name>|<src modules>|<core bindings the chunk reads>".
+# A chunk runs outside the core IIFE, so every core-scope name it uses must be
+# listed in the third field (and exposed by window.djust._chunkScope in
+# 13c-chunk-loader.js). The build rewrites each such identifier to a read
+# through that object; tests/js/client-chunks-4007.test.js fails the build's
+# output if a chunk is left with any other free identifier. The source
+# modules themselves are not edited.
+CHUNK_SPECS=(
+    "uploads|15-uploads.js|liveViewWS isWSConnected slotIdFor slotFrameFields"
+    "virtual-list|29-virtual-list.js|"
+    "cursor-overlay|16-cursor-overlay.js|"
+    "tutorial|28-tutorial-bubble.js|"
+    "service-worker|33-sw-registration.js|"
+)
+CHUNK_DIR="$STATIC_DIR/chunks"
+
+is_chunk_module() {
+    local mod="$1" spec mods
+    for spec in "${CHUNK_SPECS[@]}"; do
+        mods=$(echo "$spec" | cut -d'|' -f2)
+        for m in $mods; do
+            [ "$m" = "$mod" ] && return 0
+        done
+    done
+    return 1
+}
+
+# Guardrail (#953): tests/js/_helpers.js is a TEST-ONLY shim. If any of its
+# signatures ever leak into a production bundle, terser still happily ships
+# the code — but it bloats the client + exposes the `./_helpers.js` import
+# path in the minified map. Fail the build loudly if that happens.
+assert_no_test_helpers() {
+    if grep -q "Shared JSDOM test helpers" "$1" \
+       || grep -q "from '\./_helpers\.js'" "$1"; then
+        echo "ERROR: tests/js/_helpers.js content found in $(basename "$1")" >&2
+        echo "       (a source module under src/ is importing test-only helpers)" >&2
+        exit 1
+    fi
+}
+
+# Build client.js (full) and client-core.js (core)
+#
+# The concatenated modules are wrapped in a single IIFE so EVERY top-level
+# `const`/`let`/`class` is function-scoped, not bound in the shared global
+# lexical environment. Without the wrapper, re-executing the bundle in the
+# same document — morphdom re-attaching the <script> after live_redirect, or
+# a bfcache `pageshow` re-init — re-declared those identifiers at PARSE time
+# and threw `Identifier '_TEXT_INPUT_TYPES' has already been declared` before
+# the runtime `window._djustClientLoaded` guard could run (#1635). Inside the
+# IIFE a second execution just builds a fresh function scope and the runtime
+# guard short-circuits the re-init. Modules export their public API via
+# explicit `window.*` / `globalThis.djust.*` assignments, which still run
+# inside the IIFE, so nothing observable changes.
+#
+# Each bundle ends by naming itself on window.djust._clientBundle (first
+# bundle on the page wins), which 13c-chunk-loader.js reads at init.
 CLIENT_OUT="$STATIC_DIR/client.js"
+CORE_OUT="$STATIC_DIR/client-core.js"
 if ls "$SRC_DIR"/[0-9]*.js 1>/dev/null 2>&1; then
     {
         printf ';(function () {\n'
         cat "$SRC_DIR"/[0-9]*.js
-        printf '\n})();\n'
+        printf "\nwindow.djust._clientBundle = window.djust._clientBundle || 'full';\n"
+        printf '})();\n'
     } > "$CLIENT_OUT"
     echo "Built client.js from $(ls "$SRC_DIR"/[0-9]*.js | wc -l | tr -d ' ') modules ($(wc -c < "$CLIENT_OUT" | tr -d ' ') bytes, IIFE-wrapped)"
-    # Guardrail (#953): tests/js/_helpers.js is a TEST-ONLY shim. If any
-    # of its signatures ever leak into the production bundle, terser
-    # still happily ships the code — but it bloats the client + exposes
-    # the `./_helpers.js` import path in the minified map. Fail the
-    # build loudly if that happens.
-    if grep -q "Shared JSDOM test helpers" "$CLIENT_OUT" \
-       || grep -q "from '\./_helpers\.js'" "$CLIENT_OUT"; then
-        echo "ERROR: tests/js/_helpers.js content found in client.js bundle" >&2
-        echo "       (a source module under src/ is importing test-only helpers)" >&2
-        exit 1
-    fi
+    assert_no_test_helpers "$CLIENT_OUT"
     minify_and_compress "$CLIENT_OUT"
+
+    core_count=0
+    {
+        printf ';(function () {\n'
+        for f in "$SRC_DIR"/[0-9]*.js; do
+            if ! is_chunk_module "$(basename "$f")"; then
+                cat "$f"
+                core_count=$((core_count + 1))
+            fi
+        done
+        printf "\nwindow.djust._clientBundle = window.djust._clientBundle || 'core';\n"
+        printf '})();\n'
+    } > "$CORE_OUT"
+    echo "Built client-core.js ($(wc -c < "$CORE_OUT" | tr -d ' ') bytes, IIFE-wrapped)"
+    assert_no_test_helpers "$CORE_OUT"
+    minify_and_compress "$CORE_OUT"
+
+    rm -f "$CHUNK_DIR"/*.js "$CHUNK_DIR"/*.gz "$CHUNK_DIR"/*.br "$CHUNK_DIR"/*.map 2>/dev/null || true
+    mkdir -p "$CHUNK_DIR"
+    for spec in "${CHUNK_SPECS[@]}"; do
+        name=$(echo "$spec" | cut -d'|' -f1)
+        mods=$(echo "$spec" | cut -d'|' -f2)
+        bridged=$(echo "$spec" | cut -d'|' -f3)
+        out="$CHUNK_DIR/$name.js"
+        body=$(for m in $mods; do
+            if [ ! -f "$SRC_DIR/$m" ]; then
+                echo "ERROR: chunk $name names missing module $m" >&2
+                exit 1
+            fi
+            cat "$SRC_DIR/$m"
+        done) || exit 1
+        if [ -n "$bridged" ]; then
+            # Identifier boundaries only: never a property (`.name`), a longer
+            # identifier, or an object key (`name:`).
+            alt=$(echo "$bridged" | tr ' ' '|')
+            body=$(printf '%s\n' "$body" | DJ_ALT="$alt" perl -pe 's/(?<![\w\$.])($ENV{DJ_ALT})(?![\w\$])(?!\s*:(?!:))/__djScope.$1/g')
+        fi
+        {
+            printf '// djust client chunk "%s" (#4007): GENERATED by scripts/build-client.sh from %s.\n' "$name" "$mods"
+            printf '// Loaded by the core bundle (client-core.js) when the page needs it.\n'
+            printf ';(function () {\n'
+            printf "if (!window.djust || typeof window.djust._chunkShouldRun !== 'function' || !window.djust._chunkShouldRun('%s')) return;\n" "$name"
+            if [ -n "$bridged" ]; then
+                printf 'const __djScope = window.djust._chunkScope;\n'
+            fi
+            printf '%s\n' "$body"
+            printf "window.djust._chunkReady('%s');\n" "$name"
+            printf '})();\n'
+        } > "$out"
+        assert_no_test_helpers "$out"
+        echo "Built chunks/$name.js ($(wc -c < "$out" | tr -d ' ') bytes)"
+        minify_and_compress "$out"
+    done
 fi
 
 # Build debug-panel.js
@@ -208,6 +324,30 @@ write_size_manifest() {
         fi
     done
 
+    if [ ! -f "$STATIC_DIR/client-core.min.js.gz" ]; then
+        echo "ERROR: client-core.min.js.gz missing although client.min.js.gz was built" >&2
+        return 1
+    fi
+    local core_gz core_raw chunks_json chunk_gz_total
+    core_gz=$(wc -c < "$STATIC_DIR/client-core.min.js.gz" | tr -d ' ')
+    core_raw=$(wc -c < "$STATIC_DIR/client-core.min.js" | tr -d ' ')
+    chunks_json=""
+    chunk_gz_total=0
+    for spec in "${CHUNK_SPECS[@]}"; do
+        local cname cgz cmods
+        cname=$(echo "$spec" | cut -d'|' -f1)
+        cmods=$(echo "$spec" | cut -d'|' -f2)
+        if [ ! -f "$CHUNK_DIR/$cname.min.js.gz" ]; then
+            echo "ERROR: chunks/$cname.min.js.gz missing" >&2
+            return 1
+        fi
+        cgz=$(wc -c < "$CHUNK_DIR/$cname.min.js.gz" | tr -d ' ')
+        chunk_gz_total=$((chunk_gz_total + cgz))
+        [ -n "$chunks_json" ] && chunks_json="$chunks_json,"
+        chunks_json="$chunks_json
+    \"$cname\": { \"artifact\": \"chunks/$cname.min.js.gz\", \"modules\": \"$cmods\", \"bytes\": $cgz, \"kb\": $(python3 -c "print(round($cgz/1024, 1))") }"
+    done
+
     cat > "$manifest" <<JSON
 {
   "_comment": "GENERATED by scripts/build-client.sh — do not edit. The single measured source for every client-size claim in prose (#2138). Committed because the .gz artifacts are gitignored, so a fresh clone would otherwise have nothing to check against.",
@@ -215,8 +355,18 @@ write_size_manifest() {
     "artifact": "client.min.js.gz",
     "bytes": $min_gz,
     "kb": $(python3 -c "print(round($min_gz/1024, 1))"),
-    "note": "What a user downloads. This is the number README should quote."
+    "note": "The FULL bundle: every module, no chunk loading. What client.min.js serves and what LIVEVIEW_CONFIG['client_bundle'] = 'full' injects. A claim about it may carry <!-- size-claim: full --> (the default marker)."
   },
+  "core": {
+    "artifact": "client-core.min.js.gz",
+    "bytes": $core_gz,
+    "kb": $(python3 -c "print(round($core_gz/1024, 1))"),
+    "minified_raw_bytes": $core_raw,
+    "note": "The default injected bundle (#4007): every module except the chunks below. A page downloads this plus only the chunks it uses. Claims about it need <!-- size-claim: core --> on the line."
+  },
+  "chunks": {$chunks_json
+  },
+  "chunks_total_kb": $(python3 -c "print(round($chunk_gz_total/1024, 1))"),
   "minified_raw": { "artifact": "client.min.js", "bytes": $min_raw },
   "unminified": {
     "artifact": "client.js",
@@ -228,7 +378,7 @@ write_size_manifest() {
   }
 }
 JSON
-    echo "  sizes → client-sizes.json (shipped $(python3 -c "print(round($min_gz/1024, 1))") KB gz)"
+    echo "  sizes → client-sizes.json (full $(python3 -c "print(round($min_gz/1024, 1))") KB gz, core $(python3 -c "print(round($core_gz/1024, 1))") KB gz)"
 }
 
 if [ -f "$STATIC_DIR/client.min.js" ]; then

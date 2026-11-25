@@ -73,6 +73,9 @@ coverage/
 python/djust/static/djust/*.min.js.gz
 python/djust/static/djust/*.min.js.br
 python/djust/static/djust/*.min.js.map
+python/djust/static/djust/chunks/*.min.js.gz
+python/djust/static/djust/chunks/*.min.js.br
+python/djust/static/djust/chunks/*.min.js.map
 
 # Build artifacts
 marketing-site/

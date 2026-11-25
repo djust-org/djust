@@ -153,6 +153,8 @@ export default [
   {
     files: [
       "python/djust/static/djust/client.js",
+      "python/djust/static/djust/client-core.js",
+      "python/djust/static/djust/chunks/*.js",
       "python/djust/static/djust/client-dev.js",
       "python/djust/static/djust/debug-panel.js",
       "python/djust/static/djust/react-client.js",
