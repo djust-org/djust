@@ -308,8 +308,11 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
             // null rootEl is correct for the root view.
             // `_applyIf` is set by the page-POST fallback for a patch answer
             // (11-event-handler.js): a function, so never from the wire.
+            // #4001: the patches report what they changed, so the rescans
+            // after them cover the change, not the page.
+            const changes = {};
             const success = await applyPatches(data.patches, null,
-                typeof data._applyIf === 'function' ? data._applyIf : null);
+                typeof data._applyIf === 'function' ? data._applyIf : null, changes);
             _isBroadcastUpdate = false;
 
             // For broadcast patches, sync textarea .value from .textContent.
@@ -364,7 +367,7 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
             if (!window.djust._mountReady) window.djust._mountReady = true;
 
             _refreshRenderParameterContracts(transport, data);
-            reinitAfterDOMUpdate();
+            reinitAfterDOMUpdate(undefined, changes);
         }
         // Apply full HTML update (fallback)
         else if (data.html) {

@@ -477,6 +477,25 @@ function _childByDjId(node, host, id) {
     return Array.from(host.children).find((c) => c.getAttribute('dj-id') === id) || null;
 }
 
+/**
+ * The text node a `SetText` names by its parent's dj-id and its index among
+ * the parent's significant children (#4001), or null, and `path` resolves it.
+ * A text node has no dj-id of its own, so without these the client walked the
+ * child lists from the root. Counting stops at the index: no child array.
+ */
+function _textNodeByParent(patch, rootEl) {
+    if (patch.d || typeof patch.parent_d !== 'string' || !Number.isInteger(patch.index)) return null;
+    const parent = (rootEl || document).querySelector(`[dj-id="${CSS.escape(patch.parent_d)}"]`);
+    if (!parent) return null;
+    const preserveWhitespace = isWhitespacePreserving(parent);
+    let remaining = patch.index;
+    for (let c = childHost(parent).firstChild; c; c = c.nextSibling) {
+        if (!isSignificantChild(c, preserveWhitespace)) continue;
+        if (remaining-- === 0) return c.nodeType === 3 || c.nodeType === 8 ? c : null;
+    }
+    return null;
+}
+
 function getNodeByPath(path, djustId = null, rootEl = null) {
     // Strategy 1: ID-based resolution (fast, reliable)
     if (djustId) {
@@ -2803,7 +2822,8 @@ function applySinglePatch(patch, rootEl = null) {
     // rootEl is threaded in by the scoped applier (Sticky LiveViews
     // Phase B) so child / sticky patches don't resolve against the
     // parent view's dj-id namespace.
-    const node = getNodeByPath(patch.path, patch.d, rootEl);
+    const node = (patch.type === 'SetText' && _textNodeByParent(patch, rootEl))
+        || getNodeByPath(patch.path, patch.d, rootEl);
     // v0.7.0 — {% dj_activity %} gate. If the target node lives inside
     // a HIDDEN activity wrapper that is NOT eager, we intentionally
     // skip the subtree patch so local DOM state (form values, scroll
@@ -3311,6 +3331,12 @@ function _shouldUseViewTransition() {
  * on full success, ``false`` if any patch failed (caller may trigger a
  * full re-render fallback).
  *
+ * ``changes`` (#4001): an object the call fills with what the patches changed
+ * — inserted and removed roots, changed attributes, text-only updates (see
+ * ``_summarizeMutations``). The response handler passes it on to
+ * ``reinitAfterDOMUpdate`` so the rescans cover the change, not the page. The
+ * boolean result stays the return value: every caller tests it.
+ *
  * **Two paths**:
  *
  * - **Direct (default)**: just runs the inner patch loop and resolves
@@ -3330,7 +3356,7 @@ function _shouldUseViewTransition() {
  * to abandon the animation and return false so the caller can trigger
  * a full re-render fallback. ADR-013.
  */
-async function applyPatches(patches, rootEl = null, applyIf = null) {
+async function applyPatches(patches, rootEl = null, applyIf = null, changes = null) {
     if (!patches || patches.length === 0) {
         return true;
     }
@@ -3339,7 +3365,7 @@ async function applyPatches(patches, rootEl = null, applyIf = null) {
     // `applyIf` (#4108) is asked at the last moment, in the same synchronous
     // step as the first mutation: under a View Transition that is the update
     // callback, which runs later than this call. False applies nothing.
-    const apply = () => (applyIf && !applyIf() ? false : _applyPatchesInner(patches, rootEl));
+    const apply = () => (applyIf && !applyIf() ? false : _applyPatchesInner(patches, rootEl, changes));
 
     if (_shouldUseViewTransition()) {
         let innerResult = true;
@@ -3372,7 +3398,16 @@ async function applyPatches(patches, rootEl = null, applyIf = null) {
  * It runs INSIDE the View Transition callback, not after it — a render after
  * `updateCallbackDone` would land past the transition's snapshot.
  */
-function _applyPatchesInner(patches, rootEl) {
+function _applyPatchesInner(patches, rootEl, changes = null) {
+    // #4001: what this batch changed, for the caller to scope its rescans to.
+    // Recorded by a MutationObserver rather than by each patch op, so every
+    // path that inserts (placements, Replace, subtrees, virtual-list renders,
+    // a hook's beforeUpdate) is covered; takeRecords() reads it synchronously.
+    const observer = changes && typeof MutationObserver === 'function'
+        ? new MutationObserver(() => {}) : null;
+    if (observer) {
+        observer.observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+    }
     try {
         if (!patches || patches.length === 0) return true;
         return _withBeforeUpdateHooks(rootEl || getLiveViewRoot(),
@@ -3381,7 +3416,53 @@ function _applyPatchesInner(patches, rootEl) {
         if (typeof window.djust._flushVirtualKeyedOps === 'function') {
             window.djust._flushVirtualKeyedOps();
         }
+        if (observer) {
+            _summarizeMutations(observer.takeRecords(), changes);
+            observer.disconnect();
+        }
     }
+}
+
+/**
+ * Fill `out` with what `records` changed (#4001):
+ *
+ * - `inserted`: connected elements added, outermost only (a descendant of
+ *   another inserted element is covered by it). A moved element counts.
+ * - `removed`: nodes taken out and not put back.
+ * - `attrs`: Map of element to the Set of attribute names that changed.
+ * - `text`: how many text-only changes (character data, text nodes added).
+ * - `scoped: true`: the record is complete, so a rescan may use it instead of
+ *   walking the page. A caller without it scans the page as before.
+ */
+function _summarizeMutations(records, out) {
+    const added = new Set();
+    const removed = [];
+    const attrs = new Map();
+    let text = 0;
+    for (const r of records) {
+        if (r.type === 'childList') {
+            r.addedNodes.forEach((n) => { if (n.nodeType === 1) added.add(n); else text++; });
+            r.removedNodes.forEach((n) => removed.push(n));
+        } else if (r.type === 'attributes') {
+            let names = attrs.get(r.target);
+            if (!names) attrs.set(r.target, names = new Set());
+            names.add(r.attributeName);
+        } else {
+            text++;
+        }
+    }
+    const inserted = [];
+    added.forEach((n) => {
+        if (!n.isConnected) return;
+        for (let p = n.parentNode; p; p = p.parentNode) if (added.has(p)) return;
+        inserted.push(n);
+    });
+    out.inserted = inserted;
+    out.removed = removed.filter((n) => !n.isConnected);
+    out.attrs = attrs;
+    out.text = text;
+    out.scoped = true;
+    return out;
 }
 
 /**
@@ -3441,4 +3522,5 @@ function _applyPatchesInnerRaw(patches, rootEl = null) {
 if (typeof globalThis !== 'undefined') {
     globalThis.djust = globalThis.djust || {};
     globalThis.djust.applyPatches = applyPatches;
+    globalThis.djust._summarizeMutations = _summarizeMutations;
 }

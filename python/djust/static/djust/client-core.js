@@ -712,8 +712,11 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
             // null rootEl is correct for the root view.
             // `_applyIf` is set by the page-POST fallback for a patch answer
             // (11-event-handler.js): a function, so never from the wire.
+            // #4001: the patches report what they changed, so the rescans
+            // after them cover the change, not the page.
+            const changes = {};
             const success = await applyPatches(data.patches, null,
-                typeof data._applyIf === 'function' ? data._applyIf : null);
+                typeof data._applyIf === 'function' ? data._applyIf : null, changes);
             _isBroadcastUpdate = false;
 
             // For broadcast patches, sync textarea .value from .textContent.
@@ -768,7 +771,7 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
             if (!window.djust._mountReady) window.djust._mountReady = true;
 
             _refreshRenderParameterContracts(transport, data);
-            reinitAfterDOMUpdate();
+            reinitAfterDOMUpdate(undefined, changes);
         }
         // Apply full HTML update (fallback)
         else if (data.html) {
@@ -5757,18 +5760,42 @@ const _scopedRegistry = new Map();
 let _scopedDelegationInstalled = false;
 
 /**
+ * Does a patch's change record (#4001) add, remove or re-mark a LiveView root?
+ * Then the governed-roots set is stale and only a full scan is correct. The
+ * selector is wider than _refreshScopedGovernorRoots' (it also matches
+ * <html>/<head>), which only sends more updates down the full path.
+ */
+function _changesTouchRoots(changes) {
+    const sel = '[dj-view], [dj-root]';
+    const hit = (n) => n.nodeType === 1 && (n.matches(sel) || n.querySelector(sel) !== null);
+    if (changes.inserted.some(hit) || changes.removed.some(hit)) return true;
+    for (const names of changes.attrs.values()) {
+        if (names.has('dj-view') || names.has('dj-root')) return true;
+    }
+    return false;
+}
+
+/**
  * Scan the DOM for elements with dj-window-[event] / dj-document-[event] attributes
  * and register them in the scoped registry for delegated dispatch.
+ *
+ * `changes` (#4001): what a patch batch changed (see _summarizeMutations).
+ * With it, only the inserted subtrees and the elements whose attributes
+ * changed are scanned: an untouched element's attributes are as they were at
+ * the last scan, and its registry entry with them. Eviction still visits the
+ * whole registry (its size is the number of declaring elements, not the page).
  */
-function _scanScopedElements() {
+function _scanScopedElements(changes) {
     const scopedPrefixes = ['dj-window-', 'dj-document-'];
     const scopedEventTypes = ['keydown', 'keyup', 'click', 'scroll', 'resize'];
+    const scoped = changes && changes.scoped && !_changesTouchRoots(changes);
     // Refresh the shared governed-roots set first: the registry eviction
     // below and the orphan sweep both judge staleness against it, and the
     // set must describe the CURRENT DOM on every bind. Root-selection rules
     // (every root, outermost only, MUST match the sweep's set) live on
-    // _refreshScopedGovernorRoots (#2110, #2832).
-    _refreshScopedGovernorRoots();
+    // _refreshScopedGovernorRoots (#2110, #2832). A scoped scan keeps the set:
+    // _changesTouchRoots established that no root came, went or changed.
+    if (!scoped) _refreshScopedGovernorRoots();
 
     // Clear stale entries through the SAME predicate the orphan sweep uses
     // (#2832): the element left the DOM, the server dropped the attribute,
@@ -5850,6 +5877,18 @@ function _scanScopedElements() {
                 });
             }
         }
+    }
+
+    if (scoped) {
+        changes.inserted.forEach(function(r) {
+            if (!_isGovernedByScopedRoots(r)) return;
+            scanElement(r);
+            r.querySelectorAll('*').forEach(scanElement);
+        });
+        changes.attrs.forEach(function(_names, el) {
+            if (el.isConnected && _isGovernedByScopedRoots(el)) scanElement(el);
+        });
+        return;
     }
 
     if (_scopedGovernorRoots.length === 0) {
@@ -7065,7 +7104,7 @@ function _bindNativeDropdownObservers(root) {
 
 window.addEventListener('online', () => _bindNativeDropdownObservers(document));
 
-function bindLiveViewEvents(scope) {
+function bindLiveViewEvents(scope, changes) {
     const root = scope || getLiveViewRoot() || document;
     _bindNativeDropdownObservers(root);
 
@@ -7178,7 +7217,7 @@ function bindLiveViewEvents(scope) {
     // registry entries for elements that left the DOM, so repeated calls are
     // safe and cheap. Without this, a dj-window-keydown.escape on patch-inserted
     // content would silently never bind (#1996).
-    _scanScopedElements();
+    _scanScopedElements(changes);
 
     // --- Feature 2: dj-click-away ---
     document.querySelectorAll('[dj-click-away]').forEach(element => {
@@ -7756,8 +7795,13 @@ function clearOptimisticState(eventName) {
 // will scroll again — correct behavior for newly inserted content.
 const _scrolledElements = new WeakSet();
 
-function reinitAfterDOMUpdate(scope) {
-    bindLiveViewEvents(scope);
+function reinitAfterDOMUpdate(scope, changes) {
+    // #4001: `changes` is what the patches just applied changed (applyPatches'
+    // collector). With it, the scoped-listener and dj-model rescans visit the
+    // inserted subtrees and changed elements instead of the page. Without it
+    // (mount, morph, navigation) they scan as before.
+    const scoped = changes && changes.scoped ? changes : null;
+    bindLiveViewEvents(scope, scoped);
     // A clear_draft() from an event handler arrives in a patch (#2971).
     applyDraftClearFlag();
     // A data-draft field this update inserted is restored and saved from its
@@ -7779,7 +7823,7 @@ function reinitAfterDOMUpdate(scope) {
     // changed) is bound here, not only at init (#3334). Idempotent: the bind
     // guard is a JS property on the element, never a DOM attribute a morph
     // would strip, so an unchanged input is skipped on every pass.
-    if (window.djust.bindModelElements) window.djust.bindModelElements(scope || document);
+    if (window.djust.bindModelElements) window.djust.bindModelElements(scope || document, scoped);
 
     // {% djust_offline_indicator %} text / status class for any indicator
     // this update inserted (#3051, 52-offline-state.js).
@@ -9479,6 +9523,25 @@ function childHost(node) {
 function _childByDjId(node, host, id) {
     if (host === node) return node.querySelector(`:scope > [dj-id="${CSS.escape(id)}"]`);
     return Array.from(host.children).find((c) => c.getAttribute('dj-id') === id) || null;
+}
+
+/**
+ * The text node a `SetText` names by its parent's dj-id and its index among
+ * the parent's significant children (#4001), or null, and `path` resolves it.
+ * A text node has no dj-id of its own, so without these the client walked the
+ * child lists from the root. Counting stops at the index: no child array.
+ */
+function _textNodeByParent(patch, rootEl) {
+    if (patch.d || typeof patch.parent_d !== 'string' || !Number.isInteger(patch.index)) return null;
+    const parent = (rootEl || document).querySelector(`[dj-id="${CSS.escape(patch.parent_d)}"]`);
+    if (!parent) return null;
+    const preserveWhitespace = isWhitespacePreserving(parent);
+    let remaining = patch.index;
+    for (let c = childHost(parent).firstChild; c; c = c.nextSibling) {
+        if (!isSignificantChild(c, preserveWhitespace)) continue;
+        if (remaining-- === 0) return c.nodeType === 3 || c.nodeType === 8 ? c : null;
+    }
+    return null;
 }
 
 function getNodeByPath(path, djustId = null, rootEl = null) {
@@ -11807,7 +11870,8 @@ function applySinglePatch(patch, rootEl = null) {
     // rootEl is threaded in by the scoped applier (Sticky LiveViews
     // Phase B) so child / sticky patches don't resolve against the
     // parent view's dj-id namespace.
-    const node = getNodeByPath(patch.path, patch.d, rootEl);
+    const node = (patch.type === 'SetText' && _textNodeByParent(patch, rootEl))
+        || getNodeByPath(patch.path, patch.d, rootEl);
     // v0.7.0 — {% dj_activity %} gate. If the target node lives inside
     // a HIDDEN activity wrapper that is NOT eager, we intentionally
     // skip the subtree patch so local DOM state (form values, scroll
@@ -12315,6 +12379,12 @@ function _shouldUseViewTransition() {
  * on full success, ``false`` if any patch failed (caller may trigger a
  * full re-render fallback).
  *
+ * ``changes`` (#4001): an object the call fills with what the patches changed
+ * — inserted and removed roots, changed attributes, text-only updates (see
+ * ``_summarizeMutations``). The response handler passes it on to
+ * ``reinitAfterDOMUpdate`` so the rescans cover the change, not the page. The
+ * boolean result stays the return value: every caller tests it.
+ *
  * **Two paths**:
  *
  * - **Direct (default)**: just runs the inner patch loop and resolves
@@ -12334,7 +12404,7 @@ function _shouldUseViewTransition() {
  * to abandon the animation and return false so the caller can trigger
  * a full re-render fallback. ADR-013.
  */
-async function applyPatches(patches, rootEl = null, applyIf = null) {
+async function applyPatches(patches, rootEl = null, applyIf = null, changes = null) {
     if (!patches || patches.length === 0) {
         return true;
     }
@@ -12343,7 +12413,7 @@ async function applyPatches(patches, rootEl = null, applyIf = null) {
     // `applyIf` (#4108) is asked at the last moment, in the same synchronous
     // step as the first mutation: under a View Transition that is the update
     // callback, which runs later than this call. False applies nothing.
-    const apply = () => (applyIf && !applyIf() ? false : _applyPatchesInner(patches, rootEl));
+    const apply = () => (applyIf && !applyIf() ? false : _applyPatchesInner(patches, rootEl, changes));
 
     if (_shouldUseViewTransition()) {
         let innerResult = true;
@@ -12376,7 +12446,16 @@ async function applyPatches(patches, rootEl = null, applyIf = null) {
  * It runs INSIDE the View Transition callback, not after it — a render after
  * `updateCallbackDone` would land past the transition's snapshot.
  */
-function _applyPatchesInner(patches, rootEl) {
+function _applyPatchesInner(patches, rootEl, changes = null) {
+    // #4001: what this batch changed, for the caller to scope its rescans to.
+    // Recorded by a MutationObserver rather than by each patch op, so every
+    // path that inserts (placements, Replace, subtrees, virtual-list renders,
+    // a hook's beforeUpdate) is covered; takeRecords() reads it synchronously.
+    const observer = changes && typeof MutationObserver === 'function'
+        ? new MutationObserver(() => {}) : null;
+    if (observer) {
+        observer.observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+    }
     try {
         if (!patches || patches.length === 0) return true;
         return _withBeforeUpdateHooks(rootEl || getLiveViewRoot(),
@@ -12385,7 +12464,53 @@ function _applyPatchesInner(patches, rootEl) {
         if (typeof window.djust._flushVirtualKeyedOps === 'function') {
             window.djust._flushVirtualKeyedOps();
         }
+        if (observer) {
+            _summarizeMutations(observer.takeRecords(), changes);
+            observer.disconnect();
+        }
     }
+}
+
+/**
+ * Fill `out` with what `records` changed (#4001):
+ *
+ * - `inserted`: connected elements added, outermost only (a descendant of
+ *   another inserted element is covered by it). A moved element counts.
+ * - `removed`: nodes taken out and not put back.
+ * - `attrs`: Map of element to the Set of attribute names that changed.
+ * - `text`: how many text-only changes (character data, text nodes added).
+ * - `scoped: true`: the record is complete, so a rescan may use it instead of
+ *   walking the page. A caller without it scans the page as before.
+ */
+function _summarizeMutations(records, out) {
+    const added = new Set();
+    const removed = [];
+    const attrs = new Map();
+    let text = 0;
+    for (const r of records) {
+        if (r.type === 'childList') {
+            r.addedNodes.forEach((n) => { if (n.nodeType === 1) added.add(n); else text++; });
+            r.removedNodes.forEach((n) => removed.push(n));
+        } else if (r.type === 'attributes') {
+            let names = attrs.get(r.target);
+            if (!names) attrs.set(r.target, names = new Set());
+            names.add(r.attributeName);
+        } else {
+            text++;
+        }
+    }
+    const inserted = [];
+    added.forEach((n) => {
+        if (!n.isConnected) return;
+        for (let p = n.parentNode; p; p = p.parentNode) if (added.has(p)) return;
+        inserted.push(n);
+    });
+    out.inserted = inserted;
+    out.removed = removed.filter((n) => !n.isConnected);
+    out.attrs = attrs;
+    out.text = text;
+    out.scoped = true;
+    return out;
 }
 
 /**
@@ -12445,6 +12570,7 @@ function _applyPatchesInnerRaw(patches, rootEl = null) {
 if (typeof globalThis !== 'undefined') {
     globalThis.djust = globalThis.djust || {};
     globalThis.djust.applyPatches = applyPatches;
+    globalThis.djust._summarizeMutations = _summarizeMutations;
 }
 
 // ============================================================================
@@ -15585,14 +15711,44 @@ const _MODEL_EXACT = ['[dj-model]', '[dj-model\\.lazy]', '[dj-model\\.debounce]'
 const _MODEL_NUMBERED_CANDIDATES = ['input', 'textarea', 'select', '[contenteditable]'];
 
 /**
- * Scan and bind all dj-model elements.
+ * Scan and bind all dj-model elements; with a patch's `changes` (#4001), only
+ * those the patch inserted or whose attributes it changed.
  *
  * Runs after every DOM update (#3334), so the common case must be cheap: a page
  * of already-bound inputs costs the native selector matches and a few property
  * reads per element, not an attribute walk (#3355).
  */
-function bindModelElements(root) {
-    root = root || document;
+function bindModelElements(root, changes) {
+    if (changes && changes.scoped) {
+        // #4001: after a patch batch, only what it inserted or re-attributed
+        // can hold a new or changed binding.
+        changes.inserted.forEach(el => {
+            _bindModelCandidate(el);
+            _bindModelIn(el);
+        });
+        changes.attrs.forEach((_names, el) => {
+            if (el.isConnected) _bindModelCandidate(el);
+        });
+        return;
+    }
+    _bindModelIn(root || document);
+}
+
+/** Bind `el` itself when it carries a dj-model attribute it is not bound by. */
+function _bindModelCandidate(el) {
+    if (_modelUnchanged(el)) return;
+    const names = el.getAttributeNames();
+    for (let i = 0; i < names.length; i++) {
+        // eslint-disable-next-line security/detect-object-injection
+        if (names[i].startsWith('dj-model')) {
+            _bindModel(el);
+            return;
+        }
+    }
+}
+
+/** The dj-model elements under `root` (descendants; not `root` itself). */
+function _bindModelIn(root) {
     _MODEL_EXACT.forEach(selector => {
         root.querySelectorAll(selector).forEach(el => {
             if (!_modelUnchanged(el)) _bindModel(el);

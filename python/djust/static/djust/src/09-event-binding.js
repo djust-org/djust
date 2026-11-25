@@ -343,18 +343,42 @@ const _scopedRegistry = new Map();
 let _scopedDelegationInstalled = false;
 
 /**
+ * Does a patch's change record (#4001) add, remove or re-mark a LiveView root?
+ * Then the governed-roots set is stale and only a full scan is correct. The
+ * selector is wider than _refreshScopedGovernorRoots' (it also matches
+ * <html>/<head>), which only sends more updates down the full path.
+ */
+function _changesTouchRoots(changes) {
+    const sel = '[dj-view], [dj-root]';
+    const hit = (n) => n.nodeType === 1 && (n.matches(sel) || n.querySelector(sel) !== null);
+    if (changes.inserted.some(hit) || changes.removed.some(hit)) return true;
+    for (const names of changes.attrs.values()) {
+        if (names.has('dj-view') || names.has('dj-root')) return true;
+    }
+    return false;
+}
+
+/**
  * Scan the DOM for elements with dj-window-[event] / dj-document-[event] attributes
  * and register them in the scoped registry for delegated dispatch.
+ *
+ * `changes` (#4001): what a patch batch changed (see _summarizeMutations).
+ * With it, only the inserted subtrees and the elements whose attributes
+ * changed are scanned: an untouched element's attributes are as they were at
+ * the last scan, and its registry entry with them. Eviction still visits the
+ * whole registry (its size is the number of declaring elements, not the page).
  */
-function _scanScopedElements() {
+function _scanScopedElements(changes) {
     const scopedPrefixes = ['dj-window-', 'dj-document-'];
     const scopedEventTypes = ['keydown', 'keyup', 'click', 'scroll', 'resize'];
+    const scoped = changes && changes.scoped && !_changesTouchRoots(changes);
     // Refresh the shared governed-roots set first: the registry eviction
     // below and the orphan sweep both judge staleness against it, and the
     // set must describe the CURRENT DOM on every bind. Root-selection rules
     // (every root, outermost only, MUST match the sweep's set) live on
-    // _refreshScopedGovernorRoots (#2110, #2832).
-    _refreshScopedGovernorRoots();
+    // _refreshScopedGovernorRoots (#2110, #2832). A scoped scan keeps the set:
+    // _changesTouchRoots established that no root came, went or changed.
+    if (!scoped) _refreshScopedGovernorRoots();
 
     // Clear stale entries through the SAME predicate the orphan sweep uses
     // (#2832): the element left the DOM, the server dropped the attribute,
@@ -436,6 +460,18 @@ function _scanScopedElements() {
                 });
             }
         }
+    }
+
+    if (scoped) {
+        changes.inserted.forEach(function(r) {
+            if (!_isGovernedByScopedRoots(r)) return;
+            scanElement(r);
+            r.querySelectorAll('*').forEach(scanElement);
+        });
+        changes.attrs.forEach(function(_names, el) {
+            if (el.isConnected && _isGovernedByScopedRoots(el)) scanElement(el);
+        });
+        return;
     }
 
     if (_scopedGovernorRoots.length === 0) {
@@ -1651,7 +1687,7 @@ function _bindNativeDropdownObservers(root) {
 
 window.addEventListener('online', () => _bindNativeDropdownObservers(document));
 
-function bindLiveViewEvents(scope) {
+function bindLiveViewEvents(scope, changes) {
     const root = scope || getLiveViewRoot() || document;
     _bindNativeDropdownObservers(root);
 
@@ -1764,7 +1800,7 @@ function bindLiveViewEvents(scope) {
     // registry entries for elements that left the DOM, so repeated calls are
     // safe and cheap. Without this, a dj-window-keydown.escape on patch-inserted
     // content would silently never bind (#1996).
-    _scanScopedElements();
+    _scanScopedElements(changes);
 
     // --- Feature 2: dj-click-away ---
     document.querySelectorAll('[dj-click-away]').forEach(element => {
@@ -2342,8 +2378,13 @@ function clearOptimisticState(eventName) {
 // will scroll again — correct behavior for newly inserted content.
 const _scrolledElements = new WeakSet();
 
-function reinitAfterDOMUpdate(scope) {
-    bindLiveViewEvents(scope);
+function reinitAfterDOMUpdate(scope, changes) {
+    // #4001: `changes` is what the patches just applied changed (applyPatches'
+    // collector). With it, the scoped-listener and dj-model rescans visit the
+    // inserted subtrees and changed elements instead of the page. Without it
+    // (mount, morph, navigation) they scan as before.
+    const scoped = changes && changes.scoped ? changes : null;
+    bindLiveViewEvents(scope, scoped);
     // A clear_draft() from an event handler arrives in a patch (#2971).
     applyDraftClearFlag();
     // A data-draft field this update inserted is restored and saved from its
@@ -2365,7 +2406,7 @@ function reinitAfterDOMUpdate(scope) {
     // changed) is bound here, not only at init (#3334). Idempotent: the bind
     // guard is a JS property on the element, never a DOM attribute a morph
     // would strip, so an unchanged input is skipped on every pass.
-    if (window.djust.bindModelElements) window.djust.bindModelElements(scope || document);
+    if (window.djust.bindModelElements) window.djust.bindModelElements(scope || document, scoped);
 
     // {% djust_offline_indicator %} text / status class for any indicator
     // this update inserted (#3051, 52-offline-state.js).

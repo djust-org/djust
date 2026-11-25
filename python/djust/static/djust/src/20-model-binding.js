@@ -215,14 +215,44 @@ const _MODEL_EXACT = ['[dj-model]', '[dj-model\\.lazy]', '[dj-model\\.debounce]'
 const _MODEL_NUMBERED_CANDIDATES = ['input', 'textarea', 'select', '[contenteditable]'];
 
 /**
- * Scan and bind all dj-model elements.
+ * Scan and bind all dj-model elements; with a patch's `changes` (#4001), only
+ * those the patch inserted or whose attributes it changed.
  *
  * Runs after every DOM update (#3334), so the common case must be cheap: a page
  * of already-bound inputs costs the native selector matches and a few property
  * reads per element, not an attribute walk (#3355).
  */
-function bindModelElements(root) {
-    root = root || document;
+function bindModelElements(root, changes) {
+    if (changes && changes.scoped) {
+        // #4001: after a patch batch, only what it inserted or re-attributed
+        // can hold a new or changed binding.
+        changes.inserted.forEach(el => {
+            _bindModelCandidate(el);
+            _bindModelIn(el);
+        });
+        changes.attrs.forEach((_names, el) => {
+            if (el.isConnected) _bindModelCandidate(el);
+        });
+        return;
+    }
+    _bindModelIn(root || document);
+}
+
+/** Bind `el` itself when it carries a dj-model attribute it is not bound by. */
+function _bindModelCandidate(el) {
+    if (_modelUnchanged(el)) return;
+    const names = el.getAttributeNames();
+    for (let i = 0; i < names.length; i++) {
+        // eslint-disable-next-line security/detect-object-injection
+        if (names[i].startsWith('dj-model')) {
+            _bindModel(el);
+            return;
+        }
+    }
+}
+
+/** The dj-model elements under `root` (descendants; not `root` itself). */
+function _bindModelIn(root) {
     _MODEL_EXACT.forEach(selector => {
         root.querySelectorAll(selector).forEach(el => {
             if (!_modelUnchanged(el)) _bindModel(el);
