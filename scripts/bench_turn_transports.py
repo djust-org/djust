@@ -476,7 +476,7 @@ class LoopLag:
             try:
                 await self._task
             except asyncio.CancelledError:
-                pass
+                pass  # the sampler was cancelled on purpose: stop() ends it
         return self.samples
 
 
@@ -609,8 +609,7 @@ async def run(args: argparse.Namespace) -> Dict[str, Any]:
 
 def machine() -> Dict[str, Any]:
     import django
-
-    import djust
+    from djust import __version__ as djust_version
 
     cpu = platform.processor() or platform.machine()
     try:
@@ -620,11 +619,11 @@ def machine() -> Dict[str, Any]:
                     cpu = line.split(":", 1)[1].strip()
                     break
     except OSError:
-        pass
+        pass  # no /proc/cpuinfo (not Linux): keep the platform name
     return {
         "python": sys.version.split()[0],
         "django": django.get_version(),
-        "djust": getattr(djust, "__version__", "?"),
+        "djust": djust_version,
         "platform": platform.platform(),
         "cpu": cpu,
         "cpus": os.cpu_count(),
