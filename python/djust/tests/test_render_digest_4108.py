@@ -470,6 +470,17 @@ def test_path_addressed_removes_the_id_hints_and_nothing_else():
         {"type": "SetAttr", "path": [], "key": "class", "value": "d"},
         # #4001: a SetText's parent id goes, and its index (counted in that parent) with it.
         {"type": "SetText", "path": [2, 0], "text": "y", "parent_d": "7", "index": 0},
+        # ... also inside a VirtualUpdate's inner patches, with their own d.
+        {
+            "type": "VirtualUpdate",
+            "path": [3],
+            "d": "9",
+            "key": "k",
+            "patches": [
+                {"type": "SetText", "path": [0], "text": "z", "parent_d": "a", "index": 0},
+                {"type": "SetAttr", "path": [], "d": "b", "key": "x", "value": "1"},
+            ],
+        },
     ]
     assert _render_digest.path_addressed(patches) == [
         {"type": "SetText", "path": [0, 1], "text": "x"},
@@ -477,6 +488,15 @@ def test_path_addressed_removes_the_id_hints_and_nothing_else():
         {"type": "RemoveChild", "path": [0], "index": 2},
         {"type": "SetAttr", "path": [], "key": "class", "value": "d"},
         {"type": "SetText", "path": [2, 0], "text": "y"},
+        {
+            "type": "VirtualUpdate",
+            "path": [3],
+            "key": "k",
+            "patches": [
+                {"type": "SetText", "path": [0], "text": "z"},
+                {"type": "SetAttr", "path": [], "key": "x", "value": "1"},
+            ],
+        },
     ]
     # The input is not changed.
     assert patches[0]["d"] == "1a"

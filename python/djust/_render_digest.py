@@ -535,5 +535,8 @@ def path_addressed(patches: list[Any]) -> list[Any]:
             # index is a placement and stays.
             dropped = _ID_HINTS + ("index",) if patch.get("type") == "SetText" else _ID_HINTS
             patch = {key: value for key, value in patch.items() if key not in dropped}
+        if isinstance(patch, dict) and isinstance(patch.get("patches"), list):
+            # A VirtualUpdate's inner patches carry the same hints (#4001).
+            patch = {**patch, "patches": path_addressed(patch["patches"])}
         out.append(patch)
     return out
