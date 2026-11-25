@@ -178,6 +178,13 @@ pub(crate) const MODEL_NAME_TAG: &str = "__djust_model_name__";
 /// itself read for a tag on the way back.
 pub(crate) const ESCAPED_MAP_TAG: &str = "__djust_escaped_map__";
 
+/// The binary-format tag for a map holding an [`ObjectKey::Method`] key (#4267): a one-key map
+/// whose payload is `[[method names], [[key, value], ...]]`. A key is written as its text, so
+/// untagged a method key came back from a msgpack state round trip as a plain `Str` and a stored
+/// row sorted by the called value again. Data cannot mint it, as for [`MODEL_NAME_TAG`]: a user
+/// map whose only key is this tag is written under [`ESCAPED_MAP_TAG`]. JSON writes the plain map.
+pub(crate) const METHOD_KEYS_TAG: &str = "__djust_method_keys__";
+
 /// The [`MISSING_TAG`] value, for tests outside the crate. `#[doc(hidden)]`,
 /// not API — same rationale as [`decimal_tag`].
 #[doc(hidden)]
@@ -1753,7 +1760,7 @@ impl Serialize for Value {
                 if !serializer.is_human_readable()
                     && o.len() == 1
                     && o.keys().next().is_some_and(|k| {
-                        matches!(k, ObjectKey::Str(s) if s == MODEL_NAME_TAG || s == ESCAPED_MAP_TAG)
+                        matches!(k, ObjectKey::Str(s) if s == MODEL_NAME_TAG || s == ESCAPED_MAP_TAG || s == METHOD_KEYS_TAG)
                     }) =>
             {
                 let (key, value) = o.iter().next().expect("len checked");
@@ -1763,6 +1770,23 @@ impl Serialize for Value {
                 };
                 let mut m = serializer.serialize_map(Some(1))?;
                 m.serialize_entry(ESCAPED_MAP_TAG, &(key, value))?;
+                m.end()
+            }
+            // A row with a called method's key keeps it through a binary round trip (#4267).
+            Value::Object(o)
+                if !serializer.is_human_readable()
+                    && o.keys().any(|k| matches!(k, ObjectKey::Method(_))) =>
+            {
+                let names: Vec<&str> = o
+                    .keys()
+                    .filter_map(|k| match k {
+                        ObjectKey::Method(name) => Some(name.as_str()),
+                        _ => None,
+                    })
+                    .collect();
+                let pairs: Vec<(&ObjectKey, &Value)> = o.iter().collect();
+                let mut m = serializer.serialize_map(Some(1))?;
+                m.serialize_entry(METHOD_KEYS_TAG, &(names, pairs))?;
                 m.end()
             }
             Value::Object(o) => o.serialize(serializer),
@@ -2010,6 +2034,14 @@ impl<'de> Deserialize<'de> for Value {
                     // Binary formats only: that is the only place the writer puts it.
                     if let (true, Some(Value::String(d))) = (self.binary, obj.get(MODEL_NAME_TAG)) {
                         return Ok(Value::ModelName(d.clone()));
+                    }
+                    // A map with called method keys (#4267): `[[names], [[key, value], ...]]`.
+                    if let (true, Some(Value::List(payload))) =
+                        (self.binary, obj.get(METHOD_KEYS_TAG))
+                    {
+                        if let Some(map) = method_keyed_map(payload) {
+                            return Ok(Value::Object(map));
+                        }
                     }
                     // A user map the writer escaped: `[key, value]`, read back as that one-key
                     // map with no tag interpretation of the key.
@@ -4794,27 +4826,60 @@ fn is_model_name(ob: &Bound<'_, PyAny>) -> bool {
     }
 }
 
+/// The map a [`METHOD_KEYS_TAG`] payload describes, or `None` for any other shape (#4267).
+fn method_keyed_map(payload: &[Value]) -> Option<IndexMap<ObjectKey, Value>> {
+    let [Value::List(names), Value::List(pairs)] = payload else {
+        return None;
+    };
+    let names: Vec<&str> = names
+        .iter()
+        .map(|n| match n {
+            Value::String(n) => Some(n.as_str()),
+            _ => None,
+        })
+        .collect::<Option<_>>()?;
+    let mut map = IndexMap::with_capacity(pairs.len());
+    for pair in pairs {
+        let Value::List(pair) = pair else {
+            return None;
+        };
+        let [Value::String(key), value] = pair.as_slice() else {
+            return None;
+        };
+        let key = if names.contains(&key.as_str()) {
+            ObjectKey::Method(key.clone())
+        } else {
+            ObjectKey::Str(key.clone())
+        };
+        map.insert(key, value.clone());
+    }
+    Some(map)
+}
+
 /// Is this `str` subclass a `djust.serialization.CalledName` key (#4267)?
 fn is_called_name(ob: &Bound<'_, PyAny>) -> bool {
+    match called_name_class(ob.py()) {
+        Ok(class) => ob.get_type().is(class.bind(ob.py())),
+        Err(_) => false,
+    }
+}
+
+/// The cached `djust.serialization.CalledName` class (#4267).
+fn called_name_class(py: Python<'_>) -> PyResult<&'static Py<PyAny>> {
     static CLASS: pyo3::sync::PyOnceLock<Py<PyAny>> = pyo3::sync::PyOnceLock::new();
-    let py = ob.py();
-    match CLASS.get_or_try_init(py, || -> PyResult<Py<PyAny>> {
+    CLASS.get_or_try_init(py, || -> PyResult<Py<PyAny>> {
         Ok(py
             .import("djust.serialization")?
             .getattr("CalledName")?
             .unbind())
-    }) {
-        Ok(class) => ob.get_type().is(class.bind(py)),
-        Err(_) => false,
-    }
+    })
 }
 
 /// A dict key back to Python: an [`ObjectKey::Method`] as a `CalledName` again (#4267), so a
 /// row that crosses to a handler and back keeps it; every other key as its value.
 fn object_key_into_py(py: Python<'_>, key: ObjectKey) -> PyResult<Bound<'_, PyAny>> {
     if let ObjectKey::Method(name) = key {
-        let class = py.import("djust.serialization")?.getattr("CalledName")?;
-        return class.call1((name,));
+        return called_name_class(py)?.bind(py).call1((name,));
     }
     Value::from(key).into_pyobject(py)
 }
@@ -6903,6 +6968,63 @@ mod tests {
         assert!(values_structurally_equal(&column, &column.clone()));
         assert!(!values_structurally_equal(&method, &column));
         assert!(!values_structurally_equal(&column, &method));
+    }
+
+    /// #4267: a called method's key survives a msgpack state round trip (nested rows too), in
+    /// its place; JSON writes the plain map; a user map spelled like the tag stays that map.
+    #[test]
+    fn a_method_key_survives_a_binary_round_trip() {
+        let row = |name: &str| {
+            let mut m = IndexMap::new();
+            m.insert(ObjectKey::Str("pk".into()), Value::Integer(1));
+            m.insert(
+                ObjectKey::Method("get_username".into()),
+                Value::String(name.into()),
+            );
+            m.insert(ObjectKey::Str("email".into()), Value::String("e".into()));
+            Value::Object(m)
+        };
+        let mut outer = IndexMap::new();
+        outer.insert(
+            ObjectKey::Method("get_full_name".into()),
+            Value::String("Zed".into()),
+        );
+        outer.insert(
+            ObjectKey::Str("users".into()),
+            Value::List(vec![row("cara"), row("abe")]),
+        );
+        let original = Value::Object(outer);
+        let bytes = rmp_serde::to_vec(&original).expect("encode");
+        let back: Value = rmp_serde::from_slice(&bytes).expect("decode");
+        assert!(values_structurally_equal(&original, &back), "{back:?}");
+        let Value::Object(map) = &back else {
+            panic!("{back:?}")
+        };
+        let keys: Vec<&ObjectKey> = map.keys().collect();
+        assert!(matches!(keys[0], ObjectKey::Method(k) if k == "get_full_name"));
+        assert!(matches!(keys[1], ObjectKey::Str(k) if k == "users"));
+
+        let json = serde_json::to_string(&row("cara")).expect("json");
+        assert_eq!(json, r#"{"pk":1,"get_username":"cara","email":"e"}"#);
+
+        let mut forged = IndexMap::new();
+        forged.insert(
+            ObjectKey::Str(METHOD_KEYS_TAG.into()),
+            Value::List(vec![
+                Value::List(vec![Value::String("pk".into())]),
+                Value::List(vec![Value::List(vec![
+                    Value::String("pk".into()),
+                    Value::Integer(1),
+                ])]),
+            ]),
+        );
+        let forged = Value::Object(forged);
+        let back: Value =
+            rmp_serde::from_slice(&rmp_serde::to_vec(&forged).expect("encode")).expect("decode");
+        assert!(
+            values_structurally_equal(&forged, &back),
+            "data minted it: {back:?}"
+        );
     }
 
     #[test]

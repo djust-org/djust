@@ -1029,3 +1029,47 @@ class TestTheMarkerNeverPrints4267:
         sorted_part, printed = got.split("|", 1)
         assert sorted_part == _django_render(self.SORT, dict(context)).rstrip("|") == ""
         assert printed == unmarked.split("|", 1)[1], name
+
+
+@pytest.mark.django_db
+class TestTheMarkerSurvivesStoredState4267:
+    """A state backend keeps the view as ``serialize_msgpack`` bytes and hands back a clone
+    (InMemory and Redis alike). A render that reuses stored rows must still sort as Django."""
+
+    SOURCE = "{% for u in users|dictsort:'get_username' %}{{ u.get_username }},{% endfor %}"
+
+    def _view(self):
+        from djust._rust import RustLiveView
+        from djust.mixins.jit import mark_called_sort_keys
+
+        rows = _rust.serialize_queryset(list(_users("QuerySet")), ["get_username"])
+        view = RustLiveView(self.SOURCE)
+        view.set_state("users", mark_called_sort_keys(rows, User, self.SOURCE, "users"))
+        return view
+
+    def test_a_msgpack_round_trip_keeps_the_method_key(self, world) -> None:
+        from djust._rust import RustLiveView
+
+        view = self._view()
+        assert view.render() == _django_render(self.SOURCE, {"users": _users("QuerySet")}) == ""
+        clone = RustLiveView.deserialize_msgpack(view.serialize_msgpack())
+        assert clone.render() == ""
+
+    def test_the_in_memory_backend_clone_keeps_the_method_key(self, world) -> None:
+        from djust.state_backends.memory import InMemoryStateBackend
+
+        backend = InMemoryStateBackend()
+        backend.set("k-4267", self._view())
+        stored = backend.get("k-4267")
+        assert stored is not None
+        assert stored[0].render() == ""
+
+    def test_gate_off_an_untagged_clone_sorts(self, world) -> None:
+        """Non-vacuity: the same rows stored unmarked sort by the called value."""
+        from djust._rust import RustLiveView
+
+        rows = _rust.serialize_queryset(list(_users("QuerySet")), ["get_username"])
+        view = RustLiveView(self.SOURCE)
+        view.set_state("users", rows)
+        clone = RustLiveView.deserialize_msgpack(view.serialize_msgpack())
+        assert clone.render() == "abe,bob,cara,"
