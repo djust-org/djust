@@ -51,7 +51,7 @@ def _light_query_budget() -> int:
     budget = config.get("queryset_light_relation_max_parents", 1)
     if isinstance(budget, bool) or not isinstance(budget, int) or budget <= 0:
         return 0
-    return budget
+    return int(budget)
 
 
 def light_relation_parent_bound(queryset: Any) -> int:
