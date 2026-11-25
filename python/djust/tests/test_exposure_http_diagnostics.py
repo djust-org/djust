@@ -3,13 +3,13 @@
 ``RequestMixin.post`` built ``f"...: {type(e).__name__}: {str(e)}"``, logged it
 with ``exc_info``, and under ``DEBUG`` returned it to the client together with
 ``traceback.format_exc()`` and the posted ``params``. The HTTP path serves
-explicit views (it has ``legacy_exposure`` branches throughout), so an explicit
+explicit views, so an explicit
 view's exception text reached both the log and the response.
 
 Contract (ADR-038 D-a, revised 2026-09-22): under ``DEBUG=False`` an explicit
 view's failure is value-free in both the response and the log. Under
-``DEBUG=True`` it reads like Django's own DEBUG output, exactly as a legacy
-view's does: exception text and traceback in the response and the log.
+``DEBUG=True`` it reads like Django's own DEBUG output: exception text and
+traceback in the response and the log.
 """
 
 import json
@@ -24,7 +24,7 @@ from djust.decorators import state
 
 
 class HTTPFailureView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><span>{{ count }}</span></div>"
     count = state(0, persist="server")
 
@@ -51,7 +51,7 @@ def _request(rf, session, method="get"):
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("debug", [True, False])
-@pytest.mark.parametrize("policy", ["legacy", "explicit"])
+@pytest.mark.parametrize("policy", ["explicit"])
 def test_http_event_failure_is_value_free_for_explicit_views(
     monkeypatch, rf, settings, caplog, policy, debug
 ):
@@ -70,7 +70,7 @@ def test_http_event_failure_is_value_free_for_explicit_views(
     assert response.status_code == 500, body
 
     if debug:
-        # Legacy (unchanged) and, under DEBUG, explicit too: Django-like
+        # Under DEBUG: Django-like
         # detail in the response and in the log, traceback included.
         payload = json.loads(body)
         assert "HTTP_EVENT_SENTINEL" in payload["error"]
@@ -78,10 +78,6 @@ def test_http_event_failure_is_value_free_for_explicit_views(
         assert "Traceback" in payload["traceback"]
         assert "HTTP_EVENT_SENTINEL" in caplog.text
         assert "Protected view operation failed" not in caplog.text
-    elif policy == "legacy":
-        # Unchanged legacy production behaviour: generic response, detail in the log.
-        assert "HTTP_EVENT_SENTINEL" not in body
-        assert "HTTP_EVENT_SENTINEL" in caplog.text
     else:
         assert "HTTP_EVENT_SENTINEL" not in body
         assert "traceback" not in json.loads(body)
@@ -90,15 +86,16 @@ def test_http_event_failure_is_value_free_for_explicit_views(
 
 
 class WrapperFailureView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><span>wrapped</span></div>"
     wrapper_template = "exposure_wrapper.html"
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("policy", ["legacy", "explicit"])
+@pytest.mark.parametrize("debug", [False, True])
+@pytest.mark.parametrize("policy", ["explicit"])
 def test_wrapper_template_failure_log_follows_the_debug_contract(
-    monkeypatch, rf, settings, caplog, policy
+    monkeypatch, rf, settings, caplog, policy, debug
 ):
     """The wrapper render runs the project's context processors (application
     code), so its failure is value-free for an explicit view in production.
@@ -112,12 +109,13 @@ def test_wrapper_template_failure_log_follows_the_debug_contract(
     monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
     monkeypatch.setattr(WrapperFailureView, "exposure_policy", policy)
     monkeypatch.setattr(loader, "get_template", lambda name: FailingWrapper())
-    settings.DEBUG = False
+    settings.DEBUG = debug
     with caplog.at_level(logging.DEBUG):
         response = WrapperFailureView.as_view()(_request(rf, SessionStore()))
     assert response.status_code == 200
     assert "wrapped" in response.content.decode()
-    if policy == "legacy":
+    if debug:
+        # The positive control: the wrapper render ran and failed.
         assert "WRAPPER_SENTINEL" in caplog.text
     else:
         assert "WRAPPER_SENTINEL" not in caplog.text

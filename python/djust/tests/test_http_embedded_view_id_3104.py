@@ -42,6 +42,9 @@ class _Receiver:
     def _record(self, name):
         self.received = (self.received + " " + name).strip()
 
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "received": self.received}
+
     @event_handler
     def got_click(self, **kwargs):
         self._record("click")
@@ -69,7 +72,7 @@ class _Receiver:
 
 
 class Child(_Receiver, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         '<div><p>child <span id="r">{{ received }}</span></p>'
         '<button dj-click="got_click">c</button></div>'
@@ -82,7 +85,7 @@ class Child(_Receiver, LiveView):
 class StickyChild(_Receiver, LiveView):
     """A sticky child that opted into state persistence (ADR-018)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     sticky = True
     sticky_id = "dock"
     template = '<div><p>dock <span id="r">{{ received }}</span></p></div>'
@@ -97,13 +100,8 @@ class DeniedChild(Child):
     permission_required = "auth.change_user"
 
 
-class ExplicitChild(LiveView):
-    exposure_policy = "explicit"
-    template = "<div><span>explicit</span></div>"
-
-
 class Page(_Receiver, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         "{% load live_tags %}"
         '<div dj-root dj-view="' + MOD + '.Page">'
@@ -118,41 +116,12 @@ class Page(_Receiver, LiveView):
     def mount(self, request, **kwargs):
         self.received = ""
 
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context["view"] = self
-        return context
-
 
 class DeniedPage(Page):
     template = (
         "{% load live_tags %}"
         '<div dj-root dj-view="' + MOD + '.DeniedPage">'
         '{% live_render "' + MOD + '.DeniedChild" view_id="denied" %}'
-        "</div>"
-    )
-
-
-class ExplicitParentPage(Page):
-    exposure_policy = "explicit"
-    template = (
-        "{% load live_tags %}"
-        '<div dj-root dj-view="' + MOD + '.ExplicitParentPage">'
-        '{% live_render "' + MOD + '.Child" view_id="legacy-kid" %}'
-        "</div>"
-    )
-
-    def get_context_data(self, **kwargs):
-        # An explicit page reserves ``view``: the page must render, so the
-        # refusal below is the mixed-policy rule's, not a render error (#4173).
-        return LiveView.get_context_data(self, **kwargs)
-
-
-class MixedPage(Page):
-    template = (
-        "{% load live_tags %}"
-        '<div dj-root dj-view="' + MOD + '.MixedPage">'
-        '{% live_render "' + MOD + '.ExplicitChild" view_id="ekid" %}'
         "</div>"
     )
 
@@ -434,26 +403,6 @@ def test_an_empty_view_id_is_the_parent_as_on_the_socket_runtime(session, flat, 
 
 
 @pytest.mark.django_db
-def test_an_explicit_exposure_child_is_not_routed_over_http(session):
-    """A mixed-policy pair is not routed: a legacy page's explicit child stays
-    refused. Explicit pairs are covered in ``test_http_explicit_child_4173.py``."""
-    _page(session, MixedPage)
-    response = _post(session, {"view_id": "ekid"}, view_class=MixedPage)
-    assert response.status_code == 400
-    assert json.loads(response.content) == {"error": "Embedded view not found"}
-
-
-@pytest.mark.django_db
-def test_nothing_is_routed_for_an_explicit_exposure_page(session):
-    """A mixed-policy pair is not routed: an explicit page's legacy child stays
-    refused. Explicit pairs are covered in ``test_http_explicit_child_4173.py``."""
-    _page(session, ExplicitParentPage)
-    response = _post(session, {"view_id": "legacy-kid"}, view_class=ExplicitParentPage)
-    assert response.status_code == 400
-    assert json.loads(response.content) == {"error": "Embedded view not found"}
-
-
-@pytest.mark.django_db
 def test_a_lazy_tag_child_is_routed_over_http(session):
     """``{% live_render lazy %}``: its fill runs only on the GET, so the POST
     mounts that slot's child to route its event (#4173 follow-up)."""
@@ -484,11 +433,14 @@ def test_lazy_and_eager_twins_get_distinct_ids_and_each_is_routed(session):
 
 
 class Row(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div><span id="row">row={{ item_id }}</span></div>'
 
     def mount(self, request, item_id=None, **kwargs):
         self.item_id = item_id
+
+    def get_context_data(self, **kwargs):
+        return {**super().get_context_data(**kwargs), "item_id": self.item_id}
 
     @event_handler
     def remove(self, **kwargs):
@@ -515,7 +467,7 @@ def _fresh_rows():
 class ListPage(LiveView):
     """A for-loop of rows, read from ``_ROWS`` on every mount."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         "{% load live_tags %}"
         '<div dj-root dj-view="' + MOD + '.ListPage">'
@@ -539,9 +491,7 @@ class ListPage(LiveView):
         self.items = list(_ROWS)
 
     def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context["view"] = self
-        return context
+        return {**super().get_context_data(**kwargs), "items": self.items}
 
 
 def _row_of(response):

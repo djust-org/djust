@@ -67,12 +67,6 @@ class StreamView(LiveView):
         self.count += 1
 
 
-class LegacyStreamView(StreamView):
-    exposure_policy = "legacy"
-    count = state(0)
-    mode = state("list")
-
-
 @pytest.fixture
 def staged(monkeypatch):
     monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
@@ -123,9 +117,8 @@ async def run_stream_events(view_class):
     return request, runtime, mount_frame, frames, renders
 
 
-@pytest.mark.parametrize("view_class", [StreamView, LegacyStreamView])
-async def test_stream_insert_and_delete_render_identically_in_rust_and_django(staged, view_class):
-    _, _, mount_frame, frames, renders = await run_stream_events(view_class)
+async def test_stream_insert_and_delete_render_identically_in_rust_and_django(staged):
+    _, _, mount_frame, frames, renders = await run_stream_events(StreamView)
     expected = [
         '<ul dj-stream="items" id="items"><li id="items-1">First</li></ul><span>1</span>',
         '<ul dj-stream="items" id="items"><li id="items-1">First</li>'
@@ -143,23 +136,6 @@ async def test_stream_insert_and_delete_render_identically_in_rust_and_django(st
     )
     delete = next(f for f in frames["remove_item"] if f.get("type") == "patch")
     assert any(p["type"] == "RemoveChild" for p in delete["patches"])
-
-
-@pytest.mark.parametrize("view_class", [StreamView, LegacyStreamView])
-async def test_explicit_and_legacy_stream_frames_match(staged, view_class):
-    """Explicit mode changes no stream patch; the legacy run proves the path ran."""
-    _, _, mount_frame, frames, _ = await run_stream_events(view_class)
-    patches = {
-        event: [f["patches"] for f in sent if f.get("type") == "patch"]
-        for event, sent in frames.items()
-    }
-    assert patches["add_item"] and patches["remove_item"]
-    if view_class is StreamView:
-        _, _, _, legacy_frames, _ = await run_stream_events(LegacyStreamView)
-        assert patches == {
-            event: [f["patches"] for f in sent if f.get("type") == "patch"]
-            for event, sent in legacy_frames.items()
-        }
 
 
 async def test_stream_item_fields_reach_no_explicit_destination(staged, settings):

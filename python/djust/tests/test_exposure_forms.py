@@ -78,12 +78,6 @@ class ExplicitFormView(FormMixin, LiveView):
     template = TEMPLATE
 
 
-class LegacyFormView(FormMixin, LiveView):
-    exposure_policy = "legacy"
-    form_class = SignupForm
-    template = TEMPLATE
-
-
 class PersistedFormView(FormMixin, LiveView):
     """Opts ``name`` into server persistence; declares a client snapshot field."""
 
@@ -94,7 +88,7 @@ class PersistedFormView(FormMixin, LiveView):
     navigation = state("NAV", persist="client", client=True)
 
 
-VIEWS = {"explicit": ExplicitFormView, "legacy": LegacyFormView}
+VIEWS = {"explicit": ExplicitFormView}
 
 
 @pytest.fixture
@@ -149,7 +143,7 @@ def mount_html(transport):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+@pytest.mark.parametrize("policy", ["explicit"])
 async def test_validate_field_and_submit_form_render_errors_over_the_runtime(staged, policy):
     request = await sync_to_async(make_request)()
     runtime, transport = await mount(request, VIEWS[policy])
@@ -185,7 +179,7 @@ def get(session):
     return request
 
 
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+@pytest.mark.parametrize("policy", ["explicit"])
 def test_validate_field_and_submit_form_render_errors_over_http_post(staged, policy):
     view_class = VIEWS[policy]
     session = SessionStore()
@@ -293,16 +287,6 @@ async def test_password_value_never_reaches_session_frames_snapshot_or_debug(sta
         debug_update = await sync_to_async(view.get_debug_update)()
     for payload in (debug_info, debug_update, transport.sent):
         assert PASSWORD not in json.dumps(payload, default=str)
-
-
-@pytest.mark.asyncio
-async def test_legacy_password_control_renders_the_value(staged):
-    """Legacy behavior is unchanged: the template echo reaches the frames."""
-    request = await sync_to_async(make_request)()
-    with override_settings(**WIRE_SETTINGS):
-        frames = await websocket_frames(request.session.session_key, "LegacyFormView")
-    assert frames[1]["type"] == "mount", frames[1]
-    assert PASSWORD in json.dumps(frames)
 
 
 def test_password_value_never_reaches_http_post_response_or_session(staged):
@@ -449,23 +433,20 @@ def test_http_post_restores_opted_in_fields_across_requests(staged):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
-def test_raw_model_pk_is_re_resolved_only_for_legacy_views(staged, policy):
+@pytest.mark.parametrize("policy", ["explicit"])
+def test_raw_model_pk_is_never_re_resolved_from_a_raw_key(staged, policy):
     user = User.objects.create(username="form-owner")
     view = VIEWS[policy]()
     view.model_pk = user.pk
     view.model_label = "auth.User"
     view._model_instance = None
     view._ensure_model_instance()
-    if policy == "legacy":
-        assert view._model_instance == user  # control: the unscoped lookup ran
-    else:
-        assert view._model_instance is None
+    assert view._model_instance is None
 
 
 # ---------------------------------------------------------------------------
 # 6. LiveView.render() (the test client's render) resolves ``view`` for form
-#    tags under both policies, as render_with_diff() does (#4151).
+#    tags, as render_with_diff() does (#4151).
 # ---------------------------------------------------------------------------
 
 FIELD_TEMPLATE = '{% load live_tags %}<div dj-root>{% live_field view "name" %}</div>'
@@ -475,14 +456,10 @@ class ExplicitFieldView(ExplicitFormView):
     template = FIELD_TEMPLATE
 
 
-class LegacyFieldView(LegacyFormView):
-    template = FIELD_TEMPLATE
+FIELD_VIEWS = {"explicit": ExplicitFieldView}
 
 
-FIELD_VIEWS = {"explicit": ExplicitFieldView, "legacy": LegacyFieldView}
-
-
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+@pytest.mark.parametrize("policy", ["explicit"])
 def test_test_client_render_resolves_view_for_form_tags(staged, policy):
     from djust.testing import LiveViewTestClient
 
@@ -497,7 +474,7 @@ def test_test_client_render_resolves_view_for_form_tags(staged, policy):
 
 # ---------------------------------------------------------------------------
 # 7. ModelFormMixin ``object_recheck = "writes"`` reuses the authorized record
-#    under both policies, and a real change to the record still forces the full
+#    and a real change to the record still forces the full
 #    check (#4153). The explicit render caches the record's @property values on
 #    the instance (``_djust_prop_cache``); that is not a change to the record.
 # ---------------------------------------------------------------------------
@@ -555,15 +532,10 @@ class ExplicitRecheckView(ModelFormMixin, LiveView):
             assert change == "none", change
 
 
-class LegacyRecheckView(ExplicitRecheckView):
-    exposure_policy = "legacy"
-
-
-RECHECK_VIEWS = {"explicit": ExplicitRecheckView, "legacy": LegacyRecheckView}
+RECHECK_VIEWS = {"explicit": ExplicitRecheckView}
 
 urlpatterns = [
     path("recheck-explicit/<int:pk>/", ExplicitRecheckView.as_view()),
-    path("recheck-legacy/<int:pk>/", LegacyRecheckView.as_view()),
 ]
 
 
@@ -634,7 +606,7 @@ def recheck_urls():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+@pytest.mark.parametrize("policy", ["explicit"])
 @pytest.mark.parametrize("change", ["none", "field", "fk"])
 async def test_a_read_only_event_reuses_the_record_until_it_changes(recheck_urls, policy, change):
     user, record, others = await sync_to_async(_recheck_world)()
@@ -652,7 +624,7 @@ async def test_a_read_only_event_reuses_the_record_until_it_changes(recheck_urls
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+@pytest.mark.parametrize("policy", ["explicit"])
 async def test_a_write_resolves_and_authorizes_the_record_while_it_is_reusable(
     recheck_urls, policy
 ):
@@ -666,7 +638,7 @@ async def test_a_write_resolves_and_authorizes_the_record_while_it_is_reusable(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+@pytest.mark.parametrize("policy", ["explicit"])
 async def test_a_record_with_prefetched_relations_is_never_reused(recheck_urls, policy):
     """The fingerprint covers many-to-many data only through Django's prefetch cache, and a
     prefetched ``QuerySet`` compares by identity: such a record is checked in full on every
@@ -681,7 +653,7 @@ async def test_a_record_with_prefetched_relations_is_never_reused(recheck_urls, 
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+@pytest.mark.parametrize("policy", ["explicit"])
 async def test_loading_a_deferred_field_is_a_change_to_the_record(recheck_urls, policy):
     """A deferred field loaded since the record was authorized forces the full check. The
     render leaves ``codename`` deferred (the template does not read it; on an explicit view
@@ -723,7 +695,7 @@ def _another(request, **changes):
     return other
 
 
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+@pytest.mark.parametrize("policy", ["explicit"])
 def test_reuse_is_only_for_the_same_user_session_and_tenant(recheck_urls, policy):
     from djust.tenants.resolvers import TenantInfo
 
@@ -747,7 +719,7 @@ def test_reuse_is_only_for_the_same_user_session_and_tenant(recheck_urls, policy
     assert reuses(handler, _another(request, tenant=object())) is False
 
 
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+@pytest.mark.parametrize("policy", ["explicit"])
 def test_a_tenant_of_the_same_identity_is_the_same_tenant(recheck_urls, policy):
     """The stamp compares a tenant by identity, not by object: a model tenant re-read
     for the next turn (a new instance), or a ``TenantInfo`` resolved again, is the same
@@ -777,7 +749,7 @@ def test_a_tenant_of_the_same_identity_is_the_same_tenant(recheck_urls, policy):
     assert view._djust_reuses_authorized_object(view.validate_field, request) is False
 
 
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+@pytest.mark.parametrize("policy", ["explicit"])
 def test_a_write_never_reuses_the_record(recheck_urls, policy):
     user, record, _ = _recheck_world()
     view, request = _authorized(policy, user, record)
@@ -785,7 +757,7 @@ def test_a_write_never_reuses_the_record(recheck_urls, policy):
         assert view._djust_reuses_authorized_object(getattr(view, name), request) is False
 
 
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
+@pytest.mark.parametrize("policy", ["explicit"])
 def test_the_render_cache_on_the_record_is_not_a_change(recheck_urls, policy):
     """What the explicit render stores on the instance (``_djust_prop_cache``) is ignored;
     the field it sits beside is not."""

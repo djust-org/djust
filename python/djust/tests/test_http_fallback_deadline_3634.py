@@ -62,7 +62,7 @@ CTX: ContextVar = ContextVar("deadline_ctx", default="unset")
 
 
 class Watching(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root dj-id='0'><p>{{ status }}</p></div>"
 
     def mount(self, request, **kwargs):
@@ -563,13 +563,19 @@ class TestWorkThatFinishesInTime:
         assert LOG == [("result", "fast_async", "fast-async", None, "")]
         _join_workers()
 
-    def test_a_failing_task_still_goes_to_handle_async_result_not_a_500(self, caplog):
-        with override_settings(LIVEVIEW_CONFIG={KEY: 60}):
+    @pytest.mark.parametrize("debug", [False, True])
+    def test_a_failing_task_still_goes_to_handle_async_result_not_a_500(self, caplog, debug):
+        with override_settings(LIVEVIEW_CONFIG={KEY: 60}, DEBUG=debug):
             with caplog.at_level(logging.ERROR, logger="djust.mixins.request"):
                 view, response, body = _post(Watching, "kick_failing")
         assert response.status_code == 200, body
         assert [(e[1], e[3]) for e in LOG] == [("boom", "ValueError")]
-        assert any("start_async task boom" in r.getMessage() for r in caplog.records)
+        if debug:
+            # The positive control: the failure was logged, with its detail.
+            assert any("start_async task boom" in r.getMessage() for r in caplog.records)
+        else:
+            assert "Protected view operation failed" in caplog.text
+            assert "start_async task boom" not in caplog.text
         _join_workers()
 
     def test_context_variables_reach_the_worker(self):
@@ -675,7 +681,7 @@ class TestEveryBranchOfThePostDispatch:
 class PokesPage(LiveView):
     """A child's handler queues the hanging work on the page that holds it."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         "{% load live_tags %}"
         '<div dj-root dj-view="' + __name__ + '.PokesPage">'
@@ -693,7 +699,7 @@ class PokesPage(LiveView):
 
 
 class PokingKid(Watching):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div><p id='c'>{{ status }}</p></div>"
 
     @event_handler()
@@ -702,7 +708,7 @@ class PokingKid(Watching):
 
 
 class HangKid(Watching):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div><p id='c'>{{ status }}</p></div>"
 
     @event_handler()
@@ -712,7 +718,7 @@ class HangKid(Watching):
 
 
 class HangPage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         "{% load live_tags %}"
         '<div dj-root dj-view="' + __name__ + '.HangPage">'

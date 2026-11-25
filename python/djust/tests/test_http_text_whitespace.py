@@ -69,9 +69,13 @@ def _http_get(shell: str, text: str, directory: str) -> str:
         "WhitespaceView",
         (LiveView,),
         {
-            "exposure_policy": "legacy",
+            "exposure_policy": "explicit",
             "template_name": name,
             "mount": lambda self, request, **kw: setattr(self, "t", text),
+            "get_context_data": lambda self, **kw: {
+                **LiveView.get_context_data(self, **kw),
+                "t": self.t,
+            },
         },
     )
     request = RequestFactory().get("/")

@@ -8,8 +8,7 @@ log-exposure pin could not see them:
 * the create/update/delete sync branches stored ``str(e)`` in the sync queue
   through ``mark_failed``.
 
-Both now carry a value-free message for nonlegacy views; legacy output is
-unchanged. The sync runs inside a real runtime event, and the assertions read
+Both now carry a value-free message. The sync runs inside a real runtime event, and the assertions read
 the WebSocket frames and the queue's stored JSON bytes.
 
 The ownerless ``sync_endpoint_view`` returned ``Batch sync error: <str(e)>`` in
@@ -45,7 +44,7 @@ class _FailingQueue:
 
 
 class SyncRuntimeView(SyncMixin, OfflineMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>sync</div>"
     offline_storage = "adr038_pwa_sync"
 
@@ -87,11 +86,9 @@ class SyncRuntimeView(SyncMixin, OfflineMixin, LiveView):
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stage", ["queue", "actions"])
-@pytest.mark.parametrize("policy", ["legacy", "explicit"])
-async def test_sync_failures_reach_frames_and_queue_value_free(monkeypatch, stage, policy):
+async def test_sync_failures_reach_frames_and_queue_value_free(monkeypatch, stage):
     CALLS.clear()
     monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
-    monkeypatch.setattr(SyncRuntimeView, "exposure_policy", policy)
     monkeypatch.setattr(SyncRuntimeView, "stored", "", raising=False)
     request = await sync_to_async(make_request)()
     runtime, transport = await mount(request, SyncRuntimeView, view=__name__ + ".SyncRuntimeView")
@@ -103,20 +100,17 @@ async def test_sync_failures_reach_frames_and_queue_value_free(monkeypatch, stag
         await asyncio.sleep(0)
     frames = json.dumps(transport.sent)
     stored = SyncRuntimeView.stored
-    legacy = policy == "legacy"
     if stage == "queue":
         assert CALLS == ["get_pending"], "the sync never ran; the test would be vacuous"
         assert "offline:sync_error" in frames, transport.sent
-        assert (QUEUE_SENTINEL in frames) == legacy
-        if not legacy:
-            assert "Offline sync failed" in frames
+        assert QUEUE_SENTINEL not in frames
+        assert "Offline sync failed" in frames
     else:
         assert sorted(CALLS) == ["create", "delete", "update"], CALLS
         assert "offline:sync_complete" in frames, transport.sent
         assert stored.count('"status": "failed"') == 3, stored
-        assert stored.count(ACTION_SENTINEL) == (3 if legacy else 0)
-        if not legacy:
-            assert stored.count('"error": "ValueError"') == 3, stored
+        assert stored.count(ACTION_SENTINEL) == 0
+        assert stored.count('"error": "ValueError"') == 3, stored
         # The client-queued data itself stays in the queue; only error text is gated.
         assert "OFFLINE_BODY_SENTINEL" in stored
         assert ACTION_SENTINEL not in frames

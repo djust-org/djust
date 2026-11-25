@@ -4,8 +4,8 @@
 read it through ``list_presences()``, and ``update_cursor_position`` rebroadcasts
 it to the presence group on every ``cursor_move``. The meta the application
 passes is its own output (D6). What the framework added on its own was the
-authenticated user's ``username`` (as ``name``) and ``user_id``. For nonlegacy
-views it no longer adds them; legacy views are unchanged.
+authenticated user's ``username`` (as ``name``) and ``user_id``. A view no
+longer adds them.
 
 Asserted at the destinations peers read: the backend's presence records and the
 message a subscribed peer channel receives from a real in-memory channel layer.
@@ -13,7 +13,6 @@ message a subscribed peer channel receives from a real in-memory channel layer.
 
 from types import SimpleNamespace
 
-import pytest
 from asgiref.sync import async_to_sync
 from channels.layers import InMemoryChannelLayer
 from django.test import RequestFactory
@@ -26,20 +25,18 @@ USER_PK = 918273645
 
 
 class CursorView(LiveCursorMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root></div>"
 
 
-@pytest.mark.parametrize("policy", ["legacy", "explicit"])
-def test_presence_meta_carries_only_application_meta_for_explicit_views(monkeypatch, policy):
+def test_presence_meta_carries_only_application_meta_for_explicit_views(monkeypatch):
     monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
-    monkeypatch.setattr(CursorView, "exposure_policy", policy)
-    key = "adr038-presence-meta-" + policy
+    key = "adr038-presence-meta"
     monkeypatch.setattr(CursorView, "presence_key", key)
     layer = InMemoryChannelLayer()
     monkeypatch.setattr(presence, "get_channel_layer", lambda: layer)
     group = PresenceManager.presence_group_name(key)
-    peer = "peer.adr038!" + policy
+    peer = "peer.adr038!"
     async_to_sync(layer.group_add)(group, peer)
 
     view = CursorView()
@@ -68,9 +65,5 @@ def test_presence_meta_carries_only_application_meta_for_explicit_views(monkeypa
     cursor_meta = cursor[0]["payload"]["meta"]
     # Application-passed meta always reaches peers (D6 application output).
     assert record_meta["color"] == cursor_meta["color"] == "APP_COLOR"
-    if policy == "legacy":
-        assert record_meta["name"] == cursor_meta["name"] == USERNAME
-        assert record_meta["user_id"] == cursor_meta["user_id"] == str(USER_PK)
-    else:
-        assert record_meta == cursor_meta == {"color": "APP_COLOR"}
-        assert USERNAME not in repr(records) + repr(messages)
+    assert record_meta == cursor_meta == {"color": "APP_COLOR"}
+    assert USERNAME not in repr(records) + repr(messages)
