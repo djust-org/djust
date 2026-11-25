@@ -185,146 +185,6 @@ window.djust = window.djust || {};
 window.djust.parseEventHandler = parseEventHandler;
 
 /**
- * Extract parameters from element data-* attributes with optional type coercion.
- *
- * Supports typed attributes via suffix notation:
- *   data-sender-id:int="42"     -> { sender_id: 42 }
- *   data-enabled:bool="true"    -> { enabled: true }
- *   data-price:float="19.99"    -> { price: 19.99 }
- *   data-tags:json='["a","b"]'  -> { tags: ["a", "b"] }
- *   data-items:list="a,b,c"     -> { items: ["a", "b", "c"] }
- *   data-name="John"            -> { name: "John" } (default: string)
- *
- * @param {HTMLElement} element - Element to extract params from
- * @returns {Object} - Parameters with coerced types
- */
-function extractTypedParams(element) {
-    const params = Object.create(null); // null prototype prevents prototype-pollution
-
-    for (const attr of element.attributes) {
-        if (!attr.name.startsWith('data-')) continue;
-
-        // Skip djust internal attributes
-        if (attr.name.startsWith('data-liveview') ||
-            attr.name.startsWith('data-live-') ||
-            attr.name.startsWith('data-djust') ||
-            attr.name === 'dj-id' ||
-            attr.name === 'data-loading' ||
-            // Marks a dialog's explicit close control (51-keyboard-nav); a
-            // marker, not an argument: it must not reach the handler as `close`.
-            attr.name === 'data-dj-close' ||
-            attr.name === 'data-component-id') {
-            continue;
-        }
-
-        // Parse attribute name: data-sender-id:int -> key="sender_id", type="int"
-        const nameWithoutPrefix = attr.name.slice(5); // Remove "data-"
-        const colonIndex = nameWithoutPrefix.lastIndexOf(':');
-        let rawKey, typeHint;
-
-        if (colonIndex !== -1) {
-            rawKey = nameWithoutPrefix.slice(0, colonIndex);
-            typeHint = nameWithoutPrefix.slice(colonIndex + 1);
-        } else {
-            rawKey = nameWithoutPrefix;
-            typeHint = null;
-        }
-
-        // Convert kebab-case to snake_case, then strip dj_ namespace prefix
-        // so data-dj-preset="x" becomes {preset: "x"}, not {dj_preset: "x"}
-        let key = rawKey.replace(/-/g, '_');
-        if (key.startsWith('dj_')) {
-            key = key.slice(3);
-        }
-
-        // Prevent prototype pollution attacks
-        if (UNSAFE_KEYS.includes(key)) {
-            continue;
-        }
-        let value = attr.value;
-
-        // Apply type coercion based on suffix
-        if (typeHint) {
-            // Sanitize attribute name for logging (truncate, alphanumeric only)
-            const safeAttrName = String(attr.name).slice(0, 50).replace(/[^a-z0-9-:]/gi, '_');
-
-            switch (typeHint) {
-                case 'int':
-                case 'integer': {
-                    if (value === '') {
-                        value = 0;
-                    } else {
-                        const parsed = parseInt(value, 10);
-                        if (isNaN(parsed)) {
-                            console.warn(`[LiveView] Invalid int value for ${safeAttrName}: "${value}", using null`);
-                            value = null;  // Let server-side validation handle invalid input
-                        } else {
-                            value = parsed;
-                        }
-                    }
-                    break;
-                }
-
-                case 'float':
-                case 'number': {
-                    if (value === '') {
-                        value = 0.0;
-                    } else {
-                        const parsed = parseFloat(value);
-                        if (isNaN(parsed)) {
-                            console.warn(`[LiveView] Invalid float value for ${safeAttrName}: "${value}", using null`);
-                            value = null;  // Let server-side validation handle invalid input
-                        } else {
-                            value = parsed;
-                        }
-                    }
-                    break;
-                }
-
-                case 'bool':
-                case 'boolean':
-                    value = ['true', '1', 'yes', 'on', 'checked'].includes(value.toLowerCase());
-                    break;
-
-                case 'json':
-                case 'object':
-                case 'array':
-                    try {
-                        value = JSON.parse(value);
-                    } catch {
-                        console.warn(`[LiveView] Failed to parse JSON for ${safeAttrName}: "${value}"`);
-                        // Keep as string if JSON parse fails - server will validate
-                    }
-                    break;
-
-                case 'list':
-                    // Comma-separated list
-                    value = value ? value.split(',').map(v => v.trim()).filter(v => v) : [];
-                    break;
-
-                // Unknown type hint - keep as string
-                default:
-                    console.warn(`[LiveView] Unknown type hint "${typeHint}" for ${safeAttrName}, keeping as string`);
-                    break;
-            }
-        }
-
-        // eslint-disable-next-line security/detect-object-injection
-        params[key] = value;
-    }
-
-    // Merge dj-value-* attributes. dj-value-* takes precedence over data-*,
-    // matching Phoenix's phx-value-* semantics.
-    const djValues = collectDjValues(element);
-    for (const [k, v] of Object.entries(djValues)) {
-        // eslint-disable-next-line security/detect-object-injection
-        params[k] = v;
-    }
-
-    return params;
-}
-
-/**
  * Collect dj-value-* attributes from an element and return as a params object.
  *
  * dj-value-* is the standard way to pass static context alongside events
@@ -368,7 +228,7 @@ function collectDjValues(element) {
 
         let value = attr.value;
 
-        // Apply type coercion (same logic as extractTypedParams)
+        // Apply type coercion
         if (typeHint) {
             switch (typeHint) {
                 case 'int':
@@ -415,7 +275,7 @@ function collectDjValues(element) {
 }
 
 // A mount owns its manifest. Never merge contracts by handler name, or retain
-// a previous mount's contracts when a legacy server omits this field.
+// a previous mount's contracts when a response omits this field.
 function _installParameterContracts(transport, manifest, viewPath, resetPrimary = true, receiptOrder = 0) {
     if (!transport._parameterContracts || (resetPrimary && viewPath === transport.primaryViewPath)) {
         transport._parameterContracts = new Map();
@@ -425,7 +285,7 @@ function _installParameterContracts(transport, manifest, viewPath, resetPrimary 
     transport._parameterContracts.set(viewPath, null);
     if (manifest === undefined || manifest === null) return;
     const reject = () => { throw new Error('Invalid public parameter contracts'); };
-    // Keep invalid metadata distinguishable from an intentional legacy mount.
+    // Keep invalid metadata distinguishable from a tree with no handlers.
     transport._parameterContracts.set(viewPath, false);
     if (typeof viewPath !== 'string' || !viewPath) reject();
     if (manifest.version !== 1 || !Array.isArray(manifest.owners) || manifest.owners.length > 1024 || JSON.stringify(manifest).length > 65536) reject();
@@ -438,9 +298,7 @@ function _installParameterContracts(transport, manifest, viewPath, resetPrimary 
         const handlers = new Map();
         for (const [name, contract] of Object.entries(owner.handlers)) {
             if (++count > 10000 || !/^[a-zA-Z][a-zA-Z0-9_]*$/.test(name) || !contract) reject();
-            if (contract.policy === 'legacy') {
-                handlers.set(name, Object.freeze({policy: 'legacy'}));
-            } else if (contract.policy === 'strict') {
+            if (contract.policy === 'strict') {
                 if (typeof contract.coerce_types !== 'boolean' || !Array.isArray(contract.parameters) || contract.parameters.length > 1024) reject();
                 const seen = new Set();
                 const parameters = contract.parameters.map(parameter => {
@@ -489,7 +347,7 @@ function _invalidateRenderParameterContracts(transport, data) {
 }
 
 // Called after DOM application (including empty patches), before dj-mounted
-// or other bindings can run. Omission is safe only for a known legacy scope.
+// or other bindings can run. Omission is safe only for a scope whose tree declares no handlers.
 function _refreshRenderParameterContracts(transport, data) {
     const supplied = Object.hasOwn(data, 'parameter_contracts');
     if (!transport) {
@@ -539,7 +397,7 @@ function _lookupParameterContract(transport, viewPath, viewId, componentId, even
     return handlers.get(eventName);
 }
 
-// ADR-036 staged collector. Deliberately not called by legacy binders. The
+// ADR-036 staged collector. The
 // owner-scoped binder must supply only documented generated application values;
 // routing context is attached afterwards, never collected from markup here.
 // `accept(key, hint)` lets the binder veto a dj-value-* argument (contract checks);
@@ -662,5 +520,4 @@ function _collectStrictEventParams(element, generated = {}, positional = [], acc
 
 // Export for global access
 window.djust = window.djust || {};
-window.djust.extractTypedParams = extractTypedParams;
 window.djust.collectDjValues = collectDjValues;

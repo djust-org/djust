@@ -55,7 +55,7 @@
                 const strictParams = window.djust._strictBinding(container, eventName, { edge }, [],
                     null, true);
                 if (strictParams !== false) {
-                    const sent = strictParams || { edge };
+                    const sent = strictParams;
                     if (typeof window.djust._markSlotOf === 'function') window.djust._markSlotOf(sent, container);
                     window.djust.handleEvent(eventName, sent);
                 }
