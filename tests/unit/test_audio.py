@@ -130,6 +130,11 @@ def test_private_audio_epoch_and_cursors_never_persist():
     saved = persisted_state(view)
     assert saved.automatic_private == {"_kept_cursor": 7}
     assert "_audio_scope" not in saved.names and "_audio_cursor" not in saved.names
+    from djust._automatic_state import _Names
+
+    names = _Names(view)
+    assert not names.private("_audio_scope") and not names.private("_audio_cursor")
+    assert names.private("_kept_cursor")  # the control: the rule still saves an ordinary one
 
 
 def test_connected_mount_cues_are_discarded_before_first_render():

@@ -60,6 +60,13 @@ def test_the_scan_finds_what_it_claims_to_find():
     scanned = _scanned_files()
     for top in TEST_ROOTS:
         assert any(path.startswith(top + "/") for path in scanned), top
+    # ... and reaches a known file in each (a root that scanned nothing under it would pass above).
+    for known in (
+        "python/djust/tests/test_log_exposure_pin.py",
+        "python/tests/test_presence.py",
+        "tests/unit/test_legacy_exposure_ledger.py",
+    ):
+        assert known in scanned, known
 
 
 def test_every_file_stating_legacy_is_in_the_ledger_and_no_more():

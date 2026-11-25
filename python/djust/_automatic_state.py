@@ -241,7 +241,7 @@ def _unsaved_prefixes(view_class: type) -> Tuple[str, ...]:
     for owner in view_class.__mro__:
         declared = namespace(owner).get("_djust_unsaved_prefixes")
         if isinstance(declared, tuple):
-            prefixes.extend(declared)
+            prefixes.extend(p for p in declared if isinstance(p, str))
     return tuple(prefixes)
 
 

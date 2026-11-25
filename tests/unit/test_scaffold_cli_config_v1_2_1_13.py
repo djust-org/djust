@@ -263,6 +263,48 @@ def test_init_comment_no_longer_cites_the_fixed_admin_bug_as_a_blocker():
     assert namespace["TEMPLATES"][0]["BACKEND"] == ("djust.template.backend.DjustTemplateBackend")
 
 
+# --- #2984 ----------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("enabled, jit_called", [(True, True), (False, False)])
+def test_jit_serialization_setting_is_honoured(enabled, jit_called, monkeypatch):
+    from django.contrib.auth.models import User
+
+    from djust.config import config
+    from djust.live_view import LiveView
+    from djust.testing import LiveViewTestClient
+
+    class ModelView(LiveView):
+        exposure_policy = "explicit"
+        template = "<div dj-root>{% for u in users %}{{ u.username }}:{{ u.groups.all.count }},{% endfor %}</div>"
+
+        def get_context_data(self, **kwargs):
+            ctx = super().get_context_data(**kwargs)
+            ctx["users"] = User.objects.filter(username="alice")
+            return ctx
+
+    User.objects.create(username="alice")
+    calls = []
+    real = ModelView._jit_serialize_context
+
+    def counting(self, *args, **kwargs):
+        calls.append(1)
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(ModelView, "_jit_serialize_context", counting)
+    old = config.get("jit_serialization")
+    config.set("jit_serialization", enabled)
+    try:
+        client = LiveViewTestClient(ModelView)
+        client.mount()
+        html = client.render()
+    finally:
+        config.set("jit_serialization", old)
+    assert bool(calls) is jit_called
+    assert "alice:0," in html
+
+
 # --- #3006 ----------------------------------------------------------------------
 
 _ADVISORY = {

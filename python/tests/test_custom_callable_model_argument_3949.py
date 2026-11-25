@@ -6,6 +6,7 @@ model by the engine. This file pins WHAT they are handed, on each entry the engi
 
 * **liveview** - the real ``LiveViewTestClient``, explicit policy, the model from ``get_context_data``,
   with the default config;
+* **liveview-flag-off** - the same view with the kill-switch ``state_models_as_handles: False``;
 * **backend** - ``DjustTemplateBackend``;
 * **raw** - ``djust._rust.render_template``;
 
@@ -65,7 +66,9 @@ HASH_MARK = "HASHMARK3949"
 PASSWORD_HASH = f"pbkdf2_sha256$1$salt${HASH_MARK}"
 
 #: ``liveview``: the LiveView with the default config (the handle overlay, on since 2.0, #3936).
-ENTRIES = ("liveview", "backend", "raw")
+#: ``liveview-flag-off``: the same view under the kill-switch ``state_models_as_handles: False``.
+ENTRIES = ("liveview", "backend", "raw", "liveview-flag-off")
+FLAG_OFF = {"state_models_as_handles": False}
 IDENTITY_KEYS = {"id", "pk", "__str__", "__model__"}
 PROXY, QS_PROXY = "_SidecarModelProxy", "_SidecarQuerySetProxy"
 
@@ -224,8 +227,17 @@ def _django(src: str, ctx: dict) -> str:
     return html_lib.unescape(engine.from_string(src).render(DjangoContext(dict(ctx))))
 
 
+def _liveview_flag_off(src: str, ctx: dict) -> str:
+    """The explicit LiveView entry with the kill-switch ``state_models_as_handles: False``."""
+    from django.test import override_settings
+
+    with override_settings(LIVEVIEW_CONFIG=FLAG_OFF):
+        return _liveview(src, ctx)
+
+
 RENDER = {
     "liveview": _liveview,
+    "liveview-flag-off": _liveview_flag_off,
     "backend": _backend,
     "raw": _raw,
 }
@@ -298,64 +310,76 @@ TYPES = {
         "liveview": "proxy",
         "backend": "proxy",
         "raw": "proxy",
+        "liveview-flag-off": "dict",  # the kill-switch keeps the 1.x dict
     },
     ("model", "tag"): {
         "liveview": "proxy",
         "backend": "proxy",
         "raw": "proxy",
+        "liveview-flag-off": "proxy",  # kill-switch: the eager dict goes to a filter; a tag reads the sidecar proxy
     },
     # a list of models
     ("list", "filter"): {
         "liveview": "list[proxy,proxy]",
         "backend": "list[proxy,proxy]",
         "raw": "list[proxy,proxy]",
+        "liveview-flag-off": "list[dict,dict]",  # the kill-switch keeps the 1.x dict
     },
     ("list", "tag"): {
         "liveview": "list[proxy,proxy]",
         "backend": "list[proxy,proxy]",
         "raw": "list[proxy,proxy]",
+        "liveview-flag-off": "list[dict,dict]",  # the kill-switch keeps the 1.x dict
     },
     ("list", "loop"): {
         "liveview": "proxy",
         "backend": "proxy",
         "raw": "proxy",
+        "liveview-flag-off": "dict",  # the kill-switch keeps the 1.x dict
     },
     # a QuerySet: the backend hands a FILTER the serialized rows and a TAG a queryset proxy
     ("queryset", "filter"): {
         "liveview": "list[proxy,proxy]",
         "backend": "list[dict,dict]",  # the backend's own QuerySet path; the overlay does not touch it
         "raw": "list[proxy,proxy]",
+        "liveview-flag-off": "list[dict,dict]",  # the kill-switch keeps the 1.x dict
     },
     ("queryset", "tag"): {
         "liveview": "list[proxy,proxy]",
         "backend": "qsproxy",
         "raw": "qsproxy",
+        "liveview-flag-off": "list[dict,dict]",  # the kill-switch keeps the 1.x dict
     },
     ("queryset", "loop"): {
         "liveview": "proxy",
         "backend": "dict",  # the backend's own QuerySet path; the overlay does not touch it
         "raw": "proxy",
+        "liveview-flag-off": "dict",  # the kill-switch keeps the 1.x dict
     },
     # a dict that HOLDS models stays a dict on every entry; what it holds differs
     ("dict-of-model", "filter"): {
         "liveview": "dict{owner:dict}",  # the overlay binds top-level keys only (a documented limit, #3936)
         "backend": "dict{owner:proxy}",
         "raw": "dict{owner:proxy}",
+        "liveview-flag-off": "dict{owner:dict}",  # the kill-switch keeps the 1.x dict
     },
     ("dict-of-model", "tag"): {
         "liveview": "dict{owner:dict}",  # the overlay binds top-level keys only (a documented limit, #3936)
         "backend": "dict{owner:proxy}",
         "raw": "dict{owner:proxy}",
+        "liveview-flag-off": "dict{owner:dict}",  # the kill-switch keeps the 1.x dict
     },
     ("dict-of-list", "filter"): {
         "liveview": "dict{items:list[dict,dict]}",  # the overlay binds top-level keys only (a documented limit, #3936)
         "backend": "dict{items:list[proxy,proxy]}",
         "raw": "dict{items:list[proxy,proxy]}",
+        "liveview-flag-off": "dict{items:list[dict,dict]}",  # the kill-switch keeps the 1.x dict
     },
     ("dict-of-list", "tag"): {
         "liveview": "dict{items:list[dict,dict]}",  # the overlay binds top-level keys only (a documented limit, #3936)
         "backend": "dict{items:list[proxy,proxy]}",
         "raw": "dict{items:list[proxy,proxy]}",
+        "liveview-flag-off": "dict{items:list[dict,dict]}",  # the kill-switch keeps the 1.x dict
     },
 }
 #: shapes whose rows the LiveView dict carries IN FULL when the template names nothing on them
@@ -423,6 +447,8 @@ class TestTheTypeACustomCallableReceives:
         self, world, entry
     ) -> None:
         for shape in ("model", "list", "dict-of-model", "dict-of-list"):
+            if entry == "liveview-flag-off" and shape == "model":
+                continue  # the kill-switch: a filter gets the eager dict, a tag the sidecar proxy
             as_filter = _received(world, shape, FILTER_CALL, entry)
             for call_id, body in TAG_CALLS.items():
                 assert _sig(_received(world, shape, body, entry)[0]) == _sig(as_filter[0]), (
@@ -631,6 +657,23 @@ class TestADjangoLibraryTagThroughTheLoadBridge:
         out = run(self.BODY, {"x": [world["a1"], world["a2"]]})
         assert out == "[[<Account: Account:a1>, <Account: Account:a2>]]"
         assert SENT_C not in out and SENT_A not in out and SENT_B not in out
+
+    def test_flag_off_liveview_prints_the_mapping_for_a_model(self, world) -> None:
+        out = _liveview_flag_off(self.BODY, {"x": world["a1"]})
+        assert "Account:a1" in out
+        assert HASH_MARK not in out and EXCLUDED not in out
+
+    @pytest.mark.parametrize("shape", ("list", "queryset"))
+    def test_flag_off_liveview_prints_every_collected_value_for_unnamed_rows(
+        self, world, shape
+    ) -> None:
+        """The leak the issue names, kept by the kill-switch only: a bridged library tag that prints
+        its operand writes values the page never named. ``password`` and the excluded field are not
+        among them (the floor holds)."""
+        out = _liveview_flag_off(self.BODY, {"x": _shapes(world)[shape]()})
+        assert SENT_C in out and SENT_A in out and SENT_B in out
+        assert HASH_MARK not in out and EXCLUDED not in out
+        assert "password" not in out
 
     @pytest.mark.parametrize("entry", ENTRIES)
     def test_the_floor_holds_for_a_library_tag_on_every_entry(self, world, entry) -> None:

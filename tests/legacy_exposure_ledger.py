@@ -86,6 +86,7 @@ MIGRATED_STEP3: tuple[str, ...] = (
     # -- implementer 2: #4194, #4195 (add lines here) --
     # -- end of implementer 2 --
     # -- implementer 3: #4196, #4197 (add lines here) --
+    "python/tests/payload_drivers_3774.py",
     "python/tests/test_adr027_callable_arm_2621.py",
     "python/tests/test_alters_data_toplevel_3772.py",
     "python/tests/test_change_detection_unified.py",
@@ -113,6 +114,7 @@ MIGRATED_STEP3: tuple[str, ...] = (
     "python/tests/test_query_budget_review_3722.py",
     "python/tests/test_queryset_all_followups_3788.py",
     "python/tests/test_queryset_all_residuals_3801.py",
+    "python/tests/test_queryset_all_traversal_3777.py",
     "python/tests/test_raw_slots_3819.py",
     "python/tests/test_regroup_model_source_3948.py",
     "python/tests/test_restore_round_trip_contract_2570.py",
@@ -437,8 +439,6 @@ OTHER_LEGACY_FILES: frozenset[str] = frozenset(
         "python/djust/tests/test_ws_event_flip_parity_1896.py",
         # -- end of implementer 2 --
         # -- implementer 3: #4196, #4197 (delete lines only) --
-        "python/tests/payload_drivers_3774.py",
-        "python/tests/test_queryset_all_traversal_3777.py",
         # -- end of implementer 3 --
     }
 )

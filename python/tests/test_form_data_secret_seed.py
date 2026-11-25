@@ -196,6 +196,7 @@ class TestSubmitKeepsTheColumn:
         assert User.objects.get(username="newbie").password == "correct horse"
         # what was typed is not kept in the state the template engine is handed
         client.render()
+        assert "form_data" in rendered_state(view)
         handed = json.dumps(rendered_state(view), default=str)
         assert handed.count("correct horse") == 0
         assert view.form_data["password"] == ""
@@ -455,6 +456,7 @@ class TestOtherWithheldShapes:
         view = client.view_instance
         assert view.form_data == {"pw": ""}
         client.render()
+        assert "form_data" in rendered_state(view)
         handed = json.dumps(rendered_state(view), default=str)
         assert handed.count("hunter2") == 0
         assert view.as_live().count("hunter2") == 0
@@ -591,7 +593,10 @@ class TestAnEditFormKeepsAWithheldColumnWhenTheSubmissionIsBlank:
         )  # a required untouched withheld field is not invalid
         assert User.objects.get(pk=user.pk).username == "alice2"
         assert column(user) == STORED
-        assert json.dumps(view.get_state(), default=str).count(STORED) == 0
+        client.render()
+        handed = json.dumps(rendered_state(view), default=str)
+        assert handed.count(STORED) == 0
+        assert handed.count("alice2") >= 1  # the state really is what the template is handed
 
     @pytest.mark.parametrize("form_class", [PwWidgetForm, PwWidgetRequiredForm, PwRenderValueForm])
     def test_a_typed_value_still_writes(self, form_class):
@@ -718,7 +723,10 @@ class TestRestoredEarlierStateIsCleaned:
         restore_public_state(view, self.prefix_state(view))
         client.send_event("validate_field", field="username", value="alice9")
         assert_not_carried(view, client)
-        assert json.dumps(view.get_state(), default=str).count(STORED) == 0
+        client.render()
+        handed = json.dumps(rendered_state(view), default=str)
+        assert handed.count(STORED) == 0
+        assert handed.count("alice9") >= 1
 
     def test_the_admin_view_scrubs_it_too(self):
         from djust._state_restore import restore_public_state
@@ -726,7 +734,9 @@ class TestRestoredEarlierStateIsCleaned:
         view = TestAdminFormView()._view(make_user())
         restore_public_state(view, {"form_data": dict(view.form_data, password=STORED)})
         assert view.form_data["password"] == ""
-        assert json.dumps(view.get_state(), default=str).count(STORED) == 0
+        held = json.dumps(view.form_data, default=str)
+        assert held.count(STORED) == 0
+        assert held.count("alice@example.org") >= 1
 
     def test_a_view_whose_form_class_cannot_be_resolved_loses_only_keys_named_like_one(self):
         from djust._state_restore import restore_public_state

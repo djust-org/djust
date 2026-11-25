@@ -163,3 +163,14 @@ class TestHTTPPrivateAttrsRebuiltByMount:
         assert fresh_view._api_token == "secret-token-123"
         assert fresh_view.visible == "working"
         assert not [k for k in post_request.session.keys() if k.endswith("__private")]
+
+
+@pytest.mark.django_db
+class TestANonSerializablePrivateAttributeIsSkipped:
+    def test_the_lock_is_skipped_and_the_config_kept(self):
+        from djust.testing import persisted_state
+
+        view, _, _ = _setup_view(NonSerializablePrivateView)
+        saved = persisted_state(view).automatic_private
+        assert "_lock" not in saved
+        assert saved["_config"] == {"retries": 3}

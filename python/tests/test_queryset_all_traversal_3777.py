@@ -83,29 +83,6 @@ def _liveview_render(source: str, context: dict) -> str:
     return _body(client.render())
 
 
-def _legacy_liveview_render(source: str, context: dict) -> str:
-    """The legacy policy's LiveView, kept for what is legacy's own.
-
-    ``test_jit_row_shape_differential_3911.py`` and
-    ``test_queryset_all_floor_and_errors_3777.py`` run their ``liveview-legacy``
-    arms through it (the legacy JIT row shape and the JIT handler's error log);
-    they go with the legacy policy. The explicit views of this file supply their
-    rows from ``get_context_data()`` (#4069).
-    """
-
-    class _V(LiveView):
-        exposure_policy = "legacy"  # legacy subject: the legacy JIT arms of other files
-
-        def mount(self, request, **kwargs):
-            for name, value in context.items():
-                setattr(self, name, value)
-
-    _V.template = f"<div dj-root>{source}</div>"
-    client = LiveViewTestClient(_V)
-    client.mount()
-    return _body(client.render())
-
-
 def _django_render(source: str, context: dict) -> str:
     return DjangoTemplate(source).render(DjangoContext(dict(context)))
 

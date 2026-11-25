@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import collections
 import functools
+import json
 import re
 from typing import Any, Callable
 
@@ -47,7 +48,7 @@ import pytest
 from django.template import Context as DjangoContext
 from django.template import Template as DjangoTemplate
 
-from djust import LiveView, _rust
+from djust import LiveView, _rust, state
 from djust.serialization import _crosses_as_encoded, normalize_django_value
 from djust.testing import LiveViewTestClient
 
@@ -388,6 +389,36 @@ class TestNoLiveObjectReachesAChannelThatPersists2621:
     string, which for a lambda is ``<function <lambda> at 0x…>`` — an address.
     Neither the session snapshot nor the client payload may carry one.
     """
+
+    def test_the_client_state_payload_holds_no_function_address(self) -> None:
+        """The other outbound channel, measured rather than assumed.
+
+        A carried callable is a `Value::Encoded` whose display for a lambda is
+        `<function ... at 0x...>`, a server address. The context may carry one
+        (``get_context_data``), but the client payload (``get_state()``: the
+        ``client=True`` fields) never does.
+        """
+
+        class _StateView(LiveView):
+            exposure_policy = "explicit"
+            template = "<div dj-root>{{ cb }}{{ plain }}</div>"
+            plain = state("visible", client=True)
+
+            def get_context_data(self, **kwargs):
+                ctx = super().get_context_data(**kwargs)
+                ctx["cb"] = plain_lambda
+                return ctx
+
+        client = LiveViewTestClient(_StateView)
+        client.mount()
+        client.render()
+        assert client.view_instance is not None
+        payload = client.view_instance.get_state()
+        blob = json.dumps(payload)
+        assert "0x" not in blob and "<function" not in blob, (
+            f"a function address reached the client payload: {blob}"
+        )
+        assert payload == {"plain": "visible"}, payload  # the control: the declared field is there
 
     def test_the_display_string_is_what_a_handle_hands_back_not_the_object(self) -> None:
         """A carried callable is a `Value::Encoded` with a transient handle,

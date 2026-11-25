@@ -200,16 +200,6 @@ class StickyChild(Child):
     sticky_id = PAYLOAD
 
 
-class LegacyChild(Child):
-    """The legacy non-sticky child: its wrapper is rendered by lines only a legacy child reaches."""
-
-    exposure_policy = "legacy"  # legacy subject: swept until the legacy branch goes
-    v = None  # a legacy child's context is its attributes, not a declared field
-
-    def mount(self, request, **kwargs):
-        self.v = kwargs.get("v", "x")
-
-
 class Parent(LiveView):
     exposure_policy = "explicit"
     template = "<div></div>"
@@ -238,7 +228,6 @@ def live_render(mode):
         },
         # A plain-str placeholder is TEXT (#3819): the payload must come out escaped.
         {"lazy": {"placeholder": PAYLOAD}},
-        {"legacy": True},
     ):
         request = HttpRequest()
         # An explicit child is reused for a saved session and a user; the cache store needs no database.
@@ -251,10 +240,7 @@ def live_render(mode):
         parent.request = request
         context = Context({"view": parent, "request": request})
         kwargs = dict(kwargs)
-        legacy = kwargs.pop("legacy", False)
-        path = "payload_drivers_3774." + (
-            "StickyChild" if kwargs.get("sticky") else "LegacyChild" if legacy else "Child"
-        )
+        path = "payload_drivers_3774." + ("StickyChild" if kwargs.get("sticky") else "Child")
         out.append(tag(context, path, v=PAYLOAD, view_id=PAYLOAD, **kwargs))
     return out
 
