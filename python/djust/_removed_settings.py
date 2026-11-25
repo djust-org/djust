@@ -220,9 +220,11 @@ def upgrade_inspection() -> Iterator[None]:
     Inside the block, a class or handler that states one of the removed 1.3 spellings
     (``exposure_policy = "legacy"``, ``@event_handler(parameter_policy="legacy")``,
     ``cancel_async_on_disconnect = True``) is created instead of refused, so the command
-    can inventory and rewrite it. Nothing else changes: constructing or mounting such a
-    view is refused everywhere, inside the block too, so the permit cannot run 1.3 code.
-    Only that command enters it; a test pins that.
+    can inventory and rewrite it. The permit only creates classes: constructing or
+    mounting a view that states a removed spelling is refused everywhere, inside the
+    block too. A ``parameter_policy="legacy"`` handler created inside the block still
+    carries that policy until the legacy parameter runtime is deleted (#4205). Only that
+    command enters it; a test pins that.
     """
     token = _UPGRADE_INSPECTION.set(True)
     try:
@@ -237,9 +239,12 @@ def upgrade_inspection_active() -> bool:
 
 
 def _value_label(value: Any) -> str:
-    """``repr`` of a string; only the type name of anything else (never its repr)."""
-    if isinstance(value, str):
+    """``repr`` of a plain ``str``; only the type name of anything else, a ``str``
+    subclass included (its ``__repr__`` is never run)."""
+    if type(value) is str:
         return repr(value)
+    if isinstance(value, str):
+        return "a value of type %s (a str subclass, which is not accepted)" % type(value).__name__
     return "a value of type %s" % type(value).__name__
 
 
@@ -249,7 +254,7 @@ def _value_problem(
     accepted, removed, replacement = table[name]
     if type(value) is str and value == accepted:
         return None
-    if isinstance(value, str) and value.strip().lower() in removed:
+    if type(value) is str and value.strip().lower() in removed:
         return "%s sets %s = %r, which was removed in djust 2.0: %s. See %s" % (
             label,
             name,

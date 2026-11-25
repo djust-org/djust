@@ -120,8 +120,20 @@ def test_a_policy_assigned_after_the_class_statement_is_refused_on_construction(
 
 def test_a_policy_set_on_the_instance_is_refused():
     view_class = _view("Kwarg", exposure_policy="explicit")
-    with pytest.raises((ImproperlyConfigured, TypeError)):
+    with pytest.raises(ImproperlyConfigured, match="Kwarg sets exposure_policy = %r" % LEGACY):
         view_class(exposure_policy=LEGACY)
+
+
+def test_a_str_subclass_is_refused_without_running_its_repr():
+    class Sly(str):
+        def __repr__(self):
+            raise AssertionError("SECRET_REPR_SENTINEL")
+
+    with pytest.raises(ImproperlyConfigured) as refused:
+        _view("Subclassed", exposure_policy=Sly("explicit"))
+    message = str(refused.value)
+    assert "a value of type Sly (a str subclass, which is not accepted)" in message
+    assert "SECRET_REPR_SENTINEL" not in message
 
 
 # --------------------------------------------------------------------------
@@ -254,6 +266,42 @@ def test_the_permit_creates_each_1_3_spelling_and_never_constructs_it():
     for view_class in (policy, tasks):
         with pytest.raises(ImproperlyConfigured):
             view_class()
+
+
+def test_the_permit_lets_through_only_cancel_async_on_disconnect():
+    from djust._removed_settings import UPGRADE_PERMITTED_VIEW_ATTRIBUTES
+
+    assert UPGRADE_PERMITTED_VIEW_ATTRIBUTES == frozenset({"cancel_async_on_disconnect"})
+    # Refused before the permit existed (#4209): still refused inside it.
+    with upgrade_inspection(), pytest.raises(ImproperlyConfigured, match="use_actors"):
+        _view("Actors", exposure_policy="explicit", use_actors=True)
+
+
+def _plain_component_view():
+    from djust.components.components.badge import Badge
+
+    return _view("SharedBadge", exposure_policy=LEGACY, badge=Badge(label="shared"))
+
+
+def test_a_1_3_plain_component_is_created_under_the_permit_and_refused_on_mount(rf):
+    """1.3 views declare plain components in the class body (#4045); the permit
+    creates such a class so --fix can read it, and the mount path refuses it."""
+    from django.contrib.auth.models import AnonymousUser
+    from django.contrib.sessions.backends.db import SessionStore
+
+    from djust._exposure import ExposureConfigurationError
+    from djust.components.components.badge import Badge
+
+    with pytest.raises(ExposureConfigurationError, match="badge"):
+        _view("Outside", exposure_policy="explicit", badge=Badge(label="x"))
+    with upgrade_inspection():
+        view_class = _plain_component_view()
+    view_class.exposure_policy = "explicit"  # what --fix leaves; the component stays
+    request = rf.get("/shared/")
+    request.user = AnonymousUser()
+    request.session = SessionStore()
+    with override_settings(DEBUG=True), pytest.raises(ExposureConfigurationError, match="badge"):
+        view_class.as_view()(request)
 
 
 def test_the_permit_resets_when_its_block_raises():

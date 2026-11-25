@@ -129,8 +129,12 @@ On 2.0 a class that states `exposure_policy = "legacy"`,
 when it is created. The command imports your views under its own permit, so
 it can still read and rewrite them; nothing else can, and constructing such a
 view is refused inside the command too. A module that is imported while
-Django starts (a URLconf, an `AppConfig.ready()`, a `models.py`) is refused
-before the command runs: delete its line by hand, then run the command.
+Django starts (a URLconf, an `AppConfig.ready()`, a `models.py`, or an
+`admin.py` that admin autodiscovery imports) is refused before the command
+runs: delete its line by hand, then run the command. Do the steps in this
+order: first delete the removed `LIVEVIEW_CONFIG` / `DJUST_CONFIG` keys
+(`event_parameter_policy`, `reauth_on_event`, `reauth_server_turn_interval`),
+which are refused at startup, then run `--fix`.
 
 ### Which checks report what
 
@@ -1466,4 +1470,4 @@ never in production settings. The helpers are described in the
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: 9d952cc843ad -->
+<!-- generated-doc prose-sha256: 3010d0c189bc -->

@@ -1007,6 +1007,31 @@ def test_a_whole_page_answer_is_gzipped_for_a_client_that_accepts_it(renders):
     assert len(response.content) * 3 < len(plain.content)
 
 
+def test_a_small_patch_answer_is_sent_as_it_is(renders, rf):
+    """A body under GZipMiddleware's 200 bytes goes out as it is. Under strict
+    parameters the counter's patch answer carries its ``parameter_contracts``
+    (#4189), which puts it over the bound, so the bound is pinned on the
+    answer's own patches with the contracts left out."""
+    import gzip
+
+    from django.http import JsonResponse
+
+    from djust.mixins.request import _compress_fallback_answer
+
+    client, digest = _open("/m/counter/")
+    answer = json.loads(post_event(client, "/m/counter/", "increment", {}, digest).content)
+    assert answer_kind(answer) == "patches"
+    small = {key: value for key, value in answer.items() if not key.startswith("parameter_")}
+    request = rf.post("/m/counter/", HTTP_ACCEPT_ENCODING="gzip, br")
+    body = JsonResponse(small)
+    assert len(body.content) < 200, len(body.content)
+    assert not _compress_fallback_answer(request, body).has_header("Content-Encoding")
+    # Gate-off: the whole answer, contracts included, is over the bound and is compressed.
+    whole = _compress_fallback_answer(request, JsonResponse(answer))
+    assert whole["Content-Encoding"] == "gzip"
+    assert json.loads(gzip.decompress(whole.content)) == answer
+
+
 def test_compression_can_be_left_to_the_deployment(renders):
     client, _digest = _open("/p/wide/")
     with override_settings(LIVEVIEW_CONFIG={"http_fallback_compress": False}):

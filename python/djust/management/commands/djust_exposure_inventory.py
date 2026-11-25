@@ -20,9 +20,12 @@ and writes nothing; only files under ``--root`` are changed.
 True`` when the class or handler is created (#4199). This command imports such code
 under ``djust._removed_settings.upgrade_inspection()``, which lets the classes be
 created (never constructed) so they can be read and rewritten. A module imported
-while Django starts (by an ``AppConfig.ready()`` or a ``models.py``) is imported
-before the command runs, so it is refused first: delete its policy line by hand,
-or move the import.
+while Django starts (by an ``AppConfig.ready()``, a ``models.py`` or an
+``admin.py`` that admin autodiscovery imports) is imported before the command
+runs, so it is refused first: delete its policy line by hand, or move the import.
+Order: first delete the removed config keys (``event_parameter_policy``,
+``reauth_on_event``, ``reauth_server_turn_interval``), which are refused at
+startup, then run ``--fix``.
 
 Usage:
     python manage.py djust_exposure_inventory                  # all user LiveViews
