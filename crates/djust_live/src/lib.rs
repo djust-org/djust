@@ -2651,7 +2651,7 @@ impl RustLiveViewBackend {
                                 if !node.is_text() {
                                     return None;
                                 }
-                                if newline_change_needs_parse(old_raw, new_raw) {
+                                if text_change_needs_parse(old_raw, new_raw) {
                                     return None;
                                 }
                                 let old_text = text_node_value(vdom, path, old_raw)?;
@@ -6235,11 +6235,13 @@ fn text_node_value(vdom: &VNode, path: &[usize], raw: &str) -> Option<String> {
 
 /// Whether swapping a text node's raw HTML `old_raw` for `new_raw` could
 /// parse to something other than `new_raw` decoded: the parser drops a newline
-/// that opens the first text of `<pre>`, `<listing>` and `<textarea>`, and
-/// turns CR and CRLF into LF. The parse-skipping paths cannot see the parent,
-/// so they refuse a change in the leading newline, and any CR (#4325).
-fn newline_change_needs_parse(old_raw: &str, new_raw: &str) -> bool {
-    old_raw.starts_with('\n') != new_raw.starts_with('\n') || new_raw.contains('\r')
+/// that opens the first text of `<pre>`, `<listing>` and `<textarea>`, turns
+/// CR and CRLF into LF, and drops a NUL in body text (U+FFFD in RCDATA and
+/// raw text). The parse-skipping paths cannot see the parent, so they refuse
+/// a change in the leading newline, any CR and any NUL (#4325).
+fn text_change_needs_parse(old_raw: &str, new_raw: &str) -> bool {
+    old_raw.starts_with('\n') != new_raw.starts_with('\n')
+        || new_raw.bytes().any(|b| b == b'\r' || b == b'\0')
 }
 
 /// Decode the character references a text node's raw HTML may carry, the way
@@ -6462,7 +6464,7 @@ fn try_text_region_fast_path(
     new_raw.push_str(&old_raw[..offset_in_text]);
     new_raw.push_str(new_mid);
     new_raw.push_str(&old_raw[end_in_raw..]);
-    if newline_change_needs_parse(old_raw, &new_raw) {
+    if text_change_needs_parse(old_raw, &new_raw) {
         return None;
     }
     let new_text = text_node_value(old_vdom, &path, &new_raw)?;
@@ -6592,9 +6594,7 @@ fn try_multi_text_region_fast_path(
             if changes.len() == MAX_TEXT_REGIONS {
                 return None;
             }
-            if new_raw.bytes().any(|b| matches!(b, b'>' | b'\0'))
-                || newline_change_needs_parse(old_raw, new_raw)
-            {
+            if new_raw.bytes().any(|b| b == b'>') || text_change_needs_parse(old_raw, new_raw) {
                 return None;
             }
             if !get_vdom_node(old_vdom, &entry.path).is_some_and(|n| n.is_text()) {

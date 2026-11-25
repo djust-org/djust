@@ -51,6 +51,7 @@ VALUES = [
     "tab\tsep",
     "&amp; literal",
     "cr\r\nlf",
+    "nul\x00",
 ]
 
 
@@ -215,7 +216,15 @@ def test_pre_and_textarea_text_match_the_oracle() -> None:
 @pytest.mark.parametrize("keys_extra", [[], ["title"]])
 @pytest.mark.parametrize(
     "before,after",
-    [("p2", "\np3"), ("\np2", "p3"), ("\np2", "\np3"), ("p2", "\r\np3"), ("p2", "a\rb")],
+    [
+        ("p2", "\np3"),
+        ("\np2", "p3"),
+        ("\np2", "\np3"),
+        ("p2", "\r\np3"),
+        ("p2", "a\rb"),
+        ("p2", "q\x00"),
+        ("p2", "\x00"),
+    ],
 )
 def test_leading_newline_in_pre_and_textarea_matches_the_full_parse(
     key: str, keys_extra: list, before: str, after: str
@@ -229,6 +238,17 @@ def test_leading_newline_in_pre_and_textarea_matches_the_full_parse(
         updates[extra] = "changed"
     pair.step(updates, [key] + keys_extra)
     pair.step({key: after + "!"}, [key])
+
+
+@pytest.mark.parametrize("key", ["title", "foot"])
+@pytest.mark.parametrize("value", ["q\x00", "a\x00b", "\x00"])
+def test_a_nul_in_body_text_matches_the_full_parse(key: str, value: str) -> None:
+    # The parser drops a NUL in body text; the fragment and single-span
+    # paths used to send it (review of #4325).
+    pair = _Pair(_state(_rows(2)))
+    pair.step({key: value}, [key])
+    pair.step({key: value + "x", "title" if key == "foot" else "foot": "other"}, ["title", "foot"])
+    pair.step({key: "plain"}, [key])
 
 
 @pytest.mark.parametrize("seed", range(40))
