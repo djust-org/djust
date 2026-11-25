@@ -613,7 +613,7 @@ pub fn optimize_ast(nodes: Vec<Node>) -> Vec<Node>
 
 1. **Merges adjacent Text nodes**: Multiple consecutive `Node::Text` elements are combined into a single node, reducing allocations during rendering
 2. **Removes Comment nodes**: Comment nodes (`{# ... #}`) produce no output and are stripped during optimization
-3. **Recursively optimizes children**: Child nodes in `If`, `For`, `Block`, `With`, and `ReactComponent` nodes are also optimized
+3. **Recursively optimizes children**: Child nodes in `If`, `For`, `Block`, and `With` nodes are also optimized
 
 #### Example
 

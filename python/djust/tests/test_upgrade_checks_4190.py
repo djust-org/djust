@@ -53,6 +53,23 @@ class OldHandlers(LiveView):
         self.last = kwargs.get("_target")
 
 
+class InheritsLegacy(LiveView):
+    exposure_policy = "explicit"
+    template = "<div dj-root></div>"
+
+    @event_handler()
+    def pick(self, item_id, **kwargs):
+        pass
+
+    @event_handler(parameter_policy="legacy")
+    def declares(self, _target=None, **kwargs):
+        pass
+
+    @event_handler(parameter_policy="strict")
+    def strict_declares(self, _target: str = ""):
+        pass
+
+
 class NewHandlers(LiveView):
     exposure_policy = "explicit"
     template = "<div dj-root></div>"
@@ -178,14 +195,21 @@ def _ours(messages, check_id):
 
 def test_v033_reports_a_legacy_handler_strict_would_refuse(m):
     found = _ours(check_event_parameter_contracts(None), "djust.V033")
-    assert len(found) == 1
-    assert "OldHandlers.pick" in found[0].msg and "requires an annotation" in found[0].msg
+    old = [x for x in found if "OldHandlers.pick" in x.msg]
+    assert len(old) == 1 and "requires an annotation" in old[0].msg
     assert not any("NewHandlers" in x.msg for x in found)
-    previous = config.get("event_parameter_policy", "legacy")
+    previous = config.get("event_parameter_policy", "strict")
     config.set("event_parameter_policy", "legacy")
     try:
         again = _ours(check_event_parameter_contracts(None), "djust.V033")
         assert not any("NewHandlers" in x.msg for x in again)
+        # An unpinned handler inherits the legacy project policy: V033 names the key.
+        inherited = [x for x in again if "InheritsLegacy.pick" in x.msg]
+        assert len(inherited) == 1
+        assert "LIVEVIEW_CONFIG['event_parameter_policy']" in inherited[0].hint
+        # The pinned one names the decorator argument instead.
+        pinned = [x for x in again if "OldHandlers.pick" in x.msg]
+        assert "parameter_policy='legacy'" in pinned[0].hint
     finally:
         config.set("event_parameter_policy", previous)
 
@@ -202,8 +226,12 @@ def test_t028_reports_data_arguments_of_a_legacy_handler_in_an_extends_template(
 
 def test_v034_target(m):
     found = _ours(check_target_parameter(None), "djust.V034")
-    assert len(found) == 1
-    assert "OldHandlers.save" in found[0].msg and "reads _target" in found[0].msg
+    assert len(found) == 2
+    reads = [x for x in found if "OldHandlers.save" in x.msg]
+    assert len(reads) == 1 and "reads _target" in reads[0].msg
+    # A legacy handler that declares the parameter; a strict one is V016's.
+    assert any("InheritsLegacy.declares" in x.msg and "declares _target" in x.msg for x in found)
+    assert not any("strict_declares" in x.msg for x in found)
 
 
 def test_v035_sticky_hook(m):

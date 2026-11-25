@@ -167,6 +167,19 @@ class NotOptedIn(LiveView):
         self.s = request.session
 
 
+class ParentReadsUser(LiveView):
+    exposure_policy = "explicit"
+    sw_cacheable = True
+    template_name = "sw4176/page.html"
+
+
+class NeedsLogin(LiveView):
+    exposure_policy = "explicit"
+    sw_cacheable = True
+    login_required = True
+    template = "<div dj-root></div>"
+
+
 class BadValue(LiveView):
     exposure_policy = "explicit"
     sw_cacheable = "yes"
@@ -195,9 +208,25 @@ def _unload(module: types.ModuleType) -> None:
 
 @pytest.fixture
 def fixture_module(tmp_path):
+    templates = tmp_path / "templates"
+    (templates / "sw4176").mkdir(parents=True)
+    (templates / "sw4176" / "base.html").write_text(
+        "<main dj-root>{{ user.username }}{% block content %}{% endblock %}</main>"
+    )
+    (templates / "sw4176" / "page.html").write_text(
+        '{% extends "sw4176/base.html" %}{% block content %}hello{% endblock %}'
+    )
     module = _load(tmp_path)
+    engines = [
+        {
+            "BACKEND": "django.template.backends.django.DjangoTemplates",
+            "DIRS": [str(templates)],
+            "APP_DIRS": True,
+        }
+    ]
     try:
-        yield module
+        with override_settings(TEMPLATES=engines):
+            yield module
     finally:
         _unload(module)
 
@@ -209,6 +238,8 @@ def _ours(messages):
             "ReadsUser",
             "KeepsServerState",
             "TemplateReadsUser",
+            "ParentReadsUser",
+            "NeedsLogin",
             "Public",
             "NotOptedIn",
             "BadValue",
@@ -224,5 +255,8 @@ def test_v037_reports_a_cacheable_view_that_is_per_visitor(fixture_module):
     assert "persist='server'" in found["KeepsServerState"][0].msg
     assert "user.is_authenticated" in found["TemplateReadsUser"][0].msg
     assert "'yes'" in found["BadValue"][0].msg
+    # A read in a parent template ({% extends %}) counts too.
+    assert "user.username" in found["ParentReadsUser"][0].msg
+    assert "login_required" in found["NeedsLogin"][0].msg
     assert found["Public"] == []
     assert found["NotOptedIn"] == []

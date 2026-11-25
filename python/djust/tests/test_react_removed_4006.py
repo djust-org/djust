@@ -88,3 +88,26 @@ def test_nothing_in_the_package_references_react():
                 if pattern.search(line) and "(#4006)" not in line:
                     hits.append("%s:%d" % (rel, number))
     assert hits == []
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        "<script>if (a<MAX && b){}</script>",
+        "<script>x<Y>z</script>",
+        "<!-- <Header /> -->",
+        "<style>a<B >c</style>",
+    ],
+)
+def test_capitalized_shapes_in_script_style_and_comments_still_render(src):
+    from djust._rust import render_template
+
+    assert render_template(src, {}) == src
+
+
+def test_capitalized_tag_error_names_its_line():
+    from djust._rust import render_template
+
+    with pytest.raises(Exception) as exc:
+        render_template("<p>a</p>\n<Widget />", {})
+    assert "line 2" in str(exc.value)

@@ -230,7 +230,9 @@ const STANDARD_ELEMENTS: &[&str] = &[
     "ul",
     "var",
     "video",
-    "wbr", // SVG
+    "wbr",
+    "math",
+    // SVG
     "svg",
     "g",
     "path",
@@ -266,6 +268,31 @@ const STANDARD_ELEMENTS: &[&str] = &[
     "mpath",
     "metadata",
 ];
+
+/// When `source[at..]` opens an HTML comment or a `<script>` / `<style>` element,
+/// the byte offset where that region ends (the end of the source when it is
+/// never closed). A capitalized `<Name` inside is JavaScript, CSS or comment
+/// text, not a component tag (#4006).
+fn literal_region_end(source: &str, at: usize) -> Option<usize> {
+    let rest = &source[at..];
+    if rest.starts_with("<!--") {
+        return Some(rest.find("-->").map_or(source.len(), |i| at + i + 3));
+    }
+    for (open, close) in [("<script", "</script"), ("<style", "</style")] {
+        let bytes = rest.as_bytes();
+        if bytes.len() > open.len()
+            && bytes[..open.len()].eq_ignore_ascii_case(open.as_bytes())
+            && matches!(
+                bytes[open.len()],
+                b' ' | b'\t' | b'\n' | b'\r' | b'>' | b'/'
+            )
+        {
+            let lowered = rest.to_ascii_lowercase();
+            return Some(lowered.find(close).map_or(source.len(), |i| at + i));
+        }
+    }
+    None
+}
 
 /// True for an all-uppercase spelling of a standard element (`DIV`, `BR`).
 /// `Button`-style PascalCase names are component tags even when a lowercase
@@ -363,6 +390,9 @@ pub fn tokenize_spanned(source: &str) -> Result<(Vec<Token>, Vec<Span>)> {
     // Byte offset where the run of literal text in `current` began. Only
     // meaningful while `current` is non-empty.
     let mut text_start = 0usize;
+    // Byte offset up to which `<` is literal HTML text: inside `<!-- -->` and
+    // `<script>` / `<style>` raw text a capitalized `<Name` is not a tag (#4006).
+    let mut literal_until = 0usize;
     let mut verbatim_end: Option<String> = None;
 
     macro_rules! flush_text {
@@ -419,8 +449,11 @@ pub fn tokenize_spanned(source: &str) -> Result<(Vec<Token>, Vec<Span>)> {
             continue;
         }
         if ch == '<' {
+            if tok_start >= literal_until {
+                literal_until = literal_region_end(source, tok_start).unwrap_or(0);
+            }
             // `<Name` with an uppercase first letter is a refused component tag (#4006).
-            if let Some(next_ch) = chars.peek() {
+            if let Some(next_ch) = chars.peek().filter(|_| tok_start >= literal_until) {
                 if next_ch.is_ascii_uppercase() {
                     let mut look = chars.clone();
                     let mut name = String::new();
@@ -768,6 +801,34 @@ mod tests {
     fn uppercase_after_lt_without_tag_shape_is_text() {
         let tokens = tokenize("a<B)").unwrap();
         assert_eq!(tokens, vec![Token::Text("a<B)".to_string())]);
+    }
+
+    #[test]
+    fn capitalized_tag_shapes_inside_script_style_and_comments_stay_text() {
+        for src in [
+            "<script>if (a<MAX && b){}</script>",
+            "<script>x<Y>z</script>",
+            "<SCRIPT type=\"x\">x<Y>z</SCRIPT>",
+            "<style>a<B >c</style>",
+            "<!-- <Header /> -->",
+        ] {
+            assert_eq!(
+                tokenize(src).unwrap(),
+                vec![Token::Text(src.to_string())],
+                "{src}"
+            );
+        }
+        // Outside the region the tag is refused again.
+        let tokens = tokenize("<script>x<Y>z</script><Header />").unwrap();
+        assert_eq!(
+            tokens.last(),
+            Some(&Token::CapitalizedTag("Header".to_string()))
+        );
+        let tokens = tokenize("<!-- c --><Header />").unwrap();
+        assert_eq!(
+            tokens.last(),
+            Some(&Token::CapitalizedTag("Header".to_string()))
+        );
     }
 
     #[test]

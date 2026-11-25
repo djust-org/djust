@@ -68,8 +68,8 @@ class HookParent(LiveView):
         self.n = 1
         self.label = "a"
 
-    @event_handler(parameter_policy="legacy")  # legacy params until #4192-#4198 (#4189)
-    def set_n(self, n=0, **kwargs):
+    @event_handler()
+    def set_n(self, n: int = 0, **kwargs):
         self.n = int(n)
 
     def get_context_data(self, **kwargs):

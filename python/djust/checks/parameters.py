@@ -350,8 +350,9 @@ def _v031(
                 "list of str for a checkbox group or a multiple select) and "
                 "data_attrs the container's data-* attributes. Declare only the "
                 "one you use; the browser sends only declared names. The handler "
-                "needs the strict policy (parameter_policy='strict', or "
-                "event_parameter_policy='strict' for the project)." % (name, _RECOVERY_SIGNATURE)
+                "needs the strict policy, the default: remove parameter_policy='legacy' "
+                "from it and the event_parameter_policy key from LIVEVIEW_CONFIG."
+                % (name, _RECOVERY_SIGNATURE)
             ),
             id="djust.V031",
             fix_hint="Replace %s with `%s` on `%s`."
@@ -384,11 +385,12 @@ def _v031(
         % (label, target, " / ".join(p.name for p in parameters)),
         hint=(
             "Recovery values arrive as declared parameters only under the strict "
-            "policy. Add parameter_policy='strict' to the handler's @event_handler, "
-            "or set LIVEVIEW_CONFIG['event_parameter_policy'] = 'strict'."
+            "policy, the default. Remove parameter_policy='legacy' from the handler's "
+            "@event_handler, and the event_parameter_policy key from LIVEVIEW_CONFIG."
         ),
         id="djust.V031",
-        fix_hint='Add `parameter_policy="strict"` to the `@event_handler` on `%s`.' % label,
+        fix_hint='Remove `parameter_policy="legacy"` (or the `event_parameter_policy` key) for `%s`.'
+        % label,
         file_path=file_path,
         line_number=line_number,
     )
