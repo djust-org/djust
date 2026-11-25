@@ -8,8 +8,26 @@ is not yet called by native event bindings.
 ## Wire shape and ownership
 
 Shared runtime mount frames include `parameter_contracts` when at least one
-currently registered owner has a strict event handler. Version 1 contains an
-`owners` list; each entry has `view_id`, `component_id` and `handlers`.
+currently registered owner has a strict event handler. Version 2 (#4307) lists
+each distinct declaration once:
+
+```json
+{"version": 2,
+ "digest": "9f2c4e1a0b7d3c55",
+ "contracts": [{"coerce_types": true, "parameters": [...]}],
+ "handlers":  [{"increment": 0}, {"select": 0, "toggle": 1}],
+ "owners":    [[null, null, 0], [null, "rows.k000.Tg7x", 1], ["child-1", null, 0]]}
+```
+
+`contracts` holds the distinct `{coerce_types, parameters}` records;
+`handlers` the distinct handler tables, each `{name: index into contracts}`;
+`owners` one `[view_id, component_id, table index]` row per owner, sorted with
+the root first. The rows of a collection share one table, so the manifest grows
+by about the length of a row's id per row, not by its handlers' contracts.
+`digest` is a 64-bit blake2b of the canonical body: a public content hash that
+lets a transport name a manifest the client already holds (see
+"Render-frame delivery"), never a security token. Version 1 (one `owners`
+entry per owner with its `handlers` inline) is no longer accepted by the client.
 
 | Address | Native target |
 | --- | --- |
@@ -30,8 +48,18 @@ decorated known Python method types; it does not evaluate application properties
 custom descriptors or a shadowed `__dict__`. Unsupported strict declarations fail
 instead of falling back to legacy. All-legacy trees omit the field.
 
-The emitted manifest is bounded to 1,024 owners, 10,000 handlers and 65,536
-serialized bytes. These new declaration limits do not reject all-legacy trees.
+The emitted manifest is bounded by constants in `djust._parameter_metadata`;
+each raises a redacted `ContractError`, and the client checks the same bounds:
+
+| Constant | Value | Bounds |
+| --- | --- | --- |
+| `MAX_CONTRACTS` | 1,024 | distinct contract records |
+| `MAX_HANDLER_TABLES` | 1,024 | distinct handler tables |
+| `MAX_HANDLERS` | 10,000 | entries summed over the distinct tables |
+| `MAX_DECLARATION_BYTES` | 65,536 | serialized `[contracts, handlers]` |
+| `MAX_OWNERS` | 10,000 | owner rows |
+| `MAX_MANIFEST_BYTES` | 1 MiB | the whole encoded manifest |
+
 Invalid/ambiguous registered identities reject a strict manifest. Disposed
 children are excluded, and rebuilding reflects registry removals. No global
 cache retains owners or mutable manifest dictionaries.
@@ -61,6 +89,20 @@ on subsequent render responses until remount. All-legacy sessions retain their
 existing response shape. No owner or manifest is cached by this mechanism.
 Invalid contract discovery suppresses that DOM frame and returns a fixed,
 redacted render error instead.
+
+An unchanged manifest is not sent again (#4307): a frame may carry
+`parameter_contracts` as the digest string of a manifest the client holds,
+with `parameter_contract_view` as before. The WebSocket consumer and the SSE
+session remember the digest they last sent in full (the WebSocket records it
+after the awaited send; SSE only on the session's own loop, so a push handed
+over from another loop goes out in full and resets it). On the HTTP fallback
+the client names the digest of its scope in `X-Djust-Parameter-Contracts`
+(`1` when its scope is invalid), and an answer whose manifest has that digest
+carries the digest alone. The client resolves a digest at receipt, before any
+buffering, from a four-entry content-addressed cache of manifests it received;
+frames are FIFO, so the full manifest is always received first. A digest it
+does not hold installs an invalid scope, which fails closed. `null` still
+clears and an omitted field still invalidates.
 
 URL-change handling now borrows the same WS/SSE render lock as events and
 background results, and rechecks the mounted owner after acquiring it. A

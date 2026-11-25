@@ -152,7 +152,7 @@ LIVEVIEW_CONFIG = {
 }
 ```
 
-**Compression.** A whole-page answer is the root's HTML as JSON, and many deployments do not compress `application/json` (nginx's default `gzip_types` is `text/html` only). djust therefore gzips a page-POST answer of 200 bytes or more itself, for a client that accepts gzip, using Django's `GZipMiddleware` rules (including its padding against BREACH). A 100-row table goes from about 29 KB to about 4 KB. A response that is already encoded is left alone, and a `GZipMiddleware` of your own does not compress it twice. `LIVEVIEW_CONFIG["http_fallback_compress"] = False` leaves compression to your proxy.
+**Compression.** A whole-page answer is the root's HTML as JSON, and many deployments do not compress `application/json` (nginx's default `gzip_types` is `text/html` only). djust therefore gzips a page-POST answer of 200 bytes or more itself, for a client that accepts gzip, using Django's `GZipMiddleware` rules (including its padding against BREACH). A 100-row table goes from about 29 KB to about 4 KB. A response that is already encoded is left alone, and a `GZipMiddleware` of your own does not compress it twice. `LIVEVIEW_CONFIG["http_fallback_compress"] = False` leaves compression to your proxy. An answer carries the page's parameter-contract manifest only when the browser does not already hold it; otherwise it names the one it holds, so a small patch answer stays small.
 
 ### Polling instead of server push
 
