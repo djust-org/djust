@@ -21,8 +21,10 @@ export function instrumentBundle(fs, filename) {
   for (const source of sources) {
     bundle.addSource({ filename: source, content: new MagicString(fs.readFileSync(source, 'utf8')) });
   }
-  if (client) bundle.append('\n})();\n');
   const original = fs.readFileSync(filename, 'utf8');
+  // build-client.sh names the full bundle before closing the IIFE (#4007).
+  const NAMED = "\nwindow.djust._clientBundle = window.djust._clientBundle || 'full';\n})();\n";
+  if (client) bundle.append(original.endsWith(NAMED) ? NAMED : '\n})();\n');
   if (bundle.toString() !== original) throw new Error(`Stale bundle: ${filename}. Run make build-js.`);
   const map = bundle.generateMap({ hires: true, includeContent: true, file: filename });
   const instrumenter = scriptInstrumenter();
