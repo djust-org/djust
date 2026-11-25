@@ -125,8 +125,10 @@ def format_fix_report(report: FixReport, dry_run: bool) -> str:
     if files:
         lines += [
             "",
-            "Next: run python manage.py check, then load each page and compare it with how "
-            "it rendered before.",
+            (
+                "Next: run python manage.py check, then load each page and compare it with how "
+                "it rendered before."
+            ),
         ]
     if dry_run:
         for relpath in sorted(report.diffs):
@@ -239,7 +241,7 @@ def _installed_roots() -> list[Path]:
         pass
     try:
         candidates.append(site.getusersitepackages())
-    except AttributeError:
+    except AttributeError:  # an old site module has no user site; nothing to add
         pass
     paths = sysconfig.get_paths()
     candidates.extend(p for p in (paths.get("purelib"), paths.get("platlib")) if p)
