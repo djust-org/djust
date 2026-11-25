@@ -337,6 +337,14 @@ the Rust render of all 1,000 rows (about 6 ms), the text fast path itself
 (about 4 ms). Rendering only the changed loop item, and replacing the pre-event walk
 with the previous turn's fingerprints, are what remain.
 
+**Per-item loop render (follow-up).** Rust now keeps each item's HTML of an
+outermost `{% for %}` and reuses it when the item hashes the same at the same
+index (switch `loop_item_render`; conditions in `changelog.d/4325-loop-items.changed.md`).
+Same machine, table shape, WebSocket, RTT 0, 80 rounds, two runs each, on vs
+off: turn p50 14.8-15.5 ms vs 19.6 ms (`nosave`), 16.0-16.2 ms vs 20.8-21.2 ms
+(`save`). The two-cell microbenchmark above: `render_with_diff` p50 3.6-3.8 ms
+vs 8.1-8.4 ms. The pre-event walk is what remains of the large items.
+
 ## Reproduce
 
 ```sh
