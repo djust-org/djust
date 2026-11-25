@@ -10,8 +10,9 @@ import logging
 import os
 import re
 import textwrap
+from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any, Optional, cast
+from typing import Any, Callable, Optional, Union, cast
 
 from django.core.checks import CheckMessage, register
 
@@ -2093,6 +2094,132 @@ def _t027_template_source(src: str, template_name: Optional[str]) -> Optional[st
         return None
 
 
+@dataclass(frozen=True)
+class HeldTemplateReads:
+    """What T027 knows about one view's template (#4278, reused by ``--fix`` in #4209)."""
+
+    label: str
+    template_name: Optional[str]
+    template_path: str
+    #: ``(name, line in the view's own template or None)`` in the order the template reads them.
+    refs: tuple[tuple[str, Optional[int]], ...]
+    held: frozenset[str]
+    declared: frozenset[str]
+    supplied: frozenset[str]
+    silenced: frozenset[str]
+
+    def _silenced(self, name: str) -> bool:
+        return "*" in self.silenced or name in self.silenced
+
+    def count_names(self) -> list[tuple[str, str, Optional[int]]]:
+        """``(name, stem, line)`` for ``X_count`` reads of a supplied ``X`` (#4054)."""
+        found: list[tuple[str, str, Optional[int]]] = []
+        seen: set[str] = set()
+        for name, line in self.refs:
+            if name in self.supplied or name in seen or name in self.held:
+                continue
+            if self._silenced(name):
+                continue
+            stem = name[: -len("_count")] if name.endswith("_count") else ""
+            if not stem or stem not in self.supplied:
+                continue
+            seen.add(name)
+            found.append((name, stem, line))
+        return found
+
+    def unsupplied(self) -> list[tuple[str, Optional[int]]]:
+        """Held names the template reads and nothing supplies, in first-read order."""
+        found: list[tuple[str, Optional[int]]] = []
+        seen: set[str] = set()
+        for name, line in self.refs:
+            if name not in self.held or name in self.supplied or name in seen:
+                continue
+            if self._silenced(name):
+                continue
+            seen.add(name)
+            found.append((name, line))
+        return found
+
+
+ProcessorNames = Union[frozenset, Callable[[], frozenset]]
+
+
+def held_template_reads(cls: type, processor_names: ProcessorNames) -> "HeldTemplateReads | str":
+    """The template reads of one view as T027 computes them, whatever its policy (#4209).
+
+    Returns the reason it cannot instead: ``"no-template"`` (no template it can load
+    statically), ``"override"`` (a ``get_context_data()`` T027 cannot follow),
+    ``"template"`` (an inline template with ``{% extends %}``, or one that fails to
+    resolve) or ``"unreadable"``. ``processor_names`` may be a callable, called only
+    once a template was found. Never instantiates the view.
+    """
+    from djust._exposure import provider_contracts_for
+    from djust._exposure_providers import registered_components
+    from djust.management._exposure_inventory import inventory_view
+    from djust.management.commands.djust_typecheck import (
+        _extract_context_keys_from_ast,
+        _extract_referenced_names,
+        _extract_template_locals,
+        _template_noqa_names,
+    )
+    from djust.mixins.context import rendered_state_names
+
+    loaded = _static_template_source(cls)
+    if loaded is None:
+        return "no-template"
+    processors = processor_names() if callable(processor_names) else processor_names
+    if _t027_get_context_data_is_too_dynamic(cls):
+        return "override"
+    own_src, template_name, template_path = loaded
+    src = _t027_template_source(own_src, template_name)
+    if src is None:
+        return "template"
+    cls_label = "%s.%s" % (cls.__module__, cls.__qualname__)
+    try:
+        entries = inventory_view(cls)["names"]
+        held = {entry["name"] for entry in entries if entry.get("kind") in _T027_HELD_KINDS}
+        declared = {entry["name"] for entry in entries if entry.get("kind") == "state"}
+        supplied = (
+            _extract_context_keys_from_ast(cls, attributes=False)
+            | set(registered_components(cls))
+            | _extract_template_locals(src)
+            | _get_context_data_chain_keys(cls)
+            # Names a mixin's provider contract renders (TenantMixin's ``tenant``): its
+            # ``get_context_data()`` sets them by a computed key the AST walk cannot read.
+            | {name for contract in provider_contracts_for(cls) for name in contract.rendered}
+            # Names the configured TEMPLATES context processors add on every render
+            # (``user``, ``perms``, ``messages``, a project processor's keys).
+            | processors
+        )
+        if _get_context_data_reaches_base(cls):
+            supplied |= set(rendered_state_names(cls))
+        silenced = _template_noqa_names(src)
+        refs = _extract_referenced_names(src)
+        # The line is the view's own file's; a name read only in a base template or an
+        # include has no line there.
+        own_lines: dict[str, int] = {}
+        for ref_name, ref_line in _extract_referenced_names(own_src):
+            own_lines.setdefault(ref_name, ref_line)
+    except Exception:  # noqa: BLE001 — a view this cannot read is skipped, not guessed at
+        logger.debug("T027: could not statically read %s", cls_label)
+        return "unreadable"
+    if not template_path:
+        try:
+            template_path = inspect.getfile(cls)
+        except (OSError, TypeError):
+            template_path = ""
+    return HeldTemplateReads(
+        label=cls_label,
+        template_name=template_name,
+        template_path=template_path,
+        refs=tuple((name, own_lines.get(name)) for name, _line in refs),
+        held=frozenset(held),
+        declared=frozenset(declared),
+        supplied=frozenset(supplied),
+        silenced=frozenset(silenced),
+    )
+
+
 @register("djust")
 def check_unsupplied_template_names(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     """T027: an explicit view's template reads a name the view holds but does not supply."""
@@ -2100,25 +2227,21 @@ def check_unsupplied_template_names(app_configs: Any, **kwargs: Any) -> list[Che
     if _is_check_suppressed("djust.T027"):
         return errors
     try:
-        from djust._exposure import provider_contracts_for
-        from djust._exposure_providers import registered_components
-        from djust._exposure_unsupplied import MIGRATION_GUIDE_URL
+        from djust._exposure_unsupplied import MIGRATION_GUIDE_URL, context_processor_names
         from djust.live_view import LiveView
-        from djust.management._exposure_inventory import inventory_view
-        from djust.mixins.context import rendered_state_names
-        from djust.management.commands.djust_typecheck import (
-            _extract_context_keys_from_ast,
-            _extract_referenced_names,
-            _extract_template_locals,
-            _template_noqa_names,
-        )
     except ImportError:
         return errors
 
     skipped_override = 0
     skipped_labels: list[str] = []
     skipped_unreadable = 0
-    processor_names: Optional[frozenset] = None
+    cached_processors: list[frozenset] = []
+
+    def processor_names() -> frozenset:
+        if not cached_processors:
+            cached_processors.append(context_processor_names())
+        return cached_processors[0]
+
     skipped_template = 0
     discovered = set(_routed_liveview_classes()) | set(_walk_subclasses(LiveView))
     for cls in sorted(
@@ -2130,70 +2253,26 @@ def check_unsupplied_template_names(app_configs: Any, **kwargs: Any) -> list[Che
         policy = inspect.getattr_static(cls, "exposure_policy", None)
         if type(policy) is not str or policy != "explicit":
             continue
-        loaded = _static_template_source(cls)
-        if loaded is None:
+        reads = held_template_reads(cls, processor_names)
+        if reads == "no-template":
             continue
-        if processor_names is None:
-            from djust._exposure_unsupplied import context_processor_names
-
-            processor_names = context_processor_names()
-        if _t027_get_context_data_is_too_dynamic(cls):
+        if reads == "override":
             skipped_override += 1
             skipped_labels.append("%s.%s" % (cls.__module__, cls.__qualname__))
             continue
-        own_src, template_name, template_path = loaded
-        src = _t027_template_source(own_src, template_name)
-        if src is None:
+        if reads == "template":
             skipped_template += 1
             continue
-        cls_label = "%s.%s" % (cls.__module__, cls.__qualname__)
-        try:
-            entries = inventory_view(cls)["names"]
-            held = {entry["name"] for entry in entries if entry.get("kind") in _T027_HELD_KINDS}
-            declared = {entry["name"] for entry in entries if entry.get("kind") == "state"}
-            supplied = (
-                _extract_context_keys_from_ast(cls, attributes=False)
-                | set(registered_components(cls))
-                | _extract_template_locals(src)
-                | _get_context_data_chain_keys(cls)
-                # Names a mixin's provider contract renders (TenantMixin's ``tenant``): its
-                # ``get_context_data()`` sets them by a computed key the AST walk cannot read.
-                | {name for contract in provider_contracts_for(cls) for name in contract.rendered}
-                # Names the configured TEMPLATES context processors add on every render
-                # (``user``, ``perms``, ``messages``, a project processor's keys).
-                | processor_names
-            )
-            if _get_context_data_reaches_base(cls):
-                supplied |= set(rendered_state_names(cls))
-            silenced = _template_noqa_names(src)
-            refs = _extract_referenced_names(src)
-            # The line is the view's own file's; a name read only in a base template or an
-            # include has no line there.
-            own_lines: dict[str, int] = {}
-            for ref_name, ref_line in _extract_referenced_names(own_src):
-                own_lines.setdefault(ref_name, ref_line)
-        except Exception:  # noqa: BLE001 — a view this cannot read is skipped, not guessed at
-            logger.debug("T027: could not statically read %s", cls_label)
+        if isinstance(reads, str):
             skipped_unreadable += 1
             continue
-        if not template_path:
-            try:
-                template_path = inspect.getfile(cls)
-            except (OSError, TypeError):
-                template_path = ""
-        reported: set[str] = set()
-        refs = [(name, own_lines.get(name)) for name, _line in refs]
-        for name, line in refs:
-            if name in supplied or name in reported or name in held:
-                continue
-            if "*" in silenced or name in silenced:
-                continue
-            stem = name[: -len("_count")] if name.endswith("_count") else ""
-            if not stem or stem not in supplied:
-                continue
+        cls_label = reads.label
+        template_name = reads.template_name
+        template_path = reads.template_path
+        declared = reads.declared
+        for name, stem, line in reads.count_names():
             # #4054: the legacy policy generated ``items_count`` from a supplied
             # ``items``; explicit exposure does not, so the name renders empty.
-            reported.add(name)
             errors.append(
                 DjustWarning(
                     "%s -- the template reads '%s' %s and nothing supplies it: "
@@ -2218,12 +2297,7 @@ def check_unsupplied_template_names(app_configs: Any, **kwargs: Any) -> list[Che
                     line_number=line if template_name else None,
                 )
             )
-        for name, line in refs:
-            if name not in held or name in supplied or name in reported:
-                continue
-            if "*" in silenced or name in silenced:
-                continue
-            reported.add(name)
+        for name, line in reads.unsupplied():
             errors.append(
                 DjustWarning(
                     "%s -- the template reads '%s' %s and the view holds it "

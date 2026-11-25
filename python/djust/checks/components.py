@@ -2087,7 +2087,9 @@ def check_legacy_exposure_policy(app_configs: Any, **kwargs: Any) -> list[CheckM
                     "Move the view to explicit exposure, the default: declare persisted "
                     "fields with state(), return template names from get_context_data(), "
                     "then delete the exposure_policy line. `python manage.py "
-                    "djust_exposure_inventory` lists what each view exposes today. See %s. "
+                    "djust_exposure_inventory --fix` deletes the line and supplies what the "
+                    "template reads from get_context_data(); without --fix it lists what each "
+                    "view exposes today. See %s. "
                     "Suppress with DJUST_CONFIG = {'suppress_checks': ['V028']}."
                     % MIGRATION_GUIDE_URL
                 ),
