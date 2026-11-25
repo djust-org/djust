@@ -114,8 +114,8 @@ class CacheTestView(LiveView):
 
     @event_handler()
     @debounce(wait=0.5)
-    @cache(ttl=300, key_params=["query"])
-    def search(self, query: str = "", total_searches: int = 0, **kwargs):
+    @cache(ttl=300, key_params=["value"])
+    def search(self, value: str = "", total_searches: int = 0, **kwargs):
         """
         Search handler with debouncing and caching.
 
@@ -123,9 +123,10 @@ class CacheTestView(LiveView):
         The automated test runs on page load via JavaScript.
 
         Args:
-            query: The search query string
+            value: The input's current value (strict binding sends `value`, not
+                the input's name)
             total_searches: Total number of searches (tracked client-side and passed in)
         """
-        self.query = query
+        self.query = value
         self.total_searches = total_searches  # Update from client-side counter
         self.server_calls += 1
