@@ -34,5 +34,5 @@ def test_code_rule_uses_font_mono_variable():
     css = ThemeCSSGenerator("default")._generate_utilities()
     start = css.index("code,\n.code {")
     rule = css[start : css.index("}", start)]
-    assert "font-family: var(--font-mono);" in rule
-    assert "ui-monospace" not in rule
+    assert "font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);" in rule
+    assert "font-family: ui-monospace" not in rule  # the stack is only the var() fallback
