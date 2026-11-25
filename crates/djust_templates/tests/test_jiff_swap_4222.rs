@@ -147,3 +147,83 @@ fn timesince_reaches_the_end_of_the_calendar() {
         "9\u{a0}years, 11\u{a0}months"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Django-parity edges the chrono port also got wrong, found by the same
+// differential and fixed with the swap. Expected strings are Django 5.2's.
+// ---------------------------------------------------------------------------
+
+const ZONE_CODES: &str = r#"{{ v|date:"H:i|e|T|O|Z|I|U|r" }}"#;
+
+#[test]
+fn a_naive_wall_clock_in_a_dst_gap_blanks_the_zone_codes() {
+    // 02:30 never happened in New York on 2026-03-08. Django's
+    // `_datetime_ambiguous_or_imaginary` leaves `self.timezone = None`, so the
+    // zone codes are empty; `U` and `r` read it with fold=0, the
+    // PRE-transition offset (-0500). chrono's port printed `+0000` for O/r.
+    assert_eq!(
+        render_in(Some(NY), ZONE_CODES, "2026-03-08T02:30:00"),
+        "02:30||||||1772955000|Sun, 08 Mar 2026 02:30:00 -0500"
+    );
+}
+
+#[test]
+fn a_naive_wall_clock_in_a_dst_fold_blanks_the_zone_codes() {
+    // 01:30 happened twice. fold=0 is the earlier one, EDT. The chrono port
+    // reported `EDT -0400 -14400 1` where Django reports nothing.
+    assert_eq!(
+        render_in(Some(NY), ZONE_CODES, "2026-11-01T01:30:00"),
+        "01:30||||||1793511000|Sun, 01 Nov 2026 01:30:00 -0400"
+    );
+}
+
+#[test]
+fn an_aware_instant_whose_local_time_is_in_a_fold_blanks_the_zone_codes() {
+    // Both instants are 01:30 local; Django blanks the zone codes for both
+    // while `U` and `r` keep each instant's own offset.
+    assert_eq!(
+        render_in(Some(NY), ZONE_CODES, "2026-11-01T05:30:00+00:00"),
+        "01:30||||||1793511000|Sun, 01 Nov 2026 01:30:00 -0400"
+    );
+    assert_eq!(
+        render_in(Some(NY), ZONE_CODES, "2026-11-01T06:30:00+00:00"),
+        "01:30||||||1793514600|Sun, 01 Nov 2026 01:30:00 -0500"
+    );
+    // One minute either side of the fold is unambiguous again.
+    assert_eq!(
+        render_in(Some(NY), ZONE_CODES, "2026-11-01T04:29:00+00:00"),
+        "00:29|EDT|EDT|-0400|-14400|1|1793507340|Sun, 01 Nov 2026 00:29:00 -0400"
+    );
+}
+
+#[test]
+fn a_local_mean_time_offset_prints_its_seconds_like_python() {
+    // New York before 1883 is LMT, -04:56:02. Django's `O` truncates the
+    // seconds; `c` (isoformat) and `r` (strftime %z) print them. chrono
+    // rounded all three to the minute.
+    assert_eq!(
+        render_in(
+            Some(NY),
+            r#"{{ v|date:"H:i:s|T|O|Z|c|r" }}"#,
+            "1880-01-01T12:00:00+00:00"
+        ),
+        "07:03:58|LMT|-0456|-17762|1880-01-01T07:03:58-04:56:02|Thu, 01 Jan 1880 07:03:58 -045602"
+    );
+}
+
+#[test]
+fn y_is_zero_padded_and_u_truncates_toward_zero() {
+    // Django: `"%04d" % year` and `int(dt.timestamp())`.
+    assert_eq!(
+        render_in(
+            None,
+            r#"{{ v|date:"Y-m-d|U" }}"#,
+            "0001-01-01T00:00:00+00:00"
+        ),
+        "0001-01-01|-62135596800"
+    );
+    assert_eq!(
+        render_in(None, r#"{{ v|date:"U" }}"#, "1969-12-31T23:59:59.5+00:00"),
+        "0"
+    );
+}

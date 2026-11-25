@@ -3829,6 +3829,12 @@ struct Stamped {
     /// zone (`T` gives `EDT`), while for a bare TIME they render empty, because
     /// `TimeFormat` has no date to resolve an offset against.
     time_only: bool,
+    /// The wall clock is ambiguous (a DST fold) or imaginary (a DST gap) in
+    /// the zone it is read in. Django's `TimeFormat.__init__` then leaves
+    /// `self.timezone = None` (`_datetime_ambiguous_or_imaginary`), so `e`,
+    /// `T`, `O`, `Z` and `I` all render empty, while `U`, `c` and `r` still
+    /// use the value's own offset. Measured against Django 5.2 (#4222).
+    zone_unknown: bool,
 }
 
 /// Apply the active render timezone (#2209).
@@ -3864,6 +3870,7 @@ fn apply_active_timezone(dt: Stamp, aware: bool, time_only: bool) -> Stamped {
         aware,
         timestamp: dt.unix_seconds(),
         time_only,
+        zone_unknown: false,
     };
     // A time has no date on which to determine timezone offsets or DST.
     // Django leaves its wall clock unchanged and its zone fields empty.
@@ -3897,6 +3904,13 @@ fn apply_active_timezone(dt: Stamp, aware: bool, time_only: bool) -> Stamped {
                 aware,
                 timestamp: dt.unix_seconds(),
                 time_only,
+                // An instant is never in a gap, but its wall clock can be in a
+                // fold: 05:30Z and 06:30Z are both 01:30 in New York on the
+                // fall-back night, and Django blanks the zone codes for both.
+                zone_unknown: !matches!(
+                    tz.to_ambiguous_timestamp(local.local).offset(),
+                    AmbiguousOffset::Unambiguous { .. }
+                ),
             },
             None => unchanged(Some(fixed_offset_name(dt.offset())), aware),
         };
@@ -3905,12 +3919,16 @@ fn apply_active_timezone(dt: Stamp, aware: bool, time_only: bool) -> Stamped {
     // Naive: keep the wall clock, and read the zone metadata off that same wall
     // clock interpreted in the default zone. The local-to-instant mapping is
     // not total — a local time inside a DST gap does not exist, and one inside
-    // a fold is ambiguous. [`earliest_offset`] picks the pre-transition offset
-    // for a fold, which is what Django's `_datetime_ambiguous_or_imaginary`
-    // guard effectively yields; a gap falls back to leaving the metadata
-    // unknown rather than inventing an offset.
-    let Some(offset) = earliest_offset(&tz, dt.local) else {
-        return unchanged(None, aware);
+    // a fold is ambiguous. Django's `make_aware` reads both with `fold=0`, the
+    // PRE-transition offset, and that is what `U` and `r` print; the zone codes
+    // render empty (`zone_unknown`). Measured against Django 5.2 (#4222): the
+    // earlier `.earliest()` port reported `EDT`/`-0400` for a fold and
+    // `+0000` for a gap.
+    let (offset, zone_unknown) = match tz.to_ambiguous_timestamp(dt.local).offset() {
+        AmbiguousOffset::Unambiguous { offset } => (offset, false),
+        AmbiguousOffset::Fold { before, .. } | AmbiguousOffset::Gap { before, .. } => {
+            (before, true)
+        }
     };
     // Re-stamp the SAME wall clock with the zone's offset at that local time.
     // The wall clock is untouched — this only replaces the meaningless "+0000"
@@ -3922,13 +3940,18 @@ fn apply_active_timezone(dt: Stamp, aware: bool, time_only: bool) -> Stamped {
         local: dt.local,
         offset,
     };
-    let abbrev = local.in_zone(&tz).map(|(_, abbrev)| abbrev);
+    let abbrev = if zone_unknown {
+        None
+    } else {
+        local.in_zone(&tz).map(|(_, abbrev)| abbrev)
+    };
     Stamped {
         dt: local,
         abbrev,
         aware,
         timestamp: local.unix_seconds(),
         time_only,
+        zone_unknown,
     }
 }
 
@@ -4061,16 +4084,31 @@ fn subsec_micros(dt: &Stamp) -> i32 {
     dt.subsec_nanosecond() / 1_000
 }
 
-/// `+HHMM` (or `+HH:MM` with `colon`), exactly as chrono's `%z`/`%:z`
-/// printed it before #4222: hours and minutes only, a seconds component
-/// rounded to the nearest minute. Only a pre-1900 local-mean-time offset
-/// (`-04:56:02` for New York) has one.
+/// `+HHMM` (or `+HH:MM` with `colon`), with `SS` / `:SS` appended when the
+/// offset has a seconds component — Python's `strftime("%z")` and
+/// `isoformat()`, which is what Django's `r` and `c` print.
+///
+/// Only a local-mean-time offset has seconds (`-04:56:02` for New York before
+/// 1883). chrono rounded those to the minute; Django prints them (#4222).
 pub(crate) fn format_offset(offset: Offset, colon: bool) -> String {
     let secs = offset.seconds();
     let sign = if secs < 0 { '-' } else { '+' };
-    let minutes = (secs.unsigned_abs() + 30) / 60;
+    let abs = secs.unsigned_abs();
     let sep = if colon { ":" } else { "" };
-    format!("{sign}{:02}{sep}{:02}", minutes / 60, minutes % 60)
+    let mut out = format!("{sign}{:02}{sep}{:02}", abs / 3600, (abs / 60) % 60);
+    if !abs.is_multiple_of(60) {
+        out.push_str(&format!("{sep}{:02}", abs % 60));
+    }
+    out
+}
+
+/// Django's `O`: `"%s%02d%02d" % (sign, seconds // 3600, (seconds // 60) % 60)`
+/// — the seconds component is TRUNCATED, never printed or rounded.
+fn django_o(offset: Offset) -> String {
+    let secs = offset.seconds();
+    let sign = if secs < 0 { '-' } else { '+' };
+    let abs = secs.unsigned_abs();
+    format!("{sign}{:02}{:02}", abs / 3600, (abs / 60) % 60)
 }
 
 /// English day and month names, as chrono's `%a`/`%A`/`%b`/`%B` gave them.
@@ -4242,6 +4280,7 @@ fn format_date(datetime_str: &str, format_str: &str, original: &Value) -> Result
             dt,
             aware,
             time_only,
+            zone_unknown: false,
         }
     } else {
         apply_active_timezone(dt, aware, time_only)
@@ -4284,12 +4323,13 @@ fn format_date(datetime_str: &str, format_str: &str, original: &Value) -> Result
     while let Some(ch) = chars.next() {
         match ch {
             // Common date format codes
-            'Y' => result.push_str(&dt.year().to_string()), // 2025
+            // Django: `"%04d" % year`, so year 1 is `0001` (#4222).
+            'Y' => result.push_str(&format!("{:04}", dt.year())), // 2025
             'y' => result.push_str(&format!("{:02}", i32::from(dt.year()) % 100)), // 25
             'm' => result.push_str(&format!("{:02}", dt.month())), // 01-12
-            'n' => result.push_str(&dt.month().to_string()), // 1-12
-            'd' => result.push_str(&format!("{:02}", dt.day())), // 01-31
-            'j' => result.push_str(&dt.day().to_string()),  // 1-31
+            'n' => result.push_str(&dt.month().to_string()),      // 1-12
+            'd' => result.push_str(&format!("{:02}", dt.day())),  // 01-31
+            'j' => result.push_str(&dt.day().to_string()),        // 1-31
             'b' | 'D' | 'l' | 'F' | 'E' | 'M' | 'N' => {
                 let index = if matches!(ch, 'D' | 'l') {
                     dt.weekday().to_monday_zero_offset() as u32
@@ -4466,6 +4506,7 @@ fn format_date(datetime_str: &str, format_str: &str, original: &Value) -> Result
             // uniform, which is why each is handled rather than sharing one
             // branch: `e` is "" for a naive value, while `T`/`O`/`Z` report the
             // DEFAULT zone's abbreviation and offset for that local time.
+            'e' | 'T' | 'O' | 'Z' | 'I' if stamped.zone_unknown => {}
             'e' => {
                 // Timezone name — empty for a naive value.
                 if stamped.aware {
@@ -4489,10 +4530,21 @@ fn format_date(datetime_str: &str, format_str: &str, original: &Value) -> Result
             }
             // Same rule as `T`: a bare time reports no offset, and the borrowed
             // anchor date must not leak one.
-            'O' if !stamped.time_only => result.push_str(&format_offset(dt.offset(), false)),
+            'O' if !stamped.time_only => result.push_str(&django_o(dt.offset())),
             'Z' if !stamped.time_only => result.push_str(&dt.offset().seconds().to_string()),
             'O' | 'Z' => {}
-            'U' => result.push_str(&stamped.timestamp.to_string()), // seconds since epoch
+            'U' => {
+                // Seconds since epoch. Django's is `int(dt.timestamp())`: a
+                // FLOAT, truncated toward zero. Both halves show: one
+                // microsecond before a whole second is the later second for a
+                // pre-1970 instant (truncation), and `.999999` in year 9998
+                // rounds up to the next second (2.5e17 microseconds is past
+                // f64's 53 bits). Same arithmetic, same answer (#4222).
+                let micros =
+                    i128::from(stamped.timestamp) * 1_000_000 + i128::from(subsec_micros(&dt));
+                let seconds = (micros as f64 / 1_000_000.0).trunc() as i64;
+                result.push_str(&seconds.to_string());
+            }
             'I' => {
                 // '1' during DST, '0' otherwise. Django reads `dst()`; the
                 // equivalent here is whether this zone's offset at this instant
