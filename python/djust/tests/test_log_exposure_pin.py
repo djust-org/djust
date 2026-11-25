@@ -210,16 +210,8 @@ MIXIN_TABLES = {
     "uploads/__init__.py": (
         {},
         {
-            ("_add_chunk_via_writer", "UploadWriter instantiation failed for upload %s:"): (
-                "application UploadWriter code, but it receives upload bytes and metadata, never view state"
-            ),
-            ("_add_chunk_via_writer", "UploadWriter.open() raised for upload %s: %s"): (
-                "application UploadWriter code, but it receives upload bytes and metadata, never view state"
-            ),
-            ("_add_chunk_via_writer", "UploadWriter.write_chunk() raised for upload %s:"): (
-                "application UploadWriter code, but it receives upload bytes and metadata, never view state"
-            ),
-            ("_finalize_writer", "UploadWriter.close() raised for upload %s: %s"): (
+            # #4118: instantiation, open(), write_chunk() and close() faults log here.
+            ("_writer_failed", "UploadWriter %s raised for upload %s: %s"): (
                 "application UploadWriter code, but it receives upload bytes and metadata, never view state"
             ),
             ("_finalize_writer", "UploadWriter.close() return not JSON-serializabl"): (

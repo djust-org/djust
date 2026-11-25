@@ -112,10 +112,11 @@ class PhotosView(UploadMixin, LiveView):
 |-----------|------|---------|-------------|
 | `name` | `str` | required | Upload slot name, referenced in templates as `dj-upload="name"` |
 | `accept` | `str` | `""` | Comma-separated extensions or MIME types (e.g., `".jpg,.png"` or `"image/*"`) |
-| `max_entries` | `int` | `1` | Maximum files for this slot. Sets `multiple` automatically if > 1. |
+| `max_entries` | `int` | `1` | Maximum files the slot holds at once: uploads in flight and finished uploads not yet consumed (or cancelled) both count; a failed upload does not. Sets `multiple` automatically if > 1. |
 | `max_file_size` | `int` | `10_000_000` | Maximum file size in bytes (default 10MB) |
 | `chunk_size` | `int` | `64512` | Chunk size for transfer (default 63KB; clamped so a chunk frame, header included, fits `max_message_size`) |
 | `auto_upload` | `bool` | `True` | Start upload immediately when files are selected |
+| `timeout` | `float` or `None` | `None` | Seconds an upload may take from its registration (from the resume, for a resumed upload). An upload unfinished by then is cancelled: its writer is aborted with a `TimeoutError`, its entry dropped, and the browser told ("Upload timed out after N seconds."). `None` sets no limit. |
 
 ```python
 # Single image
@@ -125,7 +126,16 @@ self.allow_upload('avatar', accept='.jpg,.png,.webp',
 # Multiple documents
 self.allow_upload('documents', accept='.pdf,.docx',
                   max_entries=10, max_file_size=20_000_000)
+
+# An image that must arrive within a minute
+self.allow_upload('photo', accept='image/*', max_file_size=5_000_000, timeout=60)
 ```
+
+A finished upload holds its place in `max_entries` until your handler consumes it with `consume_uploaded_entries()` or drops it with `cancel_upload()`, so consume what you keep and cancel what you don't.
+
+### Cancelling from the view
+
+`self.cancel_upload(name, ref)` aborts the upload's writer and drops its entry. At the end of the turn the browser is told: `djust:upload:progress` fires with status `cancelled` and `error` "Upload cancelled by the server.", the client stops sending chunks, and a pending `djust.uploads.uploadFile()` promise rejects with that message.
 
 ## UploadEntry Properties
 
@@ -162,8 +172,9 @@ Only one bar exists per container, so files uploaded one after another reuse it;
 
 ```javascript
 window.addEventListener('djust:upload:progress', (e) => {
-    // e.detail: {ref, progress, status, uploadName}
+    // e.detail: {ref, progress, status, error, uploadName}
     // status: "uploading" | "complete" | "error" | "cancelled"
+    // error: the server's reason for "error" / "cancelled", or null
     console.log(`${e.detail.uploadName}: ${e.detail.progress}%`);
 });
 ```
@@ -364,8 +375,27 @@ Clients send whatever chunk size they send (djust's default is 64 KB per WebSock
 | `write_chunk()` raised | the exception raised by `write_chunk()` |
 | `close()` raised | the exception raised by `close()` |
 | Total bytes exceeds `max_file_size` | `ValueError("File size exceeds limit (N bytes)")` |
-| Client sent a cancel frame | `ConnectionAbortedError("upload cancelled")` |
+| Client sent a cancel frame, or the view called `cancel_upload()` | `ConnectionAbortedError("upload cancelled")` |
+| The slot's `timeout=` passed | `TimeoutError("Upload timed out after N seconds.")` |
 | WebSocket session closed with upload in flight | `ConnectionAbortedError("session closed")` |
+
+#### Refusing an upload
+
+To refuse an upload with a reason the user should see (a size or content policy, a per-user quota), raise `djust.uploads.UploadRefused` from `open()`, `write_chunk()` or `close()`:
+
+```python
+from djust.uploads import UploadRefused, UploadWriter
+
+class ImageWriter(UploadWriter):
+    def write_chunk(self, chunk, chunk_index=0):
+        if self.expected_size > 2_000_000:
+            raise UploadRefused("Images must be under 2 MB.")
+        ...
+```
+
+djust logs the refusal at WARNING without a traceback, aborts the writer, and sends the browser the exception's `message` (one line, at most 200 characters): it becomes the `error` of the `djust:upload:progress` event and of `entry.error`, and the message of the `uploadFile()` rejection. Only `message` is sent, never `sdk_exc` or anything else on the exception, so write it for the user and keep internal detail (bucket names, ARNs, URLs) out of it.
+
+Any other exception is a fault: logged at ERROR with its traceback, and the browser gets fixed text ("Upload writer rejected chunk"). That includes the other `UploadError` subclasses (`UploadCredentialError`, `UploadNetworkError`, `UploadQuotaError`), which the object-storage backends raise for infrastructure failures and whose messages name the vendor.
 
 If your own `abort()` implementation raises, djust logs the traceback and swallows it — a failing S3 `AbortMultipartUpload` is a cleanup problem, not a correctness problem for the rest of the view.
 

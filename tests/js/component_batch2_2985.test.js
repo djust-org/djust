@@ -914,6 +914,12 @@ describe('ResizablePanel', () => {
 describe('AnimatedNumber', () => {
     const text = (env) => env.$('.dj-animated-number__value').textContent;
     const wait = (env, ms) => new Promise((resolve) => env.window.setTimeout(resolve, ms));
+    // An animation's last frame lands when its clock says so; on a loaded runner
+    // that can be well after the nominal duration. Poll for it, bounded.
+    const settle = async (env, expected, bound = 3000) => {
+        const start = Date.now();
+        while (text(env) !== expected && Date.now() - start < bound) await wait(env, 20);
+    };
 
     it('counts up from zero and ends on the exact text the server rendered', () => {
         const frames = [];
@@ -940,6 +946,9 @@ describe('AnimatedNumber', () => {
     it('the last frame is the server\'s text even where client rounding would differ', async () => {
         // Python renders 0.125 with 2 places as "0.12" (half to even); toFixed gives "0.13".
         const env = boot(NUMBER({ value: 0.125, text: '0.12', decimals: 2, duration: 50 }), 'animated-number.js');
+        await settle(env, '0.12');
+        // A mid-count frame can also read "0.12": hold well past the duration
+        // and check the last frame did not move on to client rounding ("0.13").
         await wait(env, 200);
         expect(text(env)).toBe('0.12');
     });

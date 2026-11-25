@@ -151,10 +151,6 @@ OUTSIDE_ROOTS = {
     "examples/demo_project/djust_rentals/components/tests/test_component_security.py": _RENTALS,
     "examples/demo_project/djust_rentals/tests/test_jit_integration.py": _RENTALS,
     "examples/demo_project/djust_rentals/tests/test_lease_forms.py": _RENTALS,
-    "examples/test_textarea_component.py": (
-        "a hand-run example script that configures its own settings; no job runs it, "
-        "and 2 of its tests fail today (an ImportError on the Rust TextArea)"
-    ),
     "python/djust/test_isolation.py": (
         "a library module (public test-isolation helpers), not a test file"
     ),

@@ -1873,15 +1873,12 @@ class LiveViewWebSocket {
                     // Jitter never reorders frames: a frame is released no
                     // earlier than the one before it, as a socket delivers
                     // them (a digest frame follows its full manifest, #4307).
+                    // One FIFO drained by one timer: two timers aimed at the
+                    // same millisecond may fire in either order.
                     const now = Date.now();
                     this._simReleaseAt = Math.max(now + actual, this._simReleaseAt || 0);
-                    // ``handleMessage`` is the queue-wrapper (#1098); its
-                    // returned promise is the chain-tail with an internal
-                    // ``.catch`` that already logs and swallows. The
-                    // returned promise never rejects, so we just ignore it.
-                    setTimeout(() => {
-                        this.handleMessage(data, socket);
-                    }, this._simReleaseAt - now);
+                    (this._simQueue = this._simQueue || []).push([this._simReleaseAt, data, socket]);
+                    if (!this._simTimer) this._simDrain();
                 } else {
                     this.handleMessage(data, socket);
                 }
@@ -1889,6 +1886,20 @@ class LiveViewWebSocket {
                 console.error('[LiveView] Failed to parse message:', error);
             }
         };
+    }
+
+    // Release simulated-latency frames in arrival order (#4307). ``handleMessage``
+    // is the queue-wrapper (#1098); its promise never rejects, so it is ignored.
+    _simDrain() {
+        this._simTimer = null;
+        const queue = this._simQueue || [];
+        while (queue.length && queue[0][0] <= Date.now()) {
+            const [, data, socket] = queue.shift();
+            this.handleMessage(data, socket);
+        }
+        if (queue.length) {
+            this._simTimer = setTimeout(() => this._simDrain(), Math.max(0, queue[0][0] - Date.now()));
+        }
     }
 
     /**
@@ -13640,6 +13651,9 @@ if (document.readyState === 'loading') {
                 let chunkIndex = startChunkIndex;
 
                 function sendNextChunk() {
+                    // Settled meanwhile (cancelled, failed, timed out on the
+                    // server, #4118): send nothing more.
+                    if (!activeUploads.has(ref)) return;
                     if (offset >= buffer.byteLength) {
                         // All chunks sent — send complete frame
                         const completeFrame = buildFrame(FRAME_COMPLETE, refBytes);
@@ -13989,6 +14003,9 @@ if (document.readyState === 'loading') {
      */
     function handleUploadProgress(data) {
         const { ref, progress, status } = data;
+        // The server's reason for an error or a cancel (#4118): an
+        // UploadError refusal's message, a timeout, a cancel by the view.
+        const reason = typeof data.error === 'string' && data.error ? data.error : null;
         const upload = activeUploads.get(ref);
 
         if (upload) attachProgressUI(upload.uploadName, ref, upload.file);
@@ -14001,7 +14018,7 @@ if (document.readyState === 'loading') {
 
         // Dispatch custom event for app-level handling
         window.dispatchEvent(new CustomEvent('djust:upload:progress', {
-            detail: { ref, progress, status, uploadName: upload ? upload.uploadName : null }
+            detail: { ref, progress, status, error: reason, uploadName: upload ? upload.uploadName : null }
         }));
 
         if (status === 'complete') {
@@ -14013,9 +14030,10 @@ if (document.readyState === 'loading') {
                 deleteResumableRecord(upload.fileHint);
             }
             activeUploads.delete(ref);
-        } else if (status === 'error') {
+        } else if (status === 'error' || status === 'cancelled') {
             if (upload && upload.reject) {
-                upload.reject(new Error('Upload failed on server'));
+                const fallback = status === 'error' ? 'Upload failed on server' : 'Upload cancelled';
+                upload.reject(new Error(reason || fallback));
             }
             if (upload && upload.fileHint) {
                 deleteResumableRecord(upload.fileHint);
@@ -14290,6 +14308,15 @@ if (document.readyState === 'loading') {
             }
         }
     }
+
+    // An upload_progress decided inside a turn (the view's cancel_upload(),
+    // #4118) arrives as a push event at the turn's end.
+    window.addEventListener('djust:push_event', (event) => {
+        const detail = event.detail || {};
+        if (detail.event === 'djust:upload_progress' && detail.payload && detail.payload.ref) {
+            handleUploadProgress(detail.payload);
+        }
+    });
 
     window.djust.uploads = {
         setConfigs: setUploadConfigs,

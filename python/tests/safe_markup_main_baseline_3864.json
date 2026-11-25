@@ -42531,14 +42531,6 @@
 "crc": 3227967616,
 "findings": []
 },
-"examples/test_textarea_component.py": {
-"crc": 3529221285,
-"findings": []
-},
-"examples/textarea_benchmark.py": {
-"crc": 3073194353,
-"findings": []
-},
 "examples/textarea_example.py": {
 "crc": 1515358059,
 "findings": []

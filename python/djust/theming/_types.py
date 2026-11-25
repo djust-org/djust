@@ -486,6 +486,8 @@ class TypographyStyle:
     # e.g. '"Inter", system-ui, sans-serif'). NOT validated at construction.
     heading_font: str = "system-ui"
     body_font: str = "system-ui"
+    # Monospace stack written to ``--font-mono`` (code, kbd, ``.font-mono``).
+    mono_font: str = "ui-monospace, SFMono-Regular, monospace"
 
     # Scale and sizing
     base_size: str = "16px"

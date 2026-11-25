@@ -1,0 +1,1245 @@
+{
+ "cells": {
+  "dashboard/http/nosave/0": {
+   "answers": {
+    "html": 40
+   },
+   "bytes_down": 2448.0,
+   "bytes_up": 2.0,
+   "cpu_ms": 4.195921150000359,
+   "lag_max_ms": 4.225732000008975,
+   "lag_p95_ms": 2.5743610000290573,
+   "mode": "nosave",
+   "p50_ms": 4.000893000011274,
+   "p95_ms": 7.615196999950058,
+   "rtt_ms": 0.0,
+   "shape": "dashboard",
+   "transport": "http",
+   "turns": 40
+  },
+  "dashboard/http/save/0": {
+   "answers": {
+    "patch": 40
+   },
+   "bytes_down": 905.0,
+   "bytes_up": 2.0,
+   "cpu_ms": 10.807163650000184,
+   "lag_max_ms": 5.97804900007759,
+   "lag_p95_ms": 3.176891000066462,
+   "mode": "save",
+   "p50_ms": 15.822094999975889,
+   "p95_ms": 24.238413000034598,
+   "rtt_ms": 0.0,
+   "shape": "dashboard",
+   "transport": "http",
+   "turns": 40
+  },
+  "dashboard/http/save/100": {
+   "answers": {
+    "patch": 10
+   },
+   "bytes_down": 904.5,
+   "bytes_up": 2.0,
+   "cpu_ms": 16.69673409999959,
+   "lag_max_ms": 3.5807570000088162,
+   "lag_p95_ms": 0.7120710000663166,
+   "mode": "save",
+   "p50_ms": 117.11541700003636,
+   "p95_ms": 131.72902700000577,
+   "rtt_ms": 100.0,
+   "shape": "dashboard",
+   "transport": "http",
+   "turns": 10
+  },
+  "dashboard/http/save/20": {
+   "answers": {
+    "patch": 10
+   },
+   "bytes_down": 904.5,
+   "bytes_up": 2.0,
+   "cpu_ms": 13.430784900000248,
+   "lag_max_ms": 8.72541100000035,
+   "lag_p95_ms": 2.325346000020545,
+   "mode": "save",
+   "p50_ms": 39.31193000005351,
+   "p95_ms": 57.27702599995155,
+   "rtt_ms": 20.0,
+   "shape": "dashboard",
+   "transport": "http",
+   "turns": 10
+  },
+  "dashboard/http/save/250": {
+   "answers": {
+    "patch": 10
+   },
+   "bytes_down": 904.5,
+   "bytes_up": 2.0,
+   "cpu_ms": 21.09563139999935,
+   "lag_max_ms": 3.618678000066211,
+   "lag_p95_ms": 0.25815499998316227,
+   "mode": "save",
+   "p50_ms": 267.9588739999872,
+   "p95_ms": 274.72693799995795,
+   "rtt_ms": 250.0,
+   "shape": "dashboard",
+   "transport": "http",
+   "turns": 10
+  },
+  "dashboard/sse/nosave/0": {
+   "answers": {
+    "patch": 40
+   },
+   "bytes_down": 318.0,
+   "bytes_up": 2.0,
+   "cpu_ms": 4.483994174999761,
+   "lag_max_ms": 1.8703980000509546,
+   "lag_p95_ms": 1.0370370000600815,
+   "mode": "nosave",
+   "p50_ms": 4.295146000004024,
+   "p95_ms": 7.929047000061473,
+   "rtt_ms": 0.0,
+   "shape": "dashboard",
+   "transport": "sse",
+   "turns": 40
+  },
+  "dashboard/sse/save/0": {
+   "answers": {
+    "patch": 40
+   },
+   "bytes_down": 314.0,
+   "bytes_up": 2.0,
+   "cpu_ms": 9.641444375000052,
+   "lag_max_ms": 29.506594000054065,
+   "lag_p95_ms": 2.0604350000894556,
+   "mode": "save",
+   "p50_ms": 12.482547999979943,
+   "p95_ms": 21.33409499992922,
+   "rtt_ms": 0.0,
+   "shape": "dashboard",
+   "transport": "sse",
+   "turns": 40
+  },
+  "dashboard/sse/save/100": {
+   "answers": {
+    "patch": 10
+   },
+   "bytes_down": 312.0,
+   "bytes_up": 2.0,
+   "cpu_ms": 14.103747500000452,
+   "lag_max_ms": 1.8537969999670167,
+   "lag_p95_ms": 0.6534820000752006,
+   "mode": "save",
+   "p50_ms": 115.31057699994562,
+   "p95_ms": 120.06871899995986,
+   "rtt_ms": 100.0,
+   "shape": "dashboard",
+   "transport": "sse",
+   "turns": 10
+  },
+  "dashboard/sse/save/20": {
+   "answers": {
+    "patch": 10
+   },
+   "bytes_down": 312.0,
+   "bytes_up": 2.0,
+   "cpu_ms": 11.074517000000128,
+   "lag_max_ms": 4.267650000087997,
+   "lag_p95_ms": 1.3256910000336575,
+   "mode": "save",
+   "p50_ms": 36.23849699999937,
+   "p95_ms": 43.933568000056766,
+   "rtt_ms": 20.0,
+   "shape": "dashboard",
+   "transport": "sse",
+   "turns": 10
+  },
+  "dashboard/sse/save/250": {
+   "answers": {
+    "patch": 10
+   },
+   "bytes_down": 312.0,
+   "bytes_up": 2.0,
+   "cpu_ms": 17.85690439999925,
+   "lag_max_ms": 2.025591999995413,
+   "lag_p95_ms": 0.22634500010099146,
+   "mode": "save",
+   "p50_ms": 266.7382259999158,
+   "p95_ms": 270.21301600007064,
+   "rtt_ms": 250.0,
+   "shape": "dashboard",
+   "transport": "sse",
+   "turns": 10
+  },
+  "dashboard/ws/nosave/0": {
+   "answers": {
+    "patch": 40
+   },
+   "bytes_down": 318.0,
+   "bytes_up": 2.0,
+   "cpu_ms": 4.06670692500013,
+   "lag_max_ms": 3.04377600002681,
+   "lag_p95_ms": 1.4662070000213134,
+   "mode": "nosave",
+   "p50_ms": 3.9069419999577804,
+   "p95_ms": 7.878679999976157,
+   "rtt_ms": 0.0,
+   "shape": "dashboard",
+   "transport": "ws",
+   "turns": 40
+  },
+  "dashboard/ws/save/0": {
+   "answers": {
+    "patch": 40
+   },
+   "bytes_down": 314.0,
+   "bytes_up": 2.0,
+   "cpu_ms": 7.140482025000061,
+   "lag_max_ms": 2.583299000093575,
+   "lag_p95_ms": 1.6066839999666627,
+   "mode": "save",
+   "p50_ms": 8.722728999941864,
+   "p95_ms": 12.490683999999419,
+   "rtt_ms": 0.0,
+   "shape": "dashboard",
+   "transport": "ws",
+   "turns": 40
+  },
+  "dashboard/ws/save/100": {
+   "answers": {
+    "patch": 10
+   },
+   "bytes_down": 312.0,
+   "bytes_up": 2.0,
+   "cpu_ms": 13.302651600000104,
+   "lag_max_ms": 2.6146570000946667,
+   "lag_p95_ms": 0.4376440000442017,
+   "mode": "save",
+   "p50_ms": 113.08782900005099,
+   "p95_ms": 119.16712000004281,
+   "rtt_ms": 100.0,
+   "shape": "dashboard",
+   "transport": "ws",
+   "turns": 10
+  },
+  "dashboard/ws/save/20": {
+   "answers": {
+    "patch": 10
+   },
+   "bytes_down": 312.0,
+   "bytes_up": 2.0,
+   "cpu_ms": 9.62419370000056,
+   "lag_max_ms": 3.3120640000561252,
+   "lag_p95_ms": 1.7505640000763378,
+   "mode": "save",
+   "p50_ms": 33.43730599999617,
+   "p95_ms": 55.74017599997205,
+   "rtt_ms": 20.0,
+   "shape": "dashboard",
+   "transport": "ws",
+   "turns": 10
+  },
+  "dashboard/ws/save/250": {
+   "answers": {
+    "patch": 10
+   },
+   "bytes_down": 312.0,
+   "bytes_up": 2.0,
+   "cpu_ms": 18.421331799999052,
+   "lag_max_ms": 3.243973000053302,
+   "lag_p95_ms": 0.24302400004216906,
+   "mode": "save",
+   "p50_ms": 264.3906579999111,
+   "p95_ms": 266.6623850000178,
+   "rtt_ms": 250.0,
+   "shape": "dashboard",
+   "transport": "ws",
+   "turns": 10
+  },
+  "editor/http/nosave/0": {
+   "answers": {
+    "html": 40
+   },
+   "bytes_down": 5541.5,
+   "bytes_up": 4160.5,
+   "cpu_ms": 3.98451787499976,
+   "lag_max_ms": 4.206611999961751,
+   "lag_p95_ms": 2.11069400006636,
+   "mode": "nosave",
+   "p50_ms": 3.776025999968624,
+   "p95_ms": 6.791528999997354,
+   "rtt_ms": 0.0,
+   "shape": "editor",
+   "transport": "http",
+   "turns": 40
+  },
+  "editor/http/save/0": {
+   "answers": {
+    "patch": 40
+   },
+   "bytes_down": 5090.5,
+   "bytes_up": 4160.5,
+   "cpu_ms": 9.682556724999714,
+   "lag_max_ms": 5.394368000111172,
+   "lag_p95_ms": 1.5165119999664967,
+   "mode": "save",
+   "p50_ms": 13.039680999895609,
+   "p95_ms": 27.77898500005449,
+   "rtt_ms": 0.0,
+   "shape": "editor",
+   "transport": "http",
+   "turns": 40
+  },
+  "editor/http/save/100": {
+   "answers": {
+    "patch": 10
+   },
+   "bytes_down": 5075.5,
+   "bytes_up": 4145.5,
+   "cpu_ms": 13.904268200001724,
+   "lag_max_ms": 5.4392280001138715,
+   "lag_p95_ms": 0.559078000151203,
+   "mode": "save",
+   "p50_ms": 114.99492799998734,
+   "p95_ms": 117.73883899991233,
+   "rtt_ms": 100.0,
+   "shape": "editor",
+   "transport": "http",
+   "turns": 10
+  },
+  "editor/http/save/20": {
+   "answers": {
+    "patch": 10
+   },
+   "bytes_down": 5075.5,
+   "bytes_up": 4145.5,
+   "cpu_ms": 11.087304000000131,
+   "lag_max_ms": 5.01264300010007,
+   "lag_p95_ms": 1.2918970001010166,
+   "mode": "save",
+   "p50_ms": 34.04604299998937,
+   "p95_ms": 53.64141500001551,
+   "rtt_ms": 20.0,
+   "shape": "editor",
+   "transport": "http",
+   "turns": 10
+  },
+  "editor/http/save/250": {
+   "answers": {
+    "patch": 10
+   },
+   "bytes_down": 5075.5,
+   "bytes_up": 4145.5,
+   "cpu_ms": 18.21891849999986,
+   "lag_max_ms": 5.687101000035,
+   "lag_p95_ms": 0.25434700000914745,
+   "mode": "save",
+   "p50_ms": 266.274378999924,
+   "p95_ms": 269.4597549999571,
+   "rtt_ms": 250.0,
+   "shape": "editor",
+   "transport": "http",
+   "turns": 10
+  },
+  "editor/sse/nosave/0": {
+   "answers": {
+    "patch": 40
+   },
+   "bytes_down": 4526.5,
+   "bytes_up": 4160.5,
+   "cpu_ms": 4.663167199999929,
+   "lag_max_ms": 4.640017000042462,
+   "lag_p95_ms": 2.453982000020005,
+   "mode": "nosave",
+   "p50_ms": 4.610974999991413,
+   "p95_ms": 9.147371000040039,
+   "rtt_ms": 0.0,
+   "shape": "editor",
+   "transport": "sse",
+   "turns": 40
+  },
+  "editor/sse/save/0": {
+   "answers": {
+    "patch": 40
+   },
+   "bytes_down": 4522.5,
+   "bytes_up": 4160.5,
+   "cpu_ms": 8.13958027499977,
+   "lag_max_ms": 5.959500000017215,
+   "lag_p95_ms": 1.7491319999862753,
+   "mode": "save",
+   "p50_ms": 12.177643000086391,
+   "p95_ms": 24.012099999936254,
+   "rtt_ms": 0.0,
+   "shape": "editor",
+   "transport": "sse",
+   "turns": 40
+  },
+  "editor/sse/save/100": {
+   "answers": {
+    "patch": 10
+   },
+   "bytes_down": 4506.0,
+   "bytes_up": 4145.5,
+   "cpu_ms": 15.25560909999939,
+   "lag_max_ms": 1.715991000082795,
+   "lag_p95_ms": 0.5876420001413862,
+   "mode": "save",
+   "p50_ms": 116.65695600004256,
+   "p95_ms": 120.9416469999951,
+   "rtt_ms": 100.0,
+   "shape": "editor",
+   "transport": "sse",
+   "turns": 10
+  },
+  "editor/sse/save/20": {
+   "answers": {
+    "patch": 10
+   },
+   "bytes_down": 4506.0,
+   "bytes_up": 4145.5,
+   "cpu_ms": 11.501881500000621,
+   "lag_max_ms": 2.326438000068265,
+   "lag_p95_ms": 0.8736050000379691,
+   "mode": "save",
+   "p50_ms": 33.56624399998509,
+   "p95_ms": 307.6859750000267,
+   "rtt_ms": 20.0,
+   "shape": "editor",
+   "transport": "sse",
+   "turns": 10
+  },
+  "editor/sse/save/250": {
+   "answers": {
+    "patch": 10
+   },
+   "bytes_down": 4506.0,
+   "bytes_up": 4145.5,
+   "cpu_ms": 16.60779039999909,
+   "lag_max_ms": 8.495974000084061,
+   "lag_p95_ms": 0.2520090000643904,
+   "mode": "save",
+   "p50_ms": 264.7805660000131,
+   "p95_ms": 317.85703200000626,
+   "rtt_ms": 250.0,
+   "shape": "editor",
+   "transport": "sse",
+   "turns": 10
+  },
+  "editor/ws/nosave/0": {
+   "answers": {
+    "patch": 40
+   },
+   "bytes_down": 4526.5,
+   "bytes_up": 4160.5,
+   "cpu_ms": 4.221065024999504,
+   "lag_max_ms": 1.7710410000972843,
+   "lag_p95_ms": 0.9764540000105626,
+   "mode": "nosave",
+   "p50_ms": 4.249124000011761,
+   "p95_ms": 6.245535000061864,
+   "rtt_ms": 0.0,
+   "shape": "editor",
+   "transport": "ws",
+   "turns": 40
+  },
+  "editor/ws/save/0": {
+   "answers": {
+    "patch": 40
+   },
+   "bytes_down": 4522.5,
+   "bytes_up": 4160.5,
+   "cpu_ms": 6.721339499999868,
+   "lag_max_ms": 6.399419999979727,
+   "lag_p95_ms": 1.039530000070954,
+   "mode": "save",
+   "p50_ms": 8.107378999966386,
+   "p95_ms": 17.358807000050547,
+   "rtt_ms": 0.0,
+   "shape": "editor",
+   "transport": "ws",
+   "turns": 40
+  },
+  "editor/ws/save/100": {
+   "answers": {
+    "patch": 10
+   },
+   "bytes_down": 4506.0,
+   "bytes_up": 4145.5,
+   "cpu_ms": 12.263351500000397,
+   "lag_max_ms": 2.1084749999999985,
+   "lag_p95_ms": 0.3259910000679156,
+   "mode": "save",
+   "p50_ms": 111.60255100003269,
+   "p95_ms": 116.6858820000698,
+   "rtt_ms": 100.0,
+   "shape": "editor",
+   "transport": "ws",
+   "turns": 10
+  },
+  "editor/ws/save/20": {
+   "answers": {
+    "patch": 10
+   },
+   "bytes_down": 4506.0,
+   "bytes_up": 4145.5,
+   "cpu_ms": 9.068673699998797,
+   "lag_max_ms": 7.222575000014331,
+   "lag_p95_ms": 1.3786510000954877,
+   "mode": "save",
+   "p50_ms": 31.247338999946805,
+   "p95_ms": 42.70389600003455,
+   "rtt_ms": 20.0,
+   "shape": "editor",
+   "transport": "ws",
+   "turns": 10
+  },
+  "editor/ws/save/250": {
+   "answers": {
+    "patch": 10
+   },
+   "bytes_down": 4506.0,
+   "bytes_up": 4145.5,
+   "cpu_ms": 15.323311500000614,
+   "lag_max_ms": 2.09000899997136,
+   "lag_p95_ms": 0.23373900000933645,
+   "mode": "save",
+   "p50_ms": 261.397407000004,
+   "p95_ms": 263.73230000001513,
+   "rtt_ms": 250.0,
+   "shape": "editor",
+   "transport": "ws",
+   "turns": 10
+  },
+  "form/http/nosave/0": {
+   "answers": {
+    "html": 40
+   },
+   "bytes_down": 1915.0,
+   "bytes_up": 35.0,
+   "cpu_ms": 3.602398925000022,
+   "lag_max_ms": 3.661624000073971,
+   "lag_p95_ms": 1.230716999998549,
+   "mode": "nosave",
+   "p50_ms": 3.4554900000784983,
+   "p95_ms": 4.7520570000187945,
+   "rtt_ms": 0.0,
+   "shape": "form",
+   "transport": "http",
+   "turns": 40
+  },
+  "form/http/save/0": {
+   "answers": {
+    "patch": 40
+   },
+   "bytes_down": 1014.5,
+   "bytes_up": 35.0,
+   "cpu_ms": 9.858956849999979,
+   "lag_max_ms": 42.04784800003836,
+   "lag_p95_ms": 1.8057150000458932,
+   "mode": "save",
+   "p50_ms": 11.584835999997267,
+   "p95_ms": 16.18894699993234,
+   "rtt_ms": 0.0,
+   "shape": "form",
+   "transport": "http",
+   "turns": 40
+  },
+  "form/http/save/100": {
+   "answers": {
+    "patch": 10
+   },
+   "bytes_down": 1014.5,
+   "bytes_up": 34.5,
+   "cpu_ms": 13.475283900000079,
+   "lag_max_ms": 3.531010000074275,
+   "lag_p95_ms": 0.5341510000107519,
+   "mode": "save",
+   "p50_ms": 114.10645599994496,
+   "p95_ms": 122.29936400001407,
+   "rtt_ms": 100.0,
+   "shape": "form",
+   "transport": "http",
+   "turns": 10
+  },
+  "form/http/save/20": {
+   "answers": {
+    "patch": 10
+   },
+   "bytes_down": 1014.5,
+   "bytes_up": 34.5,
+   "cpu_ms": 9.771795199999644,
+   "lag_max_ms": 3.9225270000997625,
+   "lag_p95_ms": 1.6511260000697803,
+   "mode": "save",
+   "p50_ms": 34.079705000067406,
+   "p95_ms": 37.614621999978226,
+   "rtt_ms": 20.0,
+   "shape": "form",
+   "transport": "http",
+   "turns": 10
+  },
+  "form/http/save/250": {
+   "answers": {
+    "patch": 10
+   },
+   "bytes_down": 1014.5,
+   "bytes_up": 34.5,
+   "cpu_ms": 17.173774699999456,
+   "lag_max_ms": 1.8973640000012892,
+   "lag_p95_ms": 0.2224290000185647,
+   "mode": "save",
+   "p50_ms": 264.01476600005935,
+   "p95_ms": 266.78879999997207,
+   "rtt_ms": 250.0,
+   "shape": "form",
+   "transport": "http",
+   "turns": 10
+  },
+  "form/sse/nosave/0": {
+   "answers": {
+    "patch": 40
+   },
+   "bytes_down": 346.5,
+   "bytes_up": 35.0,
+   "cpu_ms": 5.827550800000003,
+   "lag_max_ms": 1.2229270000716497,
+   "lag_p95_ms": 0.6829650000099718,
+   "mode": "nosave",
+   "p50_ms": 5.9036420000211365,
+   "p95_ms": 7.506699000032313,
+   "rtt_ms": 0.0,
+   "shape": "form",
+   "transport": "sse",
+   "turns": 40
+  },
+  "form/sse/save/0": {
+   "answers": {
+    "patch": 40
+   },
+   "bytes_down": 342.5,
+   "bytes_up": 35.0,
+   "cpu_ms": 9.557125875000002,
+   "lag_max_ms": 3.292448000024706,
+   "lag_p95_ms": 1.4163810000127341,
+   "mode": "save",
+   "p50_ms": 12.593988999924477,
+   "p95_ms": 18.357176999984404,
+   "rtt_ms": 0.0,
+   "shape": "form",
+   "transport": "sse",
+   "turns": 40
+  },
+  "form/sse/save/100": {
+   "answers": {
+    "patch": 10
+   },
+   "bytes_down": 342.5,
+   "bytes_up": 34.5,
+   "cpu_ms": 15.028790699999917,
+   "lag_max_ms": 30.49613300004239,
+   "lag_p95_ms": 0.6850629999917146,
+   "mode": "save",
+   "p50_ms": 116.49127900000167,
+   "p95_ms": 137.3723680000012,
+   "rtt_ms": 100.0,
+   "shape": "form",
+   "transport": "sse",
+   "turns": 10
+  },
+  "form/sse/save/20": {
+   "answers": {
+    "patch": 10
+   },
+   "bytes_down": 342.5,
+   "bytes_up": 34.5,
+   "cpu_ms": 10.790429600000095,
+   "lag_max_ms": 7.612616999949751,
+   "lag_p95_ms": 1.552214000071217,
+   "mode": "save",
+   "p50_ms": 36.20398500004285,
+   "p95_ms": 39.429873000017324,
+   "rtt_ms": 20.0,
+   "shape": "form",
+   "transport": "sse",
+   "turns": 10
+  },
+  "form/sse/save/250": {
+   "answers": {
+    "patch": 10
+   },
+   "bytes_down": 342.5,
+   "bytes_up": 34.5,
+   "cpu_ms": 17.75570189999982,
+   "lag_max_ms": 1.4532830000462127,
+   "lag_p95_ms": 0.2262600000904058,
+   "mode": "save",
+   "p50_ms": 265.0609870000835,
+   "p95_ms": 266.97799700002633,
+   "rtt_ms": 250.0,
+   "shape": "form",
+   "transport": "sse",
+   "turns": 10
+  },
+  "form/ws/nosave/0": {
+   "answers": {
+    "patch": 40
+   },
+   "bytes_down": 346.5,
+   "bytes_up": 35.0,
+   "cpu_ms": 4.750392949999979,
+   "lag_max_ms": 3.407487000004039,
+   "lag_p95_ms": 0.9083639999971638,
+   "mode": "nosave",
+   "p50_ms": 4.8415759999898,
+   "p95_ms": 6.717680999940967,
+   "rtt_ms": 0.0,
+   "shape": "form",
+   "transport": "ws",
+   "turns": 40
+  },
+  "form/ws/save/0": {
+   "answers": {
+    "patch": 40
+   },
+   "bytes_down": 342.5,
+   "bytes_up": 35.0,
+   "cpu_ms": 7.390796000000024,
+   "lag_max_ms": 3.6726790000329856,
+   "lag_p95_ms": 0.9297090000472963,
+   "mode": "save",
+   "p50_ms": 8.936982000022908,
+   "p95_ms": 11.738324000020839,
+   "rtt_ms": 0.0,
+   "shape": "form",
+   "transport": "ws",
+   "turns": 40
+  },
+  "form/ws/save/100": {
+   "answers": {
+    "patch": 10
+   },
+   "bytes_down": 342.5,
+   "bytes_up": 34.5,
+   "cpu_ms": 12.206852400000301,
+   "lag_max_ms": 3.178158000082476,
+   "lag_p95_ms": 0.44207100006588007,
+   "mode": "save",
+   "p50_ms": 112.63262199997826,
+   "p95_ms": 116.94874099998742,
+   "rtt_ms": 100.0,
+   "shape": "form",
+   "transport": "ws",
+   "turns": 10
+  },
+  "form/ws/save/20": {
+   "answers": {
+    "patch": 10
+   },
+   "bytes_down": 342.5,
+   "bytes_up": 34.5,
+   "cpu_ms": 8.807649200000256,
+   "lag_max_ms": 7.222468000122717,
+   "lag_p95_ms": 1.019064000047365,
+   "mode": "save",
+   "p50_ms": 33.75398400009999,
+   "p95_ms": 40.77118899999732,
+   "rtt_ms": 20.0,
+   "shape": "form",
+   "transport": "ws",
+   "turns": 10
+  },
+  "form/ws/save/250": {
+   "answers": {
+    "patch": 10
+   },
+   "bytes_down": 342.5,
+   "bytes_up": 34.5,
+   "cpu_ms": 15.495334799999227,
+   "lag_max_ms": 2.4079840000013064,
+   "lag_p95_ms": 0.2139260000149079,
+   "mode": "save",
+   "p50_ms": 261.6673539999965,
+   "p95_ms": 263.5411569999633,
+   "rtt_ms": 250.0,
+   "shape": "form",
+   "transport": "ws",
+   "turns": 10
+  },
+  "push/sse/nosave/0": {
+   "answers": {
+    "patch": 40
+   },
+   "bytes_down": 548.0,
+   "bytes_up": 2.0,
+   "cpu_ms": 5.348581625000026,
+   "lag_max_ms": 2.3205630000120436,
+   "lag_p95_ms": 0.9877680000727196,
+   "mode": "nosave",
+   "p50_ms": 5.399267000029795,
+   "p95_ms": 8.157216999961747,
+   "rtt_ms": 0.0,
+   "shape": "push",
+   "transport": "sse",
+   "turns": 40
+  },
+  "push/sse/save/0": {
+   "answers": {
+    "patch": 40
+   },
+   "bytes_down": 542.0,
+   "bytes_up": 2.0,
+   "cpu_ms": 8.87751667499952,
+   "lag_max_ms": 3.144375000033506,
+   "lag_p95_ms": 1.4238339999792515,
+   "mode": "save",
+   "p50_ms": 11.871337000002313,
+   "p95_ms": 19.261931000073673,
+   "rtt_ms": 0.0,
+   "shape": "push",
+   "transport": "sse",
+   "turns": 40
+  },
+  "push/sse/save/100": {
+   "answers": {
+    "patch": 10
+   },
+   "bytes_down": 540.0,
+   "bytes_up": 2.0,
+   "cpu_ms": 15.32846549999931,
+   "lag_max_ms": 2.8991580001047623,
+   "lag_p95_ms": 0.5699040000308742,
+   "mode": "save",
+   "p50_ms": 116.29037800003061,
+   "p95_ms": 120.30345300001954,
+   "rtt_ms": 100.0,
+   "shape": "push",
+   "transport": "sse",
+   "turns": 10
+  },
+  "push/sse/save/20": {
+   "answers": {
+    "patch": 10
+   },
+   "bytes_down": 540.0,
+   "bytes_up": 2.0,
+   "cpu_ms": 11.401696199999733,
+   "lag_max_ms": 46.679328000095666,
+   "lag_p95_ms": 1.3334590000795288,
+   "mode": "save",
+   "p50_ms": 34.706525000046895,
+   "p95_ms": 82.27496300003168,
+   "rtt_ms": 20.0,
+   "shape": "push",
+   "transport": "sse",
+   "turns": 10
+  },
+  "push/sse/save/250": {
+   "answers": {
+    "patch": 10
+   },
+   "bytes_down": 540.0,
+   "bytes_up": 2.0,
+   "cpu_ms": 18.165625200001045,
+   "lag_max_ms": 3.634185000009893,
+   "lag_p95_ms": 0.26972700004535,
+   "mode": "save",
+   "p50_ms": 265.7470709999643,
+   "p95_ms": 269.82305100000303,
+   "rtt_ms": 250.0,
+   "shape": "push",
+   "transport": "sse",
+   "turns": 10
+  },
+  "push/ws/nosave/0": {
+   "answers": {
+    "patch": 40
+   },
+   "bytes_down": 548.0,
+   "bytes_up": 2.0,
+   "cpu_ms": 4.637820649999824,
+   "lag_max_ms": 3.3742860000529618,
+   "lag_p95_ms": 0.79443499998888,
+   "mode": "nosave",
+   "p50_ms": 4.5740170000954095,
+   "p95_ms": 7.669133000035799,
+   "rtt_ms": 0.0,
+   "shape": "push",
+   "transport": "ws",
+   "turns": 40
+  },
+  "push/ws/save/0": {
+   "answers": {
+    "patch": 40
+   },
+   "bytes_down": 542.0,
+   "bytes_up": 2.0,
+   "cpu_ms": 8.344307874999757,
+   "lag_max_ms": 46.54087400001572,
+   "lag_p95_ms": 1.4934500001118067,
+   "mode": "save",
+   "p50_ms": 8.722503999933906,
+   "p95_ms": 15.126480000049014,
+   "rtt_ms": 0.0,
+   "shape": "push",
+   "transport": "ws",
+   "turns": 40
+  },
+  "push/ws/save/100": {
+   "answers": {
+    "patch": 10
+   },
+   "bytes_down": 540.0,
+   "bytes_up": 2.0,
+   "cpu_ms": 13.4134909999986,
+   "lag_max_ms": 3.043408000053205,
+   "lag_p95_ms": 0.4456720000689529,
+   "mode": "save",
+   "p50_ms": 113.78967400003148,
+   "p95_ms": 119.24049399999603,
+   "rtt_ms": 100.0,
+   "shape": "push",
+   "transport": "ws",
+   "turns": 10
+  },
+  "push/ws/save/20": {
+   "answers": {
+    "patch": 10
+   },
+   "bytes_down": 540.0,
+   "bytes_up": 2.0,
+   "cpu_ms": 9.288290199998883,
+   "lag_max_ms": 5.291040999964025,
+   "lag_p95_ms": 1.047871000082523,
+   "mode": "save",
+   "p50_ms": 31.148711000014373,
+   "p95_ms": 36.9176830000697,
+   "rtt_ms": 20.0,
+   "shape": "push",
+   "transport": "ws",
+   "turns": 10
+  },
+  "push/ws/save/250": {
+   "answers": {
+    "patch": 10
+   },
+   "bytes_down": 540.0,
+   "bytes_up": 2.0,
+   "cpu_ms": 16.614820299997746,
+   "lag_max_ms": 5.979789999969398,
+   "lag_p95_ms": 0.23361300009128172,
+   "mode": "save",
+   "p50_ms": 262.7993389999119,
+   "p95_ms": 269.64950299998236,
+   "rtt_ms": 250.0,
+   "shape": "push",
+   "transport": "ws",
+   "turns": 10
+  },
+  "table/http/nosave/0": {
+   "answers": {
+    "html": 40
+   },
+   "bytes_down": 193361.0,
+   "bytes_up": 2.0,
+   "cpu_ms": 65.90613320000006,
+   "lag_max_ms": 40.391031000012845,
+   "lag_p95_ms": 5.340458999967268,
+   "mode": "nosave",
+   "p50_ms": 58.835547999933624,
+   "p95_ms": 108.01330200001757,
+   "rtt_ms": 0.0,
+   "shape": "table",
+   "transport": "http",
+   "turns": 40
+  },
+  "table/http/save/0": {
+   "answers": {
+    "patch": 40
+   },
+   "bytes_down": 869.0,
+   "bytes_up": 2.0,
+   "cpu_ms": 160.98150554999964,
+   "lag_max_ms": 38.88705100007428,
+   "lag_p95_ms": 5.423977000077684,
+   "mode": "save",
+   "p50_ms": 164.56767099998615,
+   "p95_ms": 244.47558800000024,
+   "rtt_ms": 0.0,
+   "shape": "table",
+   "transport": "http",
+   "turns": 40
+  },
+  "table/http/save/100": {
+   "answers": {
+    "patch": 10
+   },
+   "bytes_down": 869.0,
+   "bytes_up": 2.0,
+   "cpu_ms": 160.44301549999923,
+   "lag_max_ms": 10.331457000006594,
+   "lag_p95_ms": 5.354529000101138,
+   "mode": "save",
+   "p50_ms": 260.1716960000431,
+   "p95_ms": 280.74512799992135,
+   "rtt_ms": 100.0,
+   "shape": "table",
+   "transport": "http",
+   "turns": 10
+  },
+  "table/http/save/20": {
+   "answers": {
+    "patch": 10
+   },
+   "bytes_down": 869.0,
+   "bytes_up": 2.0,
+   "cpu_ms": 155.62190749999942,
+   "lag_max_ms": 14.004250999960277,
+   "lag_p95_ms": 5.356524000035279,
+   "mode": "save",
+   "p50_ms": 181.2758279999116,
+   "p95_ms": 203.38894800011076,
+   "rtt_ms": 20.0,
+   "shape": "table",
+   "transport": "http",
+   "turns": 10
+  },
+  "table/http/save/250": {
+   "answers": {
+    "patch": 10
+   },
+   "bytes_down": 869.0,
+   "bytes_up": 2.0,
+   "cpu_ms": 165.5641409999994,
+   "lag_max_ms": 41.22480000012274,
+   "lag_p95_ms": 5.25263100007578,
+   "mode": "save",
+   "p50_ms": 403.7791099999595,
+   "p95_ms": 467.5800520000166,
+   "rtt_ms": 250.0,
+   "shape": "table",
+   "transport": "http",
+   "turns": 10
+  },
+  "table/sse/nosave/0": {
+   "answers": {
+    "patch": 40
+   },
+   "bytes_down": 318.0,
+   "bytes_up": 2.0,
+   "cpu_ms": 32.486314650000025,
+   "lag_max_ms": 39.306071000055454,
+   "lag_p95_ms": 5.490726000061841,
+   "mode": "nosave",
+   "p50_ms": 30.238101999998435,
+   "p95_ms": 59.93432699995083,
+   "rtt_ms": 0.0,
+   "shape": "table",
+   "transport": "sse",
+   "turns": 40
+  },
+  "table/sse/save/0": {
+   "answers": {
+    "patch": 40
+   },
+   "bytes_down": 314.0,
+   "bytes_up": 2.0,
+   "cpu_ms": 47.86846109999996,
+   "lag_max_ms": 50.689097000031325,
+   "lag_p95_ms": 6.485347000079855,
+   "mode": "save",
+   "p50_ms": 50.24601699994946,
+   "p95_ms": 90.59624100007113,
+   "rtt_ms": 0.0,
+   "shape": "table",
+   "transport": "sse",
+   "turns": 40
+  },
+  "table/sse/save/100": {
+   "answers": {
+    "patch": 10
+   },
+   "bytes_down": 312.5,
+   "bytes_up": 2.0,
+   "cpu_ms": 55.659463599998915,
+   "lag_max_ms": 36.52790700004971,
+   "lag_p95_ms": 1.7424670000991682,
+   "mode": "save",
+   "p50_ms": 153.841181999951,
+   "p95_ms": 196.64583099995525,
+   "rtt_ms": 100.0,
+   "shape": "table",
+   "transport": "sse",
+   "turns": 10
+  },
+  "table/sse/save/20": {
+   "answers": {
+    "patch": 10
+   },
+   "bytes_down": 312.5,
+   "bytes_up": 2.0,
+   "cpu_ms": 54.47929069999944,
+   "lag_max_ms": 52.86120600010236,
+   "lag_p95_ms": 5.488118000016584,
+   "mode": "save",
+   "p50_ms": 67.94936000005691,
+   "p95_ms": 142.5048159999278,
+   "rtt_ms": 20.0,
+   "shape": "table",
+   "transport": "sse",
+   "turns": 10
+  },
+  "table/sse/save/250": {
+   "answers": {
+    "patch": 10
+   },
+   "bytes_down": 312.5,
+   "bytes_up": 2.0,
+   "cpu_ms": 58.22548790000042,
+   "lag_max_ms": 37.829524000017045,
+   "lag_p95_ms": 0.5024719999937588,
+   "mode": "save",
+   "p50_ms": 300.01740000000154,
+   "p95_ms": 348.3104379999986,
+   "rtt_ms": 250.0,
+   "shape": "table",
+   "transport": "sse",
+   "turns": 10
+  },
+  "table/ws/nosave/0": {
+   "answers": {
+    "patch": 40
+   },
+   "bytes_down": 318.0,
+   "bytes_up": 2.0,
+   "cpu_ms": 29.273260400000158,
+   "lag_max_ms": 33.09472100011135,
+   "lag_p95_ms": 5.642582000064067,
+   "mode": "nosave",
+   "p50_ms": 27.89567899992562,
+   "p95_ms": 49.862957999948776,
+   "rtt_ms": 0.0,
+   "shape": "table",
+   "transport": "ws",
+   "turns": 40
+  },
+  "table/ws/save/0": {
+   "answers": {
+    "patch": 40
+   },
+   "bytes_down": 314.0,
+   "bytes_up": 2.0,
+   "cpu_ms": 48.55876224999998,
+   "lag_max_ms": 56.68143700006567,
+   "lag_p95_ms": 7.251100000075894,
+   "mode": "save",
+   "p50_ms": 45.71892100000241,
+   "p95_ms": 97.82150499995623,
+   "rtt_ms": 0.0,
+   "shape": "table",
+   "transport": "ws",
+   "turns": 40
+  },
+  "table/ws/save/100": {
+   "answers": {
+    "patch": 10
+   },
+   "bytes_down": 312.5,
+   "bytes_up": 2.0,
+   "cpu_ms": 57.235881699998714,
+   "lag_max_ms": 64.38279300004979,
+   "lag_p95_ms": 1.713482000127442,
+   "mode": "save",
+   "p50_ms": 146.21891800004505,
+   "p95_ms": 210.03995699993538,
+   "rtt_ms": 100.0,
+   "shape": "table",
+   "transport": "ws",
+   "turns": 10
+  },
+  "table/ws/save/20": {
+   "answers": {
+    "patch": 10
+   },
+   "bytes_down": 312.5,
+   "bytes_up": 2.0,
+   "cpu_ms": 50.91071770000042,
+   "lag_max_ms": 41.24871400006214,
+   "lag_p95_ms": 6.4183680000269305,
+   "mode": "save",
+   "p50_ms": 65.6533799999579,
+   "p95_ms": 122.56538400004047,
+   "rtt_ms": 20.0,
+   "shape": "table",
+   "transport": "ws",
+   "turns": 10
+  },
+  "table/ws/save/250": {
+   "answers": {
+    "patch": 10
+   },
+   "bytes_down": 312.5,
+   "bytes_up": 2.0,
+   "cpu_ms": 52.43929519999995,
+   "lag_max_ms": 40.87856900002862,
+   "lag_p95_ms": 0.8460100000320381,
+   "mode": "save",
+   "p50_ms": 292.84664700003304,
+   "p95_ms": 350.2194040000859,
+   "rtt_ms": 250.0,
+   "shape": "table",
+   "transport": "ws",
+   "turns": 10
+  }
+ },
+ "label": "2.0.0rc5+e61ce7677 (#3657 baseline)",
+ "machine": {
+  "cpu": "Intel(R) Xeon(R) Processor @ 2.30GHz",
+  "cpus": 4,
+  "django": "5.2.17",
+  "djust": "2.0.0rc5",
+  "platform": "Linux-6.18.44-fc-v880-x86_64-with-glibc2.39",
+  "python": "3.12.3"
+ },
+ "memory_kb": {
+  "dashboard/http/nosave": 215.9228515625,
+  "dashboard/http/save": 227.7193359375,
+  "dashboard/sse/nosave": 153.16328125,
+  "dashboard/sse/save": 193.5767578125,
+  "dashboard/ws/nosave": 139.7318359375,
+  "dashboard/ws/save": 191.96875,
+  "editor/http/nosave": 46.7974609375,
+  "editor/http/save": 54.440234375,
+  "editor/sse/nosave": 171.0650390625,
+  "editor/sse/save": 187.2412109375,
+  "editor/ws/nosave": 148.53671875,
+  "editor/ws/save": 168.59609375,
+  "form/http/nosave": 30.16953125,
+  "form/http/save": 37.315625,
+  "form/sse/nosave": 109.9482421875,
+  "form/sse/save": 121.2974609375,
+  "form/ws/nosave": 93.8583984375,
+  "form/ws/save": 108.453515625,
+  "push/sse/nosave": 109.3505859375,
+  "push/sse/save": 125.5966796875,
+  "push/ws/nosave": 93.6068359375,
+  "push/ws/save": 105.6375,
+  "table/http/nosave": 284.8568359375,
+  "table/http/save": 773.3646484375,
+  "table/sse/nosave": 1257.59140625,
+  "table/sse/save": 2423.2576171875,
+  "table/ws/nosave": 1419.5611328125,
+  "table/ws/save": 3014.5978515625
+ },
+ "settings": {
+  "rounds": 40,
+  "rows": 1000,
+  "rtt_ms": [
+   0.0,
+   20.0,
+   100.0,
+   250.0
+  ],
+  "rtt_rounds": 10,
+  "warmup": 3
+ }
+}

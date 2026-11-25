@@ -647,6 +647,10 @@ class UploadConfig:
     # independent of ``accept`` — an ``image/*`` slot still rejects SVG
     # unless this is True.
     allow_active_content: bool = False
+    # #4118 — seconds an upload may take from its registration. An upload
+    # still unfinished then is cancelled (its writer aborted, its entry
+    # dropped) and the browser is told. ``None`` (default): no limit.
+    timeout: Optional[float] = None
 
     def __post_init__(self) -> None:
         if self.accept:
@@ -697,6 +701,10 @@ class UploadEntry:
     _complete: bool = field(default=False, repr=False)
     _error: Optional[str] = field(default=None, repr=False)
     _created_at: float = field(default_factory=time.time, repr=False)
+    # #4118 — when the ``timeout=`` clock started (registration or resume), on
+    # the monotonic clock the event loop's timers use, so a wall-clock step
+    # neither fires nor postpones a deadline.
+    _started: float = field(default_factory=time.monotonic, repr=False)
     # Writer path — populated when the upload slot was configured with a
     # writer= kwarg. writer_instance holds the live per-upload writer;
     # writer_result holds the value returned from writer.close() and is
@@ -826,6 +834,35 @@ class UploadEntry:
         self._chunks.clear()
 
 
+#: Longest refusal message sent to the browser (#4118).
+_MAX_REFUSAL_MESSAGE = 200
+
+
+def _upload_refusal_message(exc: BaseException) -> Optional[str]:
+    """The browser-facing message of a writer refusal, or None for a fault.
+
+    Only an :class:`UploadRefused` is a refusal. The other ``UploadError``
+    subclasses are infrastructure faults (credentials, network, quota) whose
+    messages name the vendor, so they stay on the server. The refusal's
+    ``message`` attribute is the text the writer wrote for people; it is
+    trimmed to one line of at most ``_MAX_REFUSAL_MESSAGE`` characters. An
+    empty or non-string message counts as a fault.
+    """
+    from djust.contrib.uploads.errors import UploadRefused as _UploadRefused
+
+    if not isinstance(exc, _UploadRefused):
+        return None
+    message = getattr(exc, "message", None)
+    if not isinstance(message, str):
+        return None
+    message = " ".join(message.split())
+    if not message:
+        return None
+    if len(message) > _MAX_REFUSAL_MESSAGE:
+        message = message[: _MAX_REFUSAL_MESSAGE - 1] + "\u2026"
+    return message
+
+
 # ============================================================================
 # Upload Manager (per-session state)
 # ============================================================================
@@ -836,6 +873,13 @@ class UploadEntry:
 #: view's own code, which no owner check refuses. A client frame passes the
 #: connection's owner (``None`` when the connection has no mount binding), #4175.
 SERVER_CALL: Any = object()
+
+#: The push event that carries an ``upload_progress`` message decided inside a
+#: turn (``UploadMixin.cancel_upload``), delivered at the turn's end (#4118).
+UPLOAD_PROGRESS_PUSH_EVENT = "djust:upload_progress"
+
+#: What the browser is told when the view cancels an upload (#4118).
+SERVER_CANCEL_MESSAGE = "Upload cancelled by the server."
 
 
 class UploadManager:
@@ -855,6 +899,8 @@ class UploadManager:
         self._name_to_refs: Dict[str, List[str]] = {}  # upload_name -> [refs]
         self._temp_dir = temp_dir or tempfile.mkdtemp(prefix="djust_uploads_")
         self._csrf_token: Optional[str] = None
+        # #4118 — the event-loop timers that enforce ``timeout=``, by ref.
+        self._deadline_handles: Dict[str, Any] = {}
 
     def configure(
         self,
@@ -867,9 +913,14 @@ class UploadManager:
         writer: Optional[Type[UploadWriter]] = None,
         resumable: bool = False,
         allow_active_content: bool = False,
+        timeout: Optional[float] = None,
     ) -> UploadConfig:
         """Configure an upload slot."""
         chunk_size = _clamp_chunk_size(name, chunk_size)
+        if timeout is not None and (
+            isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0
+        ):
+            raise ValueError("allow_upload(timeout=) must be a positive number of seconds")
         config = UploadConfig(
             name=name,
             accept=accept,
@@ -880,6 +931,7 @@ class UploadManager:
             writer=writer,
             resumable=resumable,
             allow_active_content=allow_active_content,
+            timeout=timeout,
         )
         self._configs[name] = config
         if name not in self._name_to_refs:
@@ -905,6 +957,33 @@ class UploadManager:
             writer.abort(error)
         except Exception:  # noqa: BLE001 — abort() must never raise
             logger.exception("UploadWriter.abort() raised for upload %s", entry.ref)
+
+    @staticmethod
+    def _writer_failed(entry: UploadEntry, exc: BaseException, stage: str, generic: str) -> None:
+        """Record a writer failure on ``entry`` and log it (#4118).
+
+        An :class:`UploadRefused` is a refusal the writer chose to make (a
+        size or content policy): it is logged at WARNING without a traceback,
+        and its own ``message`` becomes the entry's error, which the browser
+        receives. Its ``sdk_exc`` and ``str()`` are never used. Any other
+        exception, the other ``UploadError`` subclasses included, is a fault:
+        logged with its traceback, and the browser gets only the fixed
+        ``generic`` text.
+        """
+        refusal = _upload_refusal_message(exc)
+        if refusal is not None:
+            entry._error = refusal
+            from .._log_utils import sanitize_for_log
+
+            logger.warning(
+                "UploadWriter %s refused upload %s: %s",
+                stage,
+                entry.ref,
+                sanitize_for_log(refusal),
+            )
+            return
+        entry._error = generic
+        logger.exception("UploadWriter %s raised for upload %s: %s", stage, entry.ref, exc)
 
     def _add_chunk_via_writer(
         self,
@@ -942,28 +1021,18 @@ class UploadManager:
                     **writer_kwargs,
                 )
             except Exception as exc:  # noqa: BLE001
-                # Do NOT surface the raw exception message to the client —
-                # writer implementations may embed IAM ARNs, bucket names,
-                # or endpoint URLs in their exceptions. Log the full trace
-                # server-side for debugging; return a generic message to the
-                # client.
-                entry._error = "Upload writer failed to initialize"
-                logger.exception(
-                    "UploadWriter instantiation failed for upload %s: %s",
-                    entry.ref,
-                    exc,
+                # A raw exception message never reaches the client (writer
+                # implementations may embed IAM ARNs, bucket names or
+                # endpoint URLs); only an UploadError's own message does.
+                self._writer_failed(
+                    entry, exc, "instantiation", "Upload writer failed to initialize"
                 )
                 return False
         if not entry._writer_opened:
             try:
                 entry.writer_instance.open()
             except Exception as exc:  # noqa: BLE001
-                entry._error = "Upload writer failed to initialize"
-                logger.exception(
-                    "UploadWriter.open() raised for upload %s: %s",
-                    entry.ref,
-                    exc,
-                )
+                self._writer_failed(entry, exc, "open()", "Upload writer failed to initialize")
                 self._safe_abort_writer(entry, exc)
                 return False
             entry._writer_opened = True
@@ -980,12 +1049,7 @@ class UploadManager:
             else:
                 writer.write_chunk(data)
         except Exception as exc:  # noqa: BLE001
-            entry._error = "Upload writer rejected chunk"
-            logger.exception(
-                "UploadWriter.write_chunk() raised for upload %s: %s",
-                entry.ref,
-                exc,
-            )
+            self._writer_failed(entry, exc, "write_chunk()", "Upload writer rejected chunk")
             self._safe_abort_writer(entry, exc)
             return False
         entry._total_received += len(data)
@@ -1011,12 +1075,7 @@ class UploadManager:
         try:
             result = writer.close()
         except Exception as exc:  # noqa: BLE001
-            entry._error = "Upload writer failed to finalize"
-            logger.exception(
-                "UploadWriter.close() raised for upload %s: %s",
-                entry.ref,
-                exc,
-            )
+            self._writer_failed(entry, exc, "close()", "Upload writer failed to finalize")
             self._safe_abort_writer(entry, exc)
             return False
 
@@ -1074,12 +1133,17 @@ class UploadManager:
             logger.warning("No upload config for '%s'", upload_name)
             return None
 
-        # Check max entries
-        current_refs = self._name_to_refs.get(upload_name, [])
-        active_refs = [
-            r for r in current_refs if r in self._entries and not self._entries[r].complete
-        ]
-        if len(active_refs) >= config.max_entries:
+        # An upload past its deadline frees its place before the count. Over
+        # the WebSocket the consumer has already expired (and told the browser
+        # about) every overdue upload just before calling this, so nothing is
+        # dropped here unannounced; a direct caller gets the same place-freeing
+        # its timers would have done.
+        self.expire_overdue()
+
+        # Check max entries: every entry the slot holds, finished or not
+        # (#4118), as documented; a finished entry holds its place until it
+        # is consumed or cancelled.
+        if self._held_count(upload_name) >= config.max_entries:
             logger.warning("Max entries (%d) reached for '%s'", config.max_entries, upload_name)
             return None
 
@@ -1151,6 +1215,12 @@ class UploadManager:
             return True
         return False
 
+    def _drop_deadline_if_failed(self, ref: str) -> None:
+        """A failed upload needs no timer any more (#4118)."""
+        entry = self._entries.get(ref)
+        if entry is not None and entry.error is not None:
+            self._drop_deadline(ref)
+
     def add_chunk(
         self, ref: str, chunk_index: int, data: bytes, owner: Any = SERVER_CALL
     ) -> Optional[int]:
@@ -1163,6 +1233,13 @@ class UploadManager:
         When the upload slot is configured with writer=, the chunk is
         piped to the writer and nothing is buffered to RAM or disk.
         """
+        progress = self._add_chunk(ref, chunk_index, data, owner)
+        if progress is None:
+            self._drop_deadline_if_failed(ref)
+        return progress
+
+    def _add_chunk(self, ref: str, chunk_index: int, data: bytes, owner: Any) -> Optional[int]:
+        """:meth:`add_chunk` without the failed upload's timer cleanup."""
         entry = self._entries.get(ref)
         if not entry:
             return None
@@ -1213,6 +1290,13 @@ class UploadManager:
         Returns the entry if successful, None if finalization failed or
         ``owner`` does not own the upload.
         """
+        entry = self._complete_upload(ref, owner)
+        if entry is None:
+            self._drop_deadline_if_failed(ref)
+        return entry
+
+    def _complete_upload(self, ref: str, owner: Any) -> Optional[UploadEntry]:
+        """:meth:`complete_upload` without the failed upload's timer cleanup."""
         entry = self._entries.get(ref)
         if not entry:
             return None
@@ -1245,11 +1329,13 @@ class UploadManager:
 
         if config is not None and config.writer is not None:
             if self._finalize_writer(entry):
+                self._drop_deadline(ref)
                 return entry
             logger.warning("Upload writer finalize failed for %s: %s", ref, entry.error)
             return None
 
         if entry.finalize(self._temp_dir):
+            self._drop_deadline(ref)
             return entry
         else:
             logger.warning("Upload validation failed for %s: %s", ref, entry.error)
@@ -1290,21 +1376,93 @@ class UploadManager:
             and isinstance(entry.writer_instance, ResumableUploadWriter)
             and writer_cls._inner_writer_cls is type(entry.writer_instance)._inner_writer_cls
         )
-        current_refs = self._name_to_refs.get(entry.upload_name, [])
-        active = [r for r in current_refs if r in self._entries and not self._entries[r].complete]
         if (
             config is None
             or not same_writer
-            or len(active) >= config.max_entries
+            or self._held_count(entry.upload_name) >= config.max_entries
             or entry._owner != owner
         ):
             # Another view (or another owner, #4175) may own the slot: leave
             # it parked for that one.
             park_suspended_upload(entry)
             return None
+        # The time limit runs again from the resume.
+        entry._started = time.monotonic()
         self._entries[ref] = entry
         self._name_to_refs.setdefault(entry.upload_name, []).append(ref)
         return entry
+
+    def _held_count(self, upload_name: str) -> int:
+        """Entries the slot holds against ``max_entries`` (#4118).
+
+        In flight and finished entries both count, until consumed or
+        cancelled. An entry that failed (its error set) does not: the user
+        can try again without the view first clearing the failure.
+        """
+        refs = self._name_to_refs.get(upload_name, [])
+        return sum(1 for r in refs if r in self._entries and self._entries[r].error is None)
+
+    def timeout_message(self, ref: str) -> str:
+        """The browser-facing text for an upload stopped by ``timeout=``."""
+        entry = self._entries.get(ref)
+        config = self._configs.get(entry.upload_name) if entry is not None else None
+        if config is not None and config.timeout is not None:
+            return "Upload timed out after %g seconds." % config.timeout
+        return "Upload timed out."
+
+    def remaining(self, ref: str, now: Optional[float] = None) -> Optional[float]:
+        """Seconds left before ``ref`` passes its slot's ``timeout=`` (zero or
+        less when it has), or None for an upload with no deadline: unknown,
+        finished, failed, or on a slot without ``timeout=``.
+
+        ``now`` is on the :func:`time.monotonic` clock.
+        """
+        entry = self._entries.get(ref)
+        if entry is None or entry.complete or entry.error is not None:
+            return None
+        config = self._configs.get(entry.upload_name)
+        if config is None or config.timeout is None:
+            return None
+        now = time.monotonic() if now is None else now
+        return entry._started + config.timeout - now
+
+    def is_overdue(self, ref: str, now: Optional[float] = None) -> bool:
+        """Whether the upload ``ref`` is unfinished past its slot's ``timeout=``.
+
+        ``now`` is on the :func:`time.monotonic` clock.
+        """
+        left = self.remaining(ref, now)
+        return left is not None and left <= 0
+
+    def expire_overdue(self, now: Optional[float] = None) -> List[Tuple[str, str]]:
+        """Cancel every upload past its slot's ``timeout=`` (#4118).
+
+        Each one's writer is aborted and its entry dropped, as by
+        :meth:`cancel_upload`. Returns ``(ref, message)`` for each, so the
+        caller can tell the browser. ``now`` is on the :func:`time.monotonic`
+        clock.
+        """
+        now = time.monotonic() if now is None else now
+        expired = []
+        for ref in [r for r in self._entries if self.is_overdue(r, now)]:
+            message = self.timeout_message(ref)
+            logger.warning("Upload %s cancelled: %s", ref, message)
+            self._cancel(ref, TimeoutError(message))
+            expired.append((ref, message))
+        return expired
+
+    def set_deadline_handle(self, ref: str, handle: Any) -> None:
+        """Keep the event-loop timer enforcing ``ref``'s timeout, so it is
+        cancelled when the upload ends or the session closes."""
+        old = self._deadline_handles.pop(ref, None)
+        if old is not None:
+            old.cancel()
+        self._deadline_handles[ref] = handle
+
+    def _drop_deadline(self, ref: str) -> None:
+        handle = self._deadline_handles.pop(ref, None)
+        if handle is not None:
+            handle.cancel()
 
     def cancel_upload(self, ref: str, owner: Any = SERVER_CALL) -> None:
         """Cancel and clean up an upload.
@@ -1317,14 +1475,21 @@ class UploadManager:
         existing = self._entries.get(ref)
         if existing is not None and self._owner_refuses(existing, ref, owner):
             return
+        self._cancel(ref, ConnectionAbortedError("upload cancelled"))
+
+    def _cancel(self, ref: str, reason: BaseException) -> Optional[UploadEntry]:
+        """Drop ``ref``'s entry, aborting its writer with ``reason`` if the
+        upload is unfinished. Returns the dropped entry, or None."""
+        self._drop_deadline(ref)
         entry = self._entries.pop(ref, None)
         if entry:
             if entry.writer_instance is not None and not entry._complete:
-                self._safe_abort_writer(entry, ConnectionAbortedError("upload cancelled"))
+                self._safe_abort_writer(entry, reason)
             entry.cleanup()
             refs = self._name_to_refs.get(entry.upload_name, [])
             if ref in refs:
                 refs.remove(ref)
+        return entry
 
     def consume_entries(self, upload_name: str) -> Generator[UploadEntry, None, None]:
         """
@@ -1336,7 +1501,9 @@ class UploadManager:
         refs = self._name_to_refs.get(upload_name, [])
         consumed = []
 
-        for ref in refs:
+        # Over a copy: the list can change while a handler holds the
+        # generator (an entry cancelled meanwhile), which must not skip one.
+        for ref in list(refs):
             entry = self._entries.get(ref)
             if entry and entry.complete:
                 yield entry
@@ -1407,6 +1574,9 @@ class UploadManager:
         suspended, keeping its resume state until the TTL so the client can
         resume it after reconnecting (#2972).
         """
+        for handle in self._deadline_handles.values():
+            handle.cancel()
+        self._deadline_handles.clear()
         for entry in self._entries.values():
             if entry.writer_instance is not None and not entry._complete:
                 # Imported here, and only for a live writer: the module is also
@@ -1517,6 +1687,7 @@ class UploadMixin:
         writer: Optional[Type[UploadWriter]] = None,
         resumable: bool = False,
         allow_active_content: bool = False,
+        timeout: Optional[float] = None,
     ) -> UploadConfig:
         """
         Configure a named upload slot.
@@ -1524,7 +1695,9 @@ class UploadMixin:
         Args:
             name: Upload slot name (referenced in templates as dj-upload="name")
             accept: Comma-separated accepted file extensions (e.g., ".jpg,.png")
-            max_entries: Maximum number of files for this slot
+            max_entries: Maximum number of files this slot holds at once:
+                uploads in flight and finished uploads not yet consumed (or
+                cancelled) both count. A failed upload does not.
             max_file_size: Maximum file size in bytes (default 10MB)
             chunk_size: Chunk size for transfer (default 63KB). Clamped so a
                 chunk frame fits the ``max_message_size`` setting.
@@ -1547,6 +1720,12 @@ class UploadMixin:
                 ``UploadWriter`` and ``BufferedUploadWriter`` in
                 ``djust.uploads``. When omitted (default), uploads are
                 buffered to a temp file and validated by magic bytes.
+            timeout: Seconds an upload may take, counted from the browser's
+                registration of the file (from the resume, for a resumed
+                upload). An upload unfinished by then is cancelled: its
+                writer is aborted, its entry dropped, and the browser's
+                ``uploadFile()`` promise rejects with "Upload timed out after
+                N seconds.". ``None`` (default) sets no limit.
 
         Returns:
             UploadConfig object
@@ -1562,6 +1741,7 @@ class UploadMixin:
             writer=writer,
             resumable=resumable,
             allow_active_content=allow_active_content,
+            timeout=timeout,
         )
         return cfg
 
@@ -1581,9 +1761,24 @@ class UploadMixin:
             yield from self._upload_manager.consume_entries(name)
 
     def cancel_upload(self, name: str, ref: str) -> None:
-        """Cancel a specific upload by ref."""
-        if self._upload_manager:
-            self._upload_manager.cancel_upload(ref)
+        """Cancel a specific upload by ref.
+
+        The upload's writer is aborted and its entry dropped. The browser is
+        told at the end of the turn (#4118): its ``uploadFile()`` promise
+        rejects with "Upload cancelled by the server." and stops sending
+        chunks, and ``djust:upload:progress`` fires with status
+        ``cancelled``.
+        """
+        if not self._upload_manager:
+            return
+        entry = self._upload_manager._cancel(ref, ConnectionAbortedError("upload cancelled"))
+        if entry is None:
+            return
+        push = getattr(self, "push_event", None)
+        if callable(push):
+            message = build_progress_message(ref, 0, "cancelled")
+            message["error"] = SERVER_CANCEL_MESSAGE
+            push(UPLOAD_PROGRESS_PUSH_EVENT, message)
 
     def get_uploads(self, name: str) -> List[UploadEntry]:
         """Get all entries (including in-progress) for an upload slot."""
@@ -1637,6 +1832,7 @@ from djust.contrib.uploads.errors import (  # noqa: E402  — re-export
     UploadError,
     UploadNetworkError,
     UploadQuotaError,
+    UploadRefused,
 )
 
 __all__ = [
@@ -1657,6 +1853,7 @@ __all__ = [
     "UploadNetworkError",
     "UploadCredentialError",
     "UploadQuotaError",
+    "UploadRefused",
 ]
 
 # Re-export resumable bits so ``from djust.uploads import

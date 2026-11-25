@@ -483,9 +483,7 @@ code,
   color: hsl(var(--code-foreground));
   padding: 0.125rem 0.375rem;
   border-radius: calc(var(--radius) - 0.125rem);
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Monaco, "Cascadia Mono",
-               "Segoe UI Mono", "Roboto Mono", Menlo, Consolas, "Liberation Mono",
-               monospace;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
   font-size: 0.875em;
 }
 
