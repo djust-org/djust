@@ -87,3 +87,45 @@ describe('an invalid contract scope fails closed (#4205)', () => {
         expect(env.errors()[0].event).toBe('go');
     });
 });
+
+// An unlisted handler declares nothing: the scoped and passive binders send only the
+// element's dj-value-* arguments, never data-*, `_target` or a generated value.
+describe('an unlisted handler sends only dj-value-* from the scoped binders (#4205)', () => {
+    const ONLY = {tag: 't'};
+    const SCOPED = {
+        'dj-poll': [`<div id="t" dj-poll="go" dj-poll-interval="30" ${ATTRS}></div>`, () => {}],
+        'dj-paste': [`<textarea id="t" dj-paste="go" ${ATTRS}></textarea>`, (win, $) => {
+            const e = new win.Event('paste', {bubbles: true, cancelable: true});
+            e.clipboardData = {getData: () => 'pasted', files: [], items: [], types: ['text/plain']};
+            $('#t').dispatchEvent(e);
+        }],
+        'dj-shortcut': [`<div id="t" dj-shortcut="a:go" ${ATTRS}></div>`,
+            (win) => win.document.dispatchEvent(KEY(win, {key: 'a'}))],
+        'dj-click-away': [`<div id="t" dj-click-away="go" ${ATTRS}>in</div><p id="out">out</p>`,
+            (win, $) => $('#out').dispatchEvent(new win.MouseEvent('click', {bubbles: true}))],
+        // Fires for an element that arrives after the initial mount.
+        'dj-mounted': ['<p>host</p>', (win) => {
+            win.document.querySelector('[dj-view]').insertAdjacentHTML('beforeend',
+                `<div id="t" dj-mounted="go" ${ATTRS}>x</div>`);
+            win.djust._mountReady = true;
+            win.djust.reinitAfterDOMUpdate();
+        }],
+        'dj-copy-event': [`<button id="t" dj-copy="text" dj-copy-event="go" ${ATTRS}>c</button>`, (win, $) => {
+            Object.defineProperty(win.navigator, 'clipboard', {value: {writeText: async () => {}}, configurable: true});
+            $('#t').click();
+        }],
+    };
+    for (const [name, [markup, fire]] of Object.entries(SCOPED)) {
+        it(`${name}`, async () => {
+            const env = setup(markup, {});
+            await env.ready;
+            fire(env.win, env.$);
+            await env.settle(450);
+            const sent = env.sent().filter(s => s.event === 'go');
+            expect(sent.length).toBeGreaterThan(0);
+            expect(sent[0].params).toEqual(ONLY);
+            expect(env.raw().join('')).not.toContain('leak');
+            expect(env.raw().join('')).not.toContain('_target');
+        });
+    }
+});

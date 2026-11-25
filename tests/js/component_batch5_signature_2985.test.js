@@ -511,6 +511,7 @@ describe('Save', () => {
         env.click('save');
         expect(env.window.djust._strictBinding).toHaveBeenCalledTimes(1);
         expect(env.sent).toEqual([]);
+        expect(env.status()).toMatch(/could not be sent/); // never "Signature saved" for a frame that did not leave
     });
 
     it('falls back to the hook pushEvent when the client API is absent', async () => {
@@ -562,17 +563,25 @@ describe('Save', () => {
         expect(env.status()).toMatch(/^This signature is too detailed to send \(the limit is 2 KB\)/);
     });
 
-    it('the cap is data-max-bytes, 200 KB by default and at least 1 KB', async () => {
+    it('the cap is data-max-bytes, 60,000 by default and at most, and at least 1 KB (#4205)', async () => {
         const dflt = await boot(PAD({ maxBytes: 'nope' }), { dpr: 1, width: 400 });
         dflt.draw([[10, 10], [50, 50]]);
-        dflt.sizer = () => 204800 - 22;
+        dflt.sizer = () => 60000 - 22;
         dflt.click('save');
-        // The hook accepts it; the client's strict 64 KiB text bound is what stops it on the wire.
+        // Under the strict collector's 65,536-character text bound, so the frame is really sent.
+        expect(dflt.sent).toHaveLength(1);
         expect(dflt.hidden()).not.toBe('');
-        expect(dflt.status()).not.toMatch(/too detailed/);
-        dflt.sizer = () => 204800 + 1000;
+        expect(dflt.status()).toBe('Signature saved');
+        dflt.sizer = () => 60000 + 1000;
         dflt.click('save');
-        expect(dflt.status()).toMatch(/too detailed to send \(the limit is 200 KB\)/);
+        expect(dflt.sent).toHaveLength(1);
+        expect(dflt.status()).toMatch(/too detailed to send \(the limit is 59 KB\)/);
+        const big = await boot(PAD({ maxBytes: 200000 }), { dpr: 1, width: 400 });
+        big.draw([[10, 10], [50, 50]]);
+        big.sizer = () => 100000;
+        big.click('save');
+        expect(big.sent).toEqual([]); // a declared cap above the strict limit is clamped
+        expect(big.status()).toMatch(/too detailed to send/);
         const tiny = await boot(PAD({ maxBytes: 5 }), { dpr: 1, width: 400 });
         tiny.draw([[10, 10], [50, 50]]);
         tiny.sizer = () => 800;
@@ -611,10 +620,9 @@ describe('"Message too large"', () => {
     it('says what is wrong when it cannot be made to fit', async () => {
         const env = await boot(PAD(), { dpr: 1, width: 400 });
         env.draw([[10, 10], [50, 50]]);
-        env.sizer = () => 70000;
+        env.sizer = () => 59000;
         env.click('save');
-        tooLarge(env, 70100);
-        // (the 70 KB first frame itself is over the client's 64 KiB strict text bound and never leaves)
+        tooLarge(env, 59100);
         expect(env.status()).toMatch(/too detailed for the server's message limit/);
     });
 

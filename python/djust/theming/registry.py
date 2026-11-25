@@ -151,7 +151,7 @@ def register_preset(name: str, preset: Any) -> None:
     Call in your AppConfig.ready():
 
         from djust.theming.registry import register_preset
-        from djust.theming.presets import ThemePreset, ThemeTokens
+        from djust.theming import ThemePreset, ThemeTokens
 
         register_preset("my_brand", ThemePreset(
             name="my_brand",

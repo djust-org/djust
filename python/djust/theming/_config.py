@@ -7,8 +7,8 @@ extracted from ``manager.py``. This module imports ONLY Django + stdlib — neve
 importing ``manager`` (the edge that closed the ``presets ↔ registry ↔ manager``
 and ``manager ↔ theme_css_generator ↔ css_generator`` import cycles).
 
-``manager`` re-exports ``get_theme_config`` / ``DEFAULT_CONFIG`` for back-compat,
-so ``from djust.theming.manager import get_theme_config`` keeps working.
+``manager`` imports ``get_theme_config`` for its own use and no longer
+re-exports ``DEFAULT_CONFIG`` (#4207): import it from here.
 """
 
 from __future__ import annotations

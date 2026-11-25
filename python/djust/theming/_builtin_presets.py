@@ -171,9 +171,8 @@ THEME_PRESETS: dict[str, ThemePreset] = {
 }
 
 
-# ``__all__`` lists every name `presets.py` re-exports via `from
-# ._builtin_presets import *`, preserving back-compat for any external
-# user code that does `from djust.theming.presets import BLUE_THEME` etc.
+# ``__all__`` lists the built-in presets this module defines. `presets.py` no
+# longer re-exports them (#4207): import `BLUE_THEME` etc. from here.
 __all__ = [
     "THEME_PRESETS",
     "DEFAULT_THEME",

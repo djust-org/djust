@@ -10,8 +10,8 @@
  *    client applies it to the root, on the WebSocket and the SSE path.
  * 3. A poll inside a `{% live_render %}` child was sent without the child's
  *    view_id (the legacy binding attached no owner context), so it reached
- *    the parent view. A component's poll carries its component_id (#4205:
- *    the strict binding is the only one, and it attaches the owner).
+ *    the parent view. A component's poll belongs to the component only when its
+ *    contract lists the handler; otherwise it reaches the host view.
  */
 
 import { afterEach, describe, expect, it } from 'vitest';
@@ -28,8 +28,8 @@ afterEach(() => {
     dom = null;
 });
 
-function setup(bodyHtml) {
-    dom = new JSDOM(`<!DOCTYPE html><html><head></head><body>${withContracts(bodyHtml)}</body></html>`, {
+function setup(bodyHtml, ownContracts = false) {
+    dom = new JSDOM(`<!DOCTYPE html><html><head></head><body>${ownContracts ? bodyHtml : withContracts(bodyHtml)}</body></html>`, {
         url: 'http://localhost/',
         runScripts: 'dangerously',
     });
@@ -191,17 +191,36 @@ describe('dj-poll inside an embedded child view', () => {
         expect(calls[0].body.view_id).toBeUndefined();
     });
 
-    it('a component\'s poll carries its component_id (the owner that resolved the contract)', async () => {
-        const win = setup(`
+    // A realistic manifest: the host lists `host_tick`, the component lists `comp_tick`.
+    const contracts = () => {
+        const h = (name) => ({[name]: {policy: 'strict', coerce_types: true, parameters: [
+            {name: 'room', type: 'str', kind: 'positional_or_keyword', required: false, reduced_checking: false}]}});
+        const owners = [{view_id: null, component_id: null, handlers: h('host_tick')},
+            {view_id: null, component_id: 'cmp-1', handlers: h('comp_tick')}];
+        return `<script type="application/json" data-djust-parameter-contracts>${JSON.stringify({view: 'app.ParentView', contracts: {version: 1, owners}})}</script>`;
+    };
+    const page = (handler) => `
 <div dj-view="app.ParentView" dj-root>
   <div data-component-id="cmp-1">
-    <div dj-poll="host_tick" dj-poll-interval="30"></div>
+    <div dj-poll="${handler}" dj-poll-interval="30" dj-value-room="7"></div>
   </div>
-</div>`);
+</div>${contracts()}`;
+
+    it('a host-view handler polled from inside a component reaches the host (no component_id)', async () => {
+        const win = setup(page('host_tick'), true);
         await nativeSleep(150);
         const calls = sends(win, 'host_tick');
         expect(calls.length).toBeGreaterThan(0);
-        expect(calls[0].body.component_id).toBe('cmp-1');
+        expect(calls[0].body.component_id).toBeUndefined();
         expect(calls[0].body.view_id).toBeUndefined();
+        expect(calls[0].body.room).toBe('7');
+    });
+
+    it('a handler the component lists reaches the component', async () => {
+        const win = setup(page('comp_tick'), true);
+        await nativeSleep(150);
+        const calls = sends(win, 'comp_tick');
+        expect(calls.length).toBeGreaterThan(0);
+        expect(calls[0].body.component_id).toBe('cmp-1');
     });
 });

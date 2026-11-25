@@ -80,3 +80,11 @@ def test_dict_items_warn_and_objects_do_not():
     _alias_deprecation._WARNED.clear()
     _, msgs = _deprecations(objects)
     assert msgs == []
+
+
+@pytest.mark.parametrize("preset", ["danger-confirm", "danger-sm"])
+def test_built_in_presets_do_not_trigger_the_alias_warning(preset):
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        out = tags.dj_button(label="x", preset=preset, event="go")
+    assert "btn-destructive" in str(out)

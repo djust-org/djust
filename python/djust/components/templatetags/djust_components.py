@@ -10415,10 +10415,10 @@ class SignaturePadNode(template.Node):
 
         disabled_attr = " disabled" if disabled else ""
 
-        from djust.components.components.signature_pad import DEFAULT_MAX_BYTES, pad_extras
+        from djust.components.components.signature_pad import MAX_SEND_BYTES, pad_extras
 
         extras = pad_extras(
-            kw.get("max_bytes", DEFAULT_MAX_BYTES), kw.get("label"), kw.get("typed", True)
+            kw.get("max_bytes", MAX_SEND_BYTES), kw.get("label"), kw.get("typed", True)
         )
 
         return mark_safe(
