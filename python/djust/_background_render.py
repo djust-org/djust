@@ -45,8 +45,8 @@ async def render_background(view: Any, runtime: Any) -> BackgroundRender | None:
 def render_contract_fields(view: Any, runtime: Any) -> dict[str, Any] | None:
     """``_send_update`` fields carrying the just-rendered tree's public contracts.
 
-    Call in the same synchronous operation as the render. ``{}`` for an
-    all-legacy session; None when discovery fails, since invalid metadata must
+    Call in the same synchronous operation as the render. ``{}`` for a
+    tree with no handlers; None when discovery fails, since invalid metadata must
     never accompany a DOM frame (the caller withholds or replaces the frame).
     """
     try:

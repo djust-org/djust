@@ -44,7 +44,6 @@ from ..utils import is_model_list
 from ..validation import (
     validate_handler_params,
     validated_call_arguments,
-    get_handler_parameter_policy,
 )
 from ..security import safe_setattr, sanitize_for_log
 from ..security.event_guard import is_safe_event_name
@@ -581,23 +580,18 @@ def _compress_fallback_answer(request: Any, response: Any) -> Any:
 
 
 def _initial_parameter_contracts(view: Any, view_path: str) -> Optional[str]:
-    """Escaped JSON for the initial page's contract element, or None if legacy.
+    """Escaped JSON for the initial page's contract element, or None if the tree declares no handlers.
 
-    ``false`` marks discovery failure where strict contracts can exist: the
-    client installs an invalid scope and strict lookups fail closed instead of
-    guessing a legacy contract. A view that can only be legacy keeps its legacy
-    page, as the socket path keeps a legacy session's frame shape.
+    ``false`` marks discovery failure: the client installs an invalid scope and
+    lookups fail closed instead of guessing a contract.
     """
     from .._parameter_metadata import parameter_contract_manifest
     from ..security.json_script import escape_json_for_script  # the defining module (#3820)
-    from ..validation import _strict_possible
 
     try:
         manifest = parameter_contract_manifest(view)
     except Exception:  # noqa: BLE001 — declaration errors must not break the page
         logger.warning("Initial parameter contracts unavailable")
-        if not _strict_possible(view):
-            return None
         return escape_json_for_script(json.dumps({"view": view_path, "contracts": False}))
     if manifest is None:
         return None
@@ -605,21 +599,16 @@ def _initial_parameter_contracts(view: Any, view_path: str) -> Optional[str]:
 
 
 def _http_parameter_contract_fields(view: Any, request: Any) -> Optional[Dict[str, Any]]:
-    """Contract fields for an HTTP render response (``{}`` for a legacy tree).
+    """Contract fields for an HTTP render response (``{}`` for a tree with no handlers).
 
-    None means discovery failed where strict contracts can exist: the caller
-    withholds the DOM update. A legacy-only view whose client never advertised
-    contracts keeps its legacy response shape instead.
+    None means discovery failed: the caller withholds the DOM update.
     """
     from .._parameter_metadata import parameter_contract_manifest
-    from ..validation import _strict_possible
 
     try:
         manifest = parameter_contract_manifest(view)
     except Exception:  # noqa: BLE001 — never send a DOM update with invalid contracts
         logger.warning("Render parameter contracts unavailable")
-        if request.headers.get(PARAMETER_CONTRACTS_HEADER) != "1" and not _strict_possible(view):
-            return {}
         return None
     if manifest is None and request.headers.get(PARAMETER_CONTRACTS_HEADER) != "1":
         return {}
@@ -2138,11 +2127,11 @@ class RequestMixin:
                     event_meta = handler._djust_decorators.get("event_handler", {})
                     coerce = event_meta.get("coerce_types", True)
 
-                if get_handler_parameter_policy(handler) == "strict" and "event" not in data:
-                    # The flat body drops "_" keys for legacy handlers. Strict
-                    # validation owns that namespace on every transport: it
-                    # drops transport metadata, consumes _args and rejects the
-                    # rest, so an unknown key is not silently discarded here.
+                if "event" not in data:
+                    # Strict validation owns the "_" namespace on every
+                    # transport: it drops transport metadata, consumes _args
+                    # and rejects the rest, so an unknown key is not silently
+                    # discarded here.
                     params.update({k: v for k, v in data.items() if k.startswith("_")})
                 validation = validate_handler_params(handler, params, event_name, coerce=coerce)
                 if not validation["valid"]:

@@ -1,9 +1,7 @@
 """djust 2.0 upgrade checks (#4190): V034, V035 and T029.
 
 What a 1.3 project must change before 2.0.0 removes the legacy behaviour. V033
-(strict readiness of a legacy handler) lives with the other parameter checks in
-``parameters.py`` and T028 (a binding a legacy handler accepts that strict
-would refuse) in ``bindings.py``.
+and T028 were retired with the legacy parameter policy (#4205).
 
 - ``V034``: a handler declares or reads ``_target``, which a strict client never sends.
 - ``V035``: an explicit-exposure view overrides ``_on_sticky_update``, which djust never calls on it.
@@ -129,22 +127,13 @@ def check_target_parameter(app_configs: Any, **kwargs: Any) -> list[CheckMessage
     """V034 (Warning): a handler declares or reads ``_target`` (#4190)."""
     if _is_check_suppressed("djust.V034"):
         return []
-    try:
-        from djust._parameter_contract import ContractError
-        from djust.validation import get_handler_parameter_policy
-    except Exception:  # noqa: BLE001 — djust not importable/configured: nothing to check
-        return []
     messages: list[CheckMessage] = []
     for cls, name, _member, function in _user_handlers():
         use = _target_use(function)
         if use is None:
             continue
         if use == "declares":
-            try:
-                if get_handler_parameter_policy(function) == "strict":
-                    continue  # V016 already reports the reserved name
-            except ContractError:
-                pass  # djust.C022 reports the invalid project policy
+            continue  # V016 already reports the reserved name
         messages.append(_v034(_label(cls, name), use, function))
     return messages
 

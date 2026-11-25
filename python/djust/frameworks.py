@@ -93,7 +93,7 @@ class BaseAdapter(FrameworkAdapter):
     **How the field name reaches the handler — do not add a ``data-*``
     attribute for it (#2145).** These renderers bind ``dj-change`` (or the
     caller's ``dom_event``) and set ``name="<field_name>"``. The client's
-    ``buildFormEventParams`` (``09-event-binding.js:525``) hardcodes the key
+    the client's form-event binder (``09-event-binding.js``) hardcodes the key
     ``field`` and sources it from ``getFieldName`` (``:504``) — ``data-field``,
     then the element's ``name``, then its ``id``. It merges only
     ``dj-value-*``; it does **not** collect ``data-*``. The ``name`` these
@@ -103,10 +103,8 @@ class BaseAdapter(FrameworkAdapter):
 
     Until #2145 this code also emitted ``data-field_name="<field_name>"``,
     commented *"so event handler knows which field changed"*. Nothing read
-    it: ``data-*`` is collected only by ``extractTypedParams``
-    (``08-event-parsing.js:248``) and by ``_processAutoRecover``
-    (``09-event-binding.js:1684``), and neither runs on an element whose only
-    djust directive is ``dj-change``/``dj-input``. The attribute was inert —
+    it: ``data-*`` is never sent to a handler (the client collects
+    ``dj-value-*`` only). The attribute was inert —
     but it made the false mechanism *"djust maps ``data-*`` to handler
     parameters"* look true, which is the belief that produced #2137 (the
     ``validate_field`` signature taking ``field_name`` while the client sends

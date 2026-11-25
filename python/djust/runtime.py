@@ -3488,8 +3488,8 @@ class ViewRuntime(RuntimeTurnPort):
         # connection created, so repeated mounts reuse one replacement.
         self._replacement_sessions: Dict[str, str] = {}
         # ADR-036: only transport-local advertisement state, never application
-        # state or a cached owner/contract. A later render that advertises no
-        # contract must clear a previously advertised strict manifest.
+        # state or a cached owner/contract. A later render of a tree with no
+        # handlers must clear a previously advertised manifest.
         self._parameter_contracts_active = False
         self._parameter_contract_view: Optional[str] = None
         # #3036: the destination page's <title>, recorded after the mount

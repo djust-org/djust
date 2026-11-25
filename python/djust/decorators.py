@@ -344,11 +344,7 @@ def event_handler(
             )
 
         # Extract comprehensive signature information
-        sig_info = get_handler_signature_info(
-            func,
-            parameter_policy=None if parameter_policy == "legacy" else parameter_policy,
-            for_declaration=True,
-        )
+        sig_info = get_handler_signature_info(func, for_declaration=True)
 
         # Use explicit params if provided, otherwise use extracted
         if params is not None:
@@ -715,11 +711,7 @@ def server_function(
                 f"never callable from a browser. Pick one."
             )
 
-        sig_info = get_handler_signature_info(
-            func,
-            parameter_policy=None if parameter_policy == "legacy" else parameter_policy,
-            for_declaration=True,
-        )
+        sig_info = get_handler_signature_info(func, for_declaration=True)
         _desc = description if isinstance(description, str) else ""
         _add_decorator_metadata(
             func,

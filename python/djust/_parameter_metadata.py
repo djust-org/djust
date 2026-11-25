@@ -21,7 +21,6 @@ from ._parameter_contract import ContractError
 from .decorators import is_event_handler, is_push_only, is_server_function
 from .validation import (
     get_handler_coercion,
-    get_handler_parameter_policy,
     get_strict_handler_contract,
 )
 
@@ -340,20 +339,17 @@ def _event_methods(owner: Any) -> dict[str, Any]:
 def handler_metadata(method: Any) -> dict[str, Any]:
     """The decorator metadata a bound handler publishes to the client.
 
-    A strict handler's parameters come from its compiled contract (no server
-    default values, and a copy, never the shared decorator dictionaries); a
-    legacy handler's are the decorator's own.
+    The parameters come from the handler's compiled contract (no server
+    default values, and a copy, never the shared decorator dictionaries).
     """
     decorators = method._djust_decorators
-    if get_handler_parameter_policy(method) != "strict":
-        return decorators
     metadata = dict(decorators)
     key = "event_handler" if "event_handler" in metadata else "server_function"
     if key in metadata:
         parameters = list(get_strict_handler_contract(method).metadata())
         item = dict(metadata[key])
+        item.pop("parameter_policy", None)
         item.update(
-            parameter_policy="strict",
             params=parameters,
             param_names=[p["name"] for p in parameters],
             required=[p["name"] for p in parameters if p["required"]],
@@ -381,15 +377,11 @@ def published_handlers(view: Any) -> dict[str, Any]:
 def _handlers(owner: Any) -> dict[str, Any]:
     result = {}
     for name, method in _event_methods(owner).items():
-        policy = get_handler_parameter_policy(method)
-        if policy == "legacy":
-            result[name] = {"policy": "legacy"}
-        else:
-            result[name] = {
-                "policy": "strict",
-                "coerce_types": get_handler_coercion(method),
-                "parameters": list(get_strict_handler_contract(method).metadata()),
-            }
+        result[name] = {
+            "policy": "strict",
+            "coerce_types": get_handler_coercion(method),
+            "parameters": list(get_strict_handler_contract(method).metadata()),
+        }
     return result
 
 
@@ -400,6 +392,7 @@ def parameter_contract_manifest(root: Any) -> dict[str, Any] | None:
     registered embedded children use (view_id, None). Nested component routing
     is not implied: the current child dispatcher resolves handlers on the child.
     Rebuild on each call; no owner or mutable manifest is globally retained.
+    Returns ``None`` when the tree declares no handlers at all.
     """
     owners = []
     total_handlers = 0
@@ -425,7 +418,7 @@ def parameter_contract_manifest(root: Any) -> dict[str, Any] | None:
         if _instance_dict(child).get("_djust_child_disposed", False):
             continue
         add(child, key, None)
-    if not any(h["policy"] == "strict" for o in owners for h in o["handlers"].values()):
+    if total_handlers == 0:
         return None
     if len(owners) > 1024 or total_handlers > 10000:
         raise ContractError("Public parameter contract manifest exceeds the declaration limit.")

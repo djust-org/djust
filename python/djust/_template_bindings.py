@@ -47,7 +47,7 @@ _UNSAFE_KEYS = frozenset({"__proto__", "constructor", "prototype"})
 # Routing context: the server routes on these, they are never arguments.
 ROUTING_KEYS = frozenset({"view_id", "component_id"})
 
-# Wire hints (08-event-parsing.js ``extractTypedParams`` / strict collector).
+# Wire hints (08-event-parsing.js strict collector).
 LEGACY_HINTS = frozenset(
     {"int", "integer", "float", "number", "bool", "boolean", "json", "object", "array", "list"}
 )
@@ -74,16 +74,13 @@ class Directive:
     #: ``call``: ``name`` or ``name(args)``; ``raw``: the whole value is the
     #: event name; ``shortcut``: ``[mod+]key:name[:prevent]`` entries.
     grammar: str
-    #: ``element``: data-* and dj-value-* of the element (legacy);
+    #: ``element``: dj-value-* of the element (and data-* keys, recorded only
+    #: for migration hints);
     #: ``field``: the triggering form field; ``form``: the form's fields;
     #: ``fixed``: only ``generated``.
     payload: str
     #: Generated names the client adds.
     generated: tuple[str, ...] = ()
-    #: Generated only under the legacy policy (the strict binder never sends it).
-    legacy_only: tuple[str, ...] = ()
-    #: Generated only under the strict policy (the legacy binder never sends it).
-    strict_only: tuple[str, ...] = ()
     #: Whether the client attaches owner context (component or embedded view).
     #: Without it the event reaches the page's root view; ``dj-poll`` is the
     #: one exception: a poll inside an embedded child view (``{% live_render %}``)
@@ -99,8 +96,8 @@ DIRECTIVES: dict[str, Directive] = {
     "dj-mouseenter": Directive("call", "element"),
     "dj-mouseleave": Directive("call", "element"),
     "dj-poll": Directive("call", "element", owner_context=False),
-    "dj-change": Directive("call", "field", _FIELD, ("_target",)),
-    "dj-input": Directive("call", "field", _FIELD, ("_target",)),
+    "dj-change": Directive("call", "field", _FIELD),
+    "dj-input": Directive("call", "field", _FIELD),
     "dj-blur": Directive("call", "field", _FIELD),
     "dj-focus": Directive("call", "field", _FIELD),
     "dj-paste": Directive("call", "fixed", ("text", "html", "has_files", "files")),
@@ -113,20 +110,15 @@ DIRECTIVES: dict[str, Directive] = {
     "dj-document-keyup": Directive("call", "element", ("key", "code")),
     "dj-document-click": Directive("call", "element", ("clientX", "clientY")),
     # Raw grammar: the whole value is the event name.
-    "dj-submit": Directive("raw", "form", (), ("_target",)),
+    "dj-submit": Directive("raw", "form"),
     "dj-keydown": Directive("raw", "field", ("key", "code", "value", "field")),
     "dj-keyup": Directive("raw", "field", ("key", "code", "value", "field")),
     "dj-click-away": Directive("raw", "element"),
     "dj-mounted": Directive("raw", "element"),
     "dj-shortcut": Directive("shortcut", "element", ("key", "code", "shortcut")),
-    # #4178: a strict handler declares form_values / data_attrs; the legacy
-    # binder sends the 1.x envelope under "_" names.
+    # #4178: a handler declares form_values / data_attrs to receive them.
     "dj-auto-recover": Directive(
-        "raw",
-        "fixed",
-        legacy_only=("_form_values", "_data_attrs"),
-        strict_only=("form_values", "data_attrs"),
-        owner_context=False,
+        "raw", "fixed", ("form_values", "data_attrs"), owner_context=False
     ),
     "dj-dialog-close-event": Directive("raw", "fixed", owner_context=False),
     "dj-viewport-top": Directive("raw", "fixed", ("edge",), owner_context=False),
@@ -734,26 +726,18 @@ class _Markup(HTMLParser):
 class Payload:
     """What one binding sends, as far as the markup says."""
 
-    #: Legacy keys: name -> (attribute, literal value or None when dynamic, hint)
-    legacy: dict[str, tuple[str, Optional[str], Optional[str]]] = field(default_factory=dict)
-    legacy_complete: bool = True
-    #: dj-value-* keys (the only markup the strict binder reads).
+    #: dj-value-* keys: name -> (attribute, literal value or None when dynamic, hint).
+    #: The only markup the binder reads.
     values: dict[str, tuple[str, Optional[str], Optional[str]]] = field(default_factory=dict)
     values_complete: bool = True
     #: Names the client generates (value, field, form fields, ...).
     generated: tuple[str, ...] = ()
     generated_complete: bool = True
-    #: Generated names only the legacy binder sends (``_target``).
-    legacy_generated: tuple[str, ...] = ()
-    #: Generated names only the strict binder sends (``dj-auto-recover``).
-    strict_generated: tuple[str, ...] = ()
     #: Positional ``name(args)`` literals, None when not statically known.
     positional: Optional[list[Any]] = field(default_factory=list)
-    #: (attribute, normalized name) pairs that collide in the client's merge.
-    legacy_duplicates: list[tuple[str, str, str]] = field(default_factory=list)
     #: dj-value-* attributes the strict collector rejects outright.
     strict_invalid: list[tuple[str, str]] = field(default_factory=list)
-    #: data-* attributes that name keys (legacy only), for migration hints.
+    #: data-* attributes that name keys (never sent), for migration hints.
     data_keys: dict[str, str] = field(default_factory=dict)
     #: The field name a form event reports as ``field``, when static.
     field_name: Optional[str] = None
@@ -836,21 +820,16 @@ def _literal(value: str) -> Optional[str]:
 
 
 def _element_payload(element: Element, payload: Payload) -> None:
-    """data-* and dj-value-* of one element (extractTypedParams)."""
-    legacy = payload.legacy
-    for attribute, value in element.attrs:
+    """dj-value-* of one element; data-* keys are only recorded for hints."""
+    for attribute, _value in element.attrs:
         parsed = _data_key(attribute)
         if parsed is None or parsed[0] is None:
             continue
-        key, hint = parsed
-        payload.data_keys.setdefault(key, attribute)
-        if key in legacy:
-            payload.legacy_duplicates.append((legacy[key][0], attribute, key))
-        legacy[key] = (attribute, _literal(value), hint)
-    _value_payload(element, payload, into_legacy=True)
+        payload.data_keys.setdefault(parsed[0], attribute)
+    _value_payload(element, payload)
 
 
-def _value_payload(element: Element, payload: Payload, into_legacy: bool) -> None:
+def _value_payload(element: Element, payload: Payload) -> None:
     for attribute, value in element.attrs:
         parsed = _value_key(attribute)
         if parsed is None or parsed[0] is None:
@@ -867,14 +846,8 @@ def _value_payload(element: Element, payload: Payload, into_legacy: bool) -> Non
         if key in payload.values:
             payload.strict_invalid.append((attribute, key))
         payload.values[key] = (attribute, _literal(value), hint)
-        if into_legacy:
-            if key in payload.legacy and payload.legacy[key][0] != attribute:
-                payload.legacy_duplicates.append((payload.legacy[key][0], attribute, key))
-            payload.legacy[key] = (attribute, _literal(value), hint)
     if element.dynamic_attrs:
         payload.values_complete = False
-        if into_legacy:
-            payload.legacy_complete = False
 
 
 def _field_name(element: Element) -> Optional[str]:
@@ -916,8 +889,6 @@ def _payload(
 ) -> Payload:
     payload = Payload(
         generated=spec.generated,
-        legacy_generated=spec.legacy_only,
-        strict_generated=spec.strict_only,
         positional=positional,
     )
     if spec.payload == "element":
@@ -926,12 +897,12 @@ def _payload(
         # dj-value-* come from the field that triggers the event. On a field
         # itself that is this element; on a container it is any descendant.
         if element.tag in _FORM_FIELD_TAGS:
-            _value_payload(element, payload, into_legacy=True)
+            _value_payload(element, payload)
             payload.field_name = _field_name(element)
         else:
-            payload.values_complete = payload.legacy_complete = False
+            payload.values_complete = False
     elif spec.payload == "form":
-        _value_payload(element, payload, into_legacy=True)
+        _value_payload(element, payload)
         if element.tag == "form":
             names, complete = _form_fields(element, opaque)
             payload.generated = tuple(names)
@@ -941,7 +912,7 @@ def _payload(
     if spec.payload == "fixed":
         # The client's strict path adds the element's dj-value-* to these
         # payloads too (#4240), and rejects a key the directive generates.
-        _value_payload(element, payload, into_legacy=False)
+        _value_payload(element, payload)
     if base == "dj-mutation":
         attr_list = element.attr("dj-mutation-attr")
         if element.dynamic_attrs or (attr_list is not None and is_dynamic(attr_list)):

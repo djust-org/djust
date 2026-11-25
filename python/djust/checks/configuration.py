@@ -610,37 +610,6 @@ def _check_worker_threads(errors: list[CheckMessage]) -> None:
         )
 
 
-def _check_event_parameter_policy(errors: list[CheckMessage]) -> None:
-    """C022 — the ADR-036 project parameter policy must be "legacy" or "strict".
-
-    Dispatch resolves every handler without its own ``parameter_policy`` through
-    the same resolver this check calls, and rejects the event when the value is
-    invalid. Strict is the default, so an absent key never reports anything.
-    """
-    from djust._parameter_contract import ContractError
-    from djust.config import config
-    from djust.validation import get_project_parameter_policy
-
-    if _is_check_suppressed("djust.C022"):
-        return
-    try:
-        get_project_parameter_policy()
-    except ContractError:
-        errors.append(
-            DjustError(
-                "LIVEVIEW_CONFIG['event_parameter_policy'] is %s; it must be 'legacy' or 'strict'."
-                % repr(config.get("event_parameter_policy"))[:80],
-                hint=(
-                    "Every event handler that does not declare its own parameter_policy "
-                    "inherits this value, so each of their events is rejected until it "
-                    "is fixed. Remove the key to use the 'strict' default."
-                ),
-                id="djust.C022",
-                fix_hint="Set `LIVEVIEW_CONFIG['event_parameter_policy']` to `'legacy'` or `'strict'`.",
-            )
-        )
-
-
 def _check_unsupplied_names_mode(errors: list[CheckMessage]) -> None:
     """C043 -- ``DJUST_UNSUPPLIED_NAMES`` must be "debug", "warn" or "error" (#4279).
 
@@ -2100,7 +2069,6 @@ def check_configuration(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     _check_explicit_state_save_timeout(errors)
 
     # C022 -- ADR-036 project event parameter policy
-    _check_event_parameter_policy(errors)
 
     # C043 -- DJUST_UNSUPPLIED_NAMES is not "debug" / "warn" / "error" (#4279)
     _check_unsupplied_names_mode(errors)

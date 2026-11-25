@@ -734,11 +734,10 @@ class FormMixin:
         This is called when a field changes (dj-change / dj-input event).
 
         The client sends the field name under the key ``field``, because
-        ``buildFormEventParams`` (``09-event-binding.js:525``) HARDCODES that
+        the client's form-event binder (``09-event-binding.js``) HARDCODES that
         key, sourcing the value from ``getFieldName`` — ``data-field``, then
         the element's ``name``, then its ``id``. It merges only ``dj-value-*``;
-        it does NOT collect ``data-*``, which is what ``extractTypedParams``
-        does on the click/poll/mount paths. (An earlier version of this
+        it does NOT collect ``data-*``, which no client path sends. (An earlier version of this
         docstring said "djust maps ``data-*`` attributes to handler
         parameters" — true for those other paths, false for this one, and a
         maintainer acting on it would expect ``data-foo`` on an input to reach
