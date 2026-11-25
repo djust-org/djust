@@ -73,6 +73,41 @@ def _item_href(item: Dict[str, Any]) -> str:
     return data_url_attr(url) if url else "#"
 
 
+#: Words that make a ``data`` key a URL (``dj-value-link``, ``dj-value-image-url`` ...): its value
+#: is checked like any URL, so a script scheme becomes ``#`` (#3898). The marked-safe sweep
+#: reads such an attribute as one a script may follow.
+_URL_KEY_WORDS = frozenset(
+    {
+        "url", "href", "src", "link", "uri", "redirect", "endpoint", "image", "img", "avatar",
+        "poster", "background", "thumbnail", "thumb", "logo", "asset", "download",
+        "navigate", "location", "action",
+    }
+)  # fmt: skip
+
+
+def _data_attrs(data: Optional[Dict[str, Any]]) -> str:
+    """An item's ``data`` as ``dj-value-*`` attributes, every value escaped (#4186).
+
+    A dict or list value is written as JSON. A key named like a URL has its value checked
+    through ``data_url_attr`` (#4002: the class reads URLs, so the sweep holds it to that).
+    """
+    if not data:
+        return ""
+    import json
+
+    out = ""
+    for key, value in data.items():
+        if not _DATA_KEY_RE.match(str(key)):
+            continue
+        text = json.dumps(value) if isinstance(value, (dict, list)) else value
+        if set(re.split(r"[-_.]", str(key).lower())) & _URL_KEY_WORDS:
+            value_str = data_url_attr(text)
+        else:
+            value_str = attr_text(text)  # a plain str for JSON: always escaped
+        out += f' dj-value-{key}="{value_str}"'
+    return out
+
+
 class DropdownComponent(LiveComponent):
     """
     Dropdown menu component.
@@ -187,20 +222,8 @@ class DropdownComponent(LiveComponent):
                 if disabled:
                     variant_class += " disabled"
 
-                # Add dj-value-* attributes for event parameters (#4186)
-                data_attrs = ""
-                if data:
-                    import json
-
-                    for key, value in data.items():
-                        if not _DATA_KEY_RE.match(str(key)):
-                            continue
-                        # Convert value to JSON string for complex types
-                        if isinstance(value, (dict, list)):
-                            value_str = attr_text(json.dumps(value))  # a plain str: always escaped
-                        else:
-                            value_str = attr_text(value)
-                        data_attrs += f' dj-value-{key}="{value_str}"'
+                # dj-value-* attributes for event parameters (#4186)
+                data_attrs = _data_attrs(data)
 
                 content = f"{icon} {text}" if icon else text
                 disabled_attr = ' aria-disabled="true"' if disabled else ""
@@ -260,19 +283,8 @@ class DropdownComponent(LiveComponent):
                 state_class = " opacity-50 cursor-not-allowed" if disabled else " hover:bg-gray-100"
                 disabled_attr = ' aria-disabled="true"' if disabled else ""
 
-                # Add dj-value-* attributes for event parameters (#4186)
-                data_attrs = ""
-                if data:
-                    import json
-
-                    for key, value in data.items():
-                        if not _DATA_KEY_RE.match(str(key)):
-                            continue
-                        if isinstance(value, (dict, list)):
-                            value_str = attr_text(json.dumps(value))  # a plain str: always escaped
-                        else:
-                            value_str = attr_text(value)
-                        data_attrs += f' dj-value-{key}="{value_str}"'
+                # dj-value-* attributes for event parameters (#4186)
+                data_attrs = _data_attrs(data)
 
                 content = f"{icon} {text}" if icon else text
                 html += f'<a href="{_item_href(item)}" class="block px-4 py-2 text-sm{variant_class}{state_class}"{disabled_attr}{click_attr}{data_attrs}>{content}</a>'
@@ -300,19 +312,8 @@ class DropdownComponent(LiveComponent):
                 item_class = "dropdown-item disabled" if disabled else "dropdown-item"
                 disabled_attr = ' aria-disabled="true"' if disabled else ""
 
-                # Add dj-value-* attributes for event parameters (#4186)
-                data_attrs = ""
-                if data:
-                    import json
-
-                    for key, value in data.items():
-                        if not _DATA_KEY_RE.match(str(key)):
-                            continue
-                        if isinstance(value, (dict, list)):
-                            value_str = attr_text(json.dumps(value))  # a plain str: always escaped
-                        else:
-                            value_str = attr_text(value)
-                        data_attrs += f' dj-value-{key}="{value_str}"'
+                # dj-value-* attributes for event parameters (#4186)
+                data_attrs = _data_attrs(data)
 
                 content = f"{icon} {text}" if icon else text
                 html += f'<a href="{_item_href(item)}" class="{item_class}"{disabled_attr}{click_attr}{data_attrs}>{content}</a>'

@@ -178,3 +178,22 @@ def test_a_standalone_alert_closes_with_bootstrap() -> None:
 def test_simple_alert_is_standalone() -> None:
     html = str(Alert("m", dismissable=True).render())
     assert 'data-bs-dismiss="alert"' in html and "dj-click" not in html
+
+
+@pytest.mark.parametrize("framework", FRAMEWORKS, indirect=True)
+def test_a_url_named_data_value_is_checked_like_a_url(framework: str) -> None:
+    """``dropdown.py`` reads URLs now, so the marked-safe sweep (#3898) holds its
+    ``dj-value-*`` attributes to the URL policy: a URL-named key's script scheme becomes ``#``;
+    other keys are escaped text, as before."""
+    from django.utils.safestring import mark_safe
+
+    html = _dropdown(
+        DropdownItem(
+            text="A",
+            action="go",
+            data={"link": mark_safe("javascript:alert(1)"), "item_id": 4, "note": "a:b"},
+        )
+    )
+    assert 'dj-value-link="#"' in html
+    assert 'dj-value-item_id="4"' in html and 'dj-value-note="a:b"' in html
+    assert "javascript" not in html
