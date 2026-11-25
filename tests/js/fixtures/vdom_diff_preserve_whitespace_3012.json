@@ -16,7 +16,9 @@
                 4,
                 0
               ],
-              "text": "alpha1"
+              "text": "alpha1",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><code dj-id=\"2\">one</code>\n<b dj-id=\"3\">two</b>\n<i dj-id=\"4\">alpha1</i></pre></div>"
@@ -36,7 +38,9 @@
                 0,
                 0
               ],
-              "text": "b c3"
+              "text": "b c3",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><code dj-id=\"2\">b c3</code>\n<b dj-id=\"3\">two</b>\n<i dj-id=\"4\">alpha1</i></pre></div>"
@@ -51,7 +55,9 @@
                 4,
                 0
               ],
-              "text": "alpha4"
+              "text": "alpha4",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><code dj-id=\"2\">b c3</code>\n<b dj-id=\"3\">two</b>\n<i dj-id=\"4\">alpha4</i></pre></div>"
@@ -66,7 +72,9 @@
                 0,
                 0
               ],
-              "text": "tail5"
+              "text": "tail5",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><code dj-id=\"2\">tail5</code>\n<b dj-id=\"3\">two</b>\n<i dj-id=\"4\">alpha4</i></pre></div>"
@@ -81,7 +89,9 @@
                 2,
                 0
               ],
-              "text": "b c6"
+              "text": "b c6",
+              "parent_d": "3",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><code dj-id=\"2\">tail5</code>\n<b dj-id=\"3\">b c6</b>\n<i dj-id=\"4\">alpha4</i></pre></div>"
@@ -96,7 +106,9 @@
                 4,
                 0
               ],
-              "text": "7"
+              "text": "7",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><code dj-id=\"2\">tail5</code>\n<b dj-id=\"3\">b c6</b>\n<i dj-id=\"4\">7</i></pre></div>"
@@ -121,7 +133,9 @@
                 0,
                 0
               ],
-              "text": "alpha10"
+              "text": "alpha10",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><code dj-id=\"2\">alpha10</code>\n<b dj-id=\"3\">b c6</b>\n<i dj-id=\"4\">7</i></pre></div>"
@@ -136,7 +150,9 @@
                 4,
                 0
               ],
-              "text": "tail11"
+              "text": "tail11",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><code dj-id=\"2\">alpha10</code>\n<b dj-id=\"3\">b c6</b>\n<i dj-id=\"4\">tail11</i></pre></div>"
@@ -151,7 +167,9 @@
                 4,
                 0
               ],
-              "text": "alpha12"
+              "text": "alpha12",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><code dj-id=\"2\">alpha10</code>\n<b dj-id=\"3\">b c6</b>\n<i dj-id=\"4\">alpha12</i></pre></div>"
@@ -166,7 +184,9 @@
                 0,
                 0
               ],
-              "text": "13"
+              "text": "13",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><code dj-id=\"2\">13</code>\n<b dj-id=\"3\">b c6</b>\n<i dj-id=\"4\">alpha12</i></pre></div>"
@@ -186,7 +206,9 @@
                 4,
                 0
               ],
-              "text": "x15"
+              "text": "x15",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><code dj-id=\"2\">13</code>\n<b dj-id=\"3\">b c6</b>\n<i dj-id=\"4\">x15</i></pre></div>"
@@ -201,7 +223,9 @@
                 0,
                 0
               ],
-              "text": "16"
+              "text": "16",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><code dj-id=\"2\">16</code>\n<b dj-id=\"3\">b c6</b>\n<i dj-id=\"4\">x15</i></pre></div>"
@@ -216,7 +240,9 @@
                 4,
                 0
               ],
-              "text": "x17"
+              "text": "x17",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><code dj-id=\"2\">16</code>\n<b dj-id=\"3\">b c6</b>\n<i dj-id=\"4\">x17</i></pre></div>"
@@ -231,7 +257,9 @@
                 2,
                 0
               ],
-              "text": "alpha18"
+              "text": "alpha18",
+              "parent_d": "3",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><code dj-id=\"2\">16</code>\n<b dj-id=\"3\">alpha18</b>\n<i dj-id=\"4\">x17</i></pre></div>"
@@ -246,7 +274,9 @@
                 2,
                 0
               ],
-              "text": "x19"
+              "text": "x19",
+              "parent_d": "3",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><code dj-id=\"2\">16</code>\n<b dj-id=\"3\">x19</b>\n<i dj-id=\"4\">x17</i></pre></div>"
@@ -261,7 +291,9 @@
                 4,
                 0
               ],
-              "text": "b c20"
+              "text": "b c20",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><code dj-id=\"2\">16</code>\n<b dj-id=\"3\">x19</b>\n<i dj-id=\"4\">b c20</i></pre></div>"
@@ -282,7 +314,9 @@
                 3,
                 0
               ],
-              "text": "tail1"
+              "text": "tail1",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><code dj-id=\"2\">  <span dj-id=\"3\">one</span>\t<em dj-id=\"4\">tail1</em>  </code></p></div>"
@@ -313,7 +347,9 @@
                 3,
                 0
               ],
-              "text": "x5"
+              "text": "x5",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><code dj-id=\"2\">  <span dj-id=\"3\">one</span>\t<em dj-id=\"4\">x5</em>  </code></p></div>"
@@ -329,7 +365,9 @@
                 1,
                 0
               ],
-              "text": "alpha6"
+              "text": "alpha6",
+              "parent_d": "3",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><code dj-id=\"2\">  <span dj-id=\"3\">alpha6</span>\t<em dj-id=\"4\">x5</em>  </code></p></div>"
@@ -355,7 +393,9 @@
                 3,
                 0
               ],
-              "text": "x9"
+              "text": "x9",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><code dj-id=\"2\">  <span dj-id=\"3\">alpha6</span>\t<em dj-id=\"4\">x9</em>  </code></p></div>"
@@ -371,7 +411,9 @@
                 3,
                 0
               ],
-              "text": "10"
+              "text": "10",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><code dj-id=\"2\">  <span dj-id=\"3\">alpha6</span>\t<em dj-id=\"4\">10</em>  </code></p></div>"
@@ -402,7 +444,9 @@
                 1,
                 0
               ],
-              "text": "14"
+              "text": "14",
+              "parent_d": "3",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><code dj-id=\"2\">  <span dj-id=\"3\">14</span>\t<em dj-id=\"4\">10</em>  </code></p></div>"
@@ -418,7 +462,9 @@
                 3,
                 0
               ],
-              "text": "x15"
+              "text": "x15",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><code dj-id=\"2\">  <span dj-id=\"3\">14</span>\t<em dj-id=\"4\">x15</em>  </code></p></div>"
@@ -434,7 +480,9 @@
                 1,
                 0
               ],
-              "text": "alpha16"
+              "text": "alpha16",
+              "parent_d": "3",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><code dj-id=\"2\">  <span dj-id=\"3\">alpha16</span>\t<em dj-id=\"4\">x15</em>  </code></p></div>"
@@ -455,7 +503,9 @@
                 3,
                 0
               ],
-              "text": "tail18"
+              "text": "tail18",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><code dj-id=\"2\">  <span dj-id=\"3\">alpha16</span>\t<em dj-id=\"4\">tail18</em>  </code></p></div>"
@@ -471,7 +521,9 @@
                 3,
                 0
               ],
-              "text": "b c19"
+              "text": "b c19",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><code dj-id=\"2\">  <span dj-id=\"3\">alpha16</span>\t<em dj-id=\"4\">b c19</em>  </code></p></div>"
@@ -487,7 +539,9 @@
                 1,
                 0
               ],
-              "text": "tail20"
+              "text": "tail20",
+              "parent_d": "3",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><code dj-id=\"2\">  <span dj-id=\"3\">tail20</span>\t<em dj-id=\"4\">b c19</em>  </code></p></div>"
@@ -517,7 +571,9 @@
                 4,
                 0
               ],
-              "text": "3"
+              "text": "3",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><span class=\"ln\" dj-id=\"2\">l1</span>\n<span class=\"ln\" dj-id=\"3\">l2</span>\n<b dj-id=\"4\">3</b></pre></div>"
@@ -608,7 +664,9 @@
                 0,
                 0
               ],
-              "text": "alpha7"
+              "text": "alpha7",
+              "parent_d": "7",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><b dj-id=\"7\">alpha7</b></pre></div>"
@@ -633,7 +691,9 @@
                 0,
                 0
               ],
-              "text": "10"
+              "text": "10",
+              "parent_d": "7",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><b dj-id=\"7\">10</b></pre></div>"
@@ -784,7 +844,9 @@
                 4,
                 0
               ],
-              "text": "alpha16"
+              "text": "alpha16",
+              "parent_d": "c",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><span class=\"ln\" dj-id=\"a\">l4</span>\n<span class=\"ln\" dj-id=\"b\">l3</span>\n<b dj-id=\"c\">alpha16</b></pre></div>"
@@ -799,7 +861,9 @@
                 4,
                 0
               ],
-              "text": "alpha17"
+              "text": "alpha17",
+              "parent_d": "c",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><span class=\"ln\" dj-id=\"a\">l4</span>\n<span class=\"ln\" dj-id=\"b\">l3</span>\n<b dj-id=\"c\">alpha17</b></pre></div>"
@@ -834,7 +898,9 @@
                 0,
                 0
               ],
-              "text": "b c1"
+              "text": "b c1",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><textarea dj-id=\"2\">b c1</textarea> <code dj-id=\"3\">\n<i dj-id=\"4\">two</i>\n</code> <b dj-id=\"5\">three</b></div></div>"
@@ -849,7 +915,9 @@
                 0,
                 0
               ],
-              "text": "x2"
+              "text": "x2",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><textarea dj-id=\"2\">x2</textarea> <code dj-id=\"3\">\n<i dj-id=\"4\">two</i>\n</code> <b dj-id=\"5\">three</b></div></div>"
@@ -864,7 +932,9 @@
                 0,
                 0
               ],
-              "text": "b c3"
+              "text": "b c3",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><textarea dj-id=\"2\">b c3</textarea> <code dj-id=\"3\">\n<i dj-id=\"4\">two</i>\n</code> <b dj-id=\"5\">three</b></div></div>"
@@ -880,7 +950,9 @@
                 1,
                 0
               ],
-              "text": "4"
+              "text": "4",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><textarea dj-id=\"2\">b c3</textarea> <code dj-id=\"3\">\n<i dj-id=\"4\">4</i>\n</code> <b dj-id=\"5\">three</b></div></div>"
@@ -896,7 +968,9 @@
                 1,
                 0
               ],
-              "text": "b c5"
+              "text": "b c5",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><textarea dj-id=\"2\">b c3</textarea> <code dj-id=\"3\">\n<i dj-id=\"4\">b c5</i>\n</code> <b dj-id=\"5\">three</b></div></div>"
@@ -916,7 +990,9 @@
                 4,
                 0
               ],
-              "text": "tail7"
+              "text": "tail7",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><textarea dj-id=\"2\">b c3</textarea> <code dj-id=\"3\">\n<i dj-id=\"4\">b c5</i>\n</code> <b dj-id=\"5\">tail7</b></div></div>"
@@ -931,7 +1007,9 @@
                 4,
                 0
               ],
-              "text": "8"
+              "text": "8",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><textarea dj-id=\"2\">b c3</textarea> <code dj-id=\"3\">\n<i dj-id=\"4\">b c5</i>\n</code> <b dj-id=\"5\">8</b></div></div>"
@@ -946,7 +1024,9 @@
                 4,
                 0
               ],
-              "text": "alpha9"
+              "text": "alpha9",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><textarea dj-id=\"2\">b c3</textarea> <code dj-id=\"3\">\n<i dj-id=\"4\">b c5</i>\n</code> <b dj-id=\"5\">alpha9</b></div></div>"
@@ -961,7 +1041,9 @@
                 4,
                 0
               ],
-              "text": "alpha10"
+              "text": "alpha10",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><textarea dj-id=\"2\">b c3</textarea> <code dj-id=\"3\">\n<i dj-id=\"4\">b c5</i>\n</code> <b dj-id=\"5\">alpha10</b></div></div>"
@@ -976,7 +1058,9 @@
                 4,
                 0
               ],
-              "text": "alpha11"
+              "text": "alpha11",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><textarea dj-id=\"2\">b c3</textarea> <code dj-id=\"3\">\n<i dj-id=\"4\">b c5</i>\n</code> <b dj-id=\"5\">alpha11</b></div></div>"
@@ -991,7 +1075,9 @@
                 0,
                 0
               ],
-              "text": "12"
+              "text": "12",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><textarea dj-id=\"2\">12</textarea> <code dj-id=\"3\">\n<i dj-id=\"4\">b c5</i>\n</code> <b dj-id=\"5\">alpha11</b></div></div>"
@@ -1006,7 +1092,9 @@
                 0,
                 0
               ],
-              "text": "tail13"
+              "text": "tail13",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><textarea dj-id=\"2\">tail13</textarea> <code dj-id=\"3\">\n<i dj-id=\"4\">b c5</i>\n</code> <b dj-id=\"5\">alpha11</b></div></div>"
@@ -1021,7 +1109,9 @@
                 0,
                 0
               ],
-              "text": "b c14"
+              "text": "b c14",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><textarea dj-id=\"2\">b c14</textarea> <code dj-id=\"3\">\n<i dj-id=\"4\">b c5</i>\n</code> <b dj-id=\"5\">alpha11</b></div></div>"
@@ -1036,7 +1126,9 @@
                 0,
                 0
               ],
-              "text": "tail15"
+              "text": "tail15",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><textarea dj-id=\"2\">tail15</textarea> <code dj-id=\"3\">\n<i dj-id=\"4\">b c5</i>\n</code> <b dj-id=\"5\">alpha11</b></div></div>"
@@ -1051,7 +1143,9 @@
                 4,
                 0
               ],
-              "text": "alpha16"
+              "text": "alpha16",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><textarea dj-id=\"2\">tail15</textarea> <code dj-id=\"3\">\n<i dj-id=\"4\">b c5</i>\n</code> <b dj-id=\"5\">alpha16</b></div></div>"
@@ -1066,7 +1160,9 @@
                 0,
                 0
               ],
-              "text": "17"
+              "text": "17",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><textarea dj-id=\"2\">17</textarea> <code dj-id=\"3\">\n<i dj-id=\"4\">b c5</i>\n</code> <b dj-id=\"5\">alpha16</b></div></div>"
@@ -1081,7 +1177,9 @@
                 0,
                 0
               ],
-              "text": "b c18"
+              "text": "b c18",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><textarea dj-id=\"2\">b c18</textarea> <code dj-id=\"3\">\n<i dj-id=\"4\">b c5</i>\n</code> <b dj-id=\"5\">alpha16</b></div></div>"
@@ -1097,7 +1195,9 @@
                 1,
                 0
               ],
-              "text": "tail19"
+              "text": "tail19",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><textarea dj-id=\"2\">b c18</textarea> <code dj-id=\"3\">\n<i dj-id=\"4\">tail19</i>\n</code> <b dj-id=\"5\">alpha16</b></div></div>"
@@ -1112,7 +1212,9 @@
                 0,
                 0
               ],
-              "text": "alpha20"
+              "text": "alpha20",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><textarea dj-id=\"2\">alpha20</textarea> <code dj-id=\"3\">\n<i dj-id=\"4\">tail19</i>\n</code> <b dj-id=\"5\">alpha16</b></div></div>"
@@ -1138,7 +1240,9 @@
                 0,
                 0
               ],
-              "text": "2"
+              "text": "2",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><span dj-id=\"2\"></span><b dj-id=\"3\">one</b>\n<span dj-id=\"4\"><i dj-id=\"5\">2</i></span></pre></div>"
@@ -1154,7 +1258,9 @@
                 0,
                 0
               ],
-              "text": "alpha3"
+              "text": "alpha3",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><span dj-id=\"2\"></span><b dj-id=\"3\">one</b>\n<span dj-id=\"4\"><i dj-id=\"5\">alpha3</i></span></pre></div>"
@@ -1170,7 +1276,9 @@
                 0,
                 0
               ],
-              "text": "4"
+              "text": "4",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><span dj-id=\"2\"></span><b dj-id=\"3\">one</b>\n<span dj-id=\"4\"><i dj-id=\"5\">4</i></span></pre></div>"
@@ -1185,7 +1293,9 @@
                 1,
                 0
               ],
-              "text": "tail5"
+              "text": "tail5",
+              "parent_d": "3",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><span dj-id=\"2\"></span><b dj-id=\"3\">tail5</b>\n<span dj-id=\"4\"><i dj-id=\"5\">4</i></span></pre></div>"
@@ -1201,7 +1311,9 @@
                 0,
                 0
               ],
-              "text": "alpha6"
+              "text": "alpha6",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><span dj-id=\"2\"></span><b dj-id=\"3\">tail5</b>\n<span dj-id=\"4\"><i dj-id=\"5\">alpha6</i></span></pre></div>"
@@ -1246,7 +1358,9 @@
                 1,
                 0
               ],
-              "text": "alpha13"
+              "text": "alpha13",
+              "parent_d": "3",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><span dj-id=\"2\"></span><b dj-id=\"3\">alpha13</b>\n<span dj-id=\"4\"><i dj-id=\"5\">alpha6</i></span></pre></div>"
@@ -1261,7 +1375,9 @@
                 1,
                 0
               ],
-              "text": "tail14"
+              "text": "tail14",
+              "parent_d": "3",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><span dj-id=\"2\"></span><b dj-id=\"3\">tail14</b>\n<span dj-id=\"4\"><i dj-id=\"5\">alpha6</i></span></pre></div>"
@@ -1287,7 +1403,9 @@
                 0,
                 0
               ],
-              "text": "tail17"
+              "text": "tail17",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><span dj-id=\"2\"></span><b dj-id=\"3\">tail14</b>\n<span dj-id=\"4\"><i dj-id=\"5\">tail17</i></span></pre></div>"
@@ -1312,7 +1430,9 @@
                 1,
                 0
               ],
-              "text": "x20"
+              "text": "x20",
+              "parent_d": "3",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><pre dj-id=\"1\"><span dj-id=\"2\"></span><b dj-id=\"3\">x20</b>\n<span dj-id=\"4\"><i dj-id=\"5\">tail17</i></span></pre></div>"

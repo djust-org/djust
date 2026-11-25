@@ -14,7 +14,9 @@
             0,
             0
           ],
-          "text": "Note:"
+          "text": "Note:",
+          "parent_d": "2",
+          "index": 0
         },
         {
           "type": "SetText",
@@ -23,7 +25,9 @@
             2,
             0
           ],
-          "text": "y = 2"
+          "text": "y = 2",
+          "parent_d": "3",
+          "index": 0
         },
         {
           "type": "SetText",
@@ -32,7 +36,9 @@
             4,
             0
           ],
-          "text": "later"
+          "text": "later",
+          "parent_d": "4",
+          "index": 0
         }
       ],
       "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"lead\" dj-id=\"1\"><strong dj-id=\"2\">Note:</strong> <code dj-id=\"3\">y = 2</code> <em dj-id=\"4\">later</em></p><p class=\"tags\" dj-id=\"5\"><span class=\"tag\" dj-id=\"6\">alpha</span> <span class=\"tag\" dj-id=\"7\">beta</span> <span class=\"tag\" dj-id=\"8\">gamma</span></p><p class=\"chips\" dj-id=\"9\"><b dj-id=\"a\" dj-key=\"one\">one</b> <b dj-id=\"b\" dj-key=\"two\">two</b> <b dj-id=\"c\" dj-key=\"three\">three</b> <b dj-id=\"d\" dj-key=\"four\">four</b></p><p class=\"cond\" dj-id=\"e\"><b dj-id=\"f\">A</b> <!--dj-if id=\"if-43bf5146-0\"--><i dj-id=\"g\">maybe</i> <!--/dj-if--><u dj-id=\"h\">C</u></p><ul class=\"md\" dj-id=\"i\"><li dj-id=\"j\"><strong dj-id=\"k\">Filters.</strong> <code dj-id=\"l\">{% load app_tags %}</code></li></ul></div>"
@@ -47,7 +53,9 @@
             2,
             0
           ],
-          "text": "NEW"
+          "text": "NEW",
+          "parent_d": "7",
+          "index": 0
         },
         {
           "type": "SetText",
@@ -56,7 +64,9 @@
             4,
             0
           ],
-          "text": "beta"
+          "text": "beta",
+          "parent_d": "8",
+          "index": 0
         },
         {
           "type": "InsertChild",
@@ -161,7 +171,9 @@
             0,
             0
           ],
-          "text": "NEW"
+          "text": "NEW",
+          "parent_d": "6",
+          "index": 0
         },
         {
           "type": "SetText",
@@ -170,7 +182,9 @@
             2,
             0
           ],
-          "text": "beta"
+          "text": "beta",
+          "parent_d": "7",
+          "index": 0
         },
         {
           "type": "SetText",
@@ -179,7 +193,9 @@
             4,
             0
           ],
-          "text": "gamma"
+          "text": "gamma",
+          "parent_d": "8",
+          "index": 0
         },
         {
           "type": "SetText",
@@ -188,7 +204,9 @@
             6,
             0
           ],
-          "text": "delta"
+          "text": "delta",
+          "parent_d": "v",
+          "index": 0
         },
         {
           "type": "RemoveChild",
@@ -220,7 +238,9 @@
             0,
             0
           ],
-          "text": "beta"
+          "text": "beta",
+          "parent_d": "6",
+          "index": 0
         },
         {
           "type": "RemoveChild",
@@ -563,7 +583,9 @@
             0,
             0
           ],
-          "text": "Admin."
+          "text": "Admin.",
+          "parent_d": "k",
+          "index": 0
         },
         {
           "type": "SetText",
@@ -573,7 +595,9 @@
             2,
             0
           ],
-          "text": "DjustModelAdmin"
+          "text": "DjustModelAdmin",
+          "parent_d": "l",
+          "index": 0
         },
         {
           "type": "InsertChild",

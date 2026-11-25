@@ -37,7 +37,9 @@
             1,
             0
           ],
-          "text": "1"
+          "text": "1",
+          "parent_d": "e",
+          "index": 0
         },
         {
           "type": "RemoveChild",
@@ -59,7 +61,9 @@
             1,
             0
           ],
-          "text": "1"
+          "text": "1",
+          "parent_d": "w",
+          "index": 0
         },
         {
           "type": "InsertChild",

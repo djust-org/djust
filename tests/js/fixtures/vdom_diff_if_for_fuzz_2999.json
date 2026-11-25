@@ -15,7 +15,9 @@
                 1,
                 0
               ],
-              "text": "1"
+              "text": "1",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"tags\" dj-id=\"1\"><!--dj-if id=\"if-64179bfc-0-0\"--><!--/dj-if--><!--dj-if id=\"if-64179bfc-0-1\"--><!--/dj-if--></p><em dj-id=\"2\">1</em></div>"
@@ -155,7 +157,9 @@
                 1,
                 0
               ],
-              "text": "2"
+              "text": "2",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"tags\" dj-id=\"1\"><!--dj-if id=\"if-64179bfc-0-0\"--><span class=\"badge\" dj-id=\"5\">gamma</span><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-1\"--><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-2\"--><span class=\"badge\" dj-id=\"6\">beta</span><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-3\"--><span class=\"badge\" dj-id=\"7\">eps</span><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-4\"--><span class=\"badge\" dj-id=\"8\">alpha</span><!--/dj-if--></p><em dj-id=\"2\">2</em></div>"
@@ -226,7 +230,9 @@
                 1,
                 0
               ],
-              "text": "3"
+              "text": "3",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"tags\" dj-id=\"1\"><!--dj-if id=\"if-64179bfc-0-0\"--><!--/dj-if--></p><em dj-id=\"2\">3</em></div>"
@@ -337,7 +343,9 @@
                 1,
                 0
               ],
-              "text": "4"
+              "text": "4",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"tags\" dj-id=\"1\"><!--dj-if id=\"if-64179bfc-0-0\"--><span class=\"badge\" dj-id=\"f\">alpha</span><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-1\"--><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-2\"--><span class=\"badge\" dj-id=\"g\">beta</span><!--/dj-if--><!--dj-if id=\"if-64179bfc-0-3\"--><!--/dj-if--><!--dj-if id=\"if-64179bfc-0-4\"--><!--/dj-if--></p><em dj-id=\"2\">4</em></div>"
@@ -352,7 +360,9 @@
                 1,
                 0
               ],
-              "text": "zeta"
+              "text": "zeta",
+              "parent_d": "f",
+              "index": 0
             },
             {
               "type": "InsertChild",
@@ -421,7 +431,9 @@
                 1,
                 0
               ],
-              "text": "5"
+              "text": "5",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"tags\" dj-id=\"1\"><!--dj-if id=\"if-64179bfc-0-0\"--><span class=\"badge\" dj-id=\"f\">zeta</span><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-1\"--><span class=\"badge\" dj-id=\"l\">beta</span><!--/dj-if--><!--dj-if id=\"if-64179bfc-0-2\"--><!--/dj-if--></p><em dj-id=\"2\">5</em></div>"
@@ -489,7 +501,9 @@
                 1,
                 0
               ],
-              "text": "6"
+              "text": "6",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"tags\" dj-id=\"1\"><!--dj-if id=\"if-64179bfc-0-0\"--><!--/dj-if--><!--dj-if id=\"if-64179bfc-0-1\"--><!--/dj-if--><!--dj-if id=\"if-64179bfc-0-2\"--><!--/dj-if--><!--dj-if id=\"if-64179bfc-0-3\"--><span class=\"badge\" dj-id=\"p\">eps</span><!--/dj-if--></p><em dj-id=\"2\">6</em></div>"
@@ -503,7 +517,9 @@
                 1,
                 0
               ],
-              "text": "7"
+              "text": "7",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"tags\" dj-id=\"1\"><!--dj-if id=\"if-64179bfc-0-0\"--><!--/dj-if--><!--dj-if id=\"if-64179bfc-0-1\"--><!--/dj-if--><!--dj-if id=\"if-64179bfc-0-2\"--><!--/dj-if--><!--dj-if id=\"if-64179bfc-0-3\"--><span class=\"badge\" dj-id=\"p\">eps</span><!--/dj-if--></p><em dj-id=\"2\">7</em></div>"
@@ -517,7 +533,9 @@
                 1,
                 0
               ],
-              "text": "8"
+              "text": "8",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"tags\" dj-id=\"1\"><!--dj-if id=\"if-64179bfc-0-0\"--><!--/dj-if--><!--dj-if id=\"if-64179bfc-0-1\"--><!--/dj-if--><!--dj-if id=\"if-64179bfc-0-2\"--><!--/dj-if--><!--dj-if id=\"if-64179bfc-0-3\"--><span class=\"badge\" dj-id=\"p\">eps</span><!--/dj-if--></p><em dj-id=\"2\">8</em></div>"
@@ -568,7 +586,9 @@
                 9,
                 0
               ],
-              "text": "beta"
+              "text": "beta",
+              "parent_d": "p",
+              "index": 0
             },
             {
               "type": "InsertSubtree",
@@ -626,7 +646,9 @@
                 1,
                 0
               ],
-              "text": "9"
+              "text": "9",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"tags\" dj-id=\"1\"><!--dj-if id=\"if-64179bfc-0-0\"--><!--/dj-if--><!--dj-if id=\"if-64179bfc-0-1\"--><!--/dj-if--><!--dj-if id=\"if-64179bfc-0-2\"--><span class=\"badge\" dj-id=\"t\">eps</span><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-3\"--><span class=\"badge\" dj-id=\"p\">beta</span><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-4\"--><span class=\"badge\" dj-id=\"v\">delta</span><!--/dj-if--><!--dj-if id=\"if-64179bfc-0-5\"--><!--/dj-if--></p><em dj-id=\"2\">9</em></div>"
@@ -640,7 +662,9 @@
                 1,
                 0
               ],
-              "text": "10"
+              "text": "10",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"tags\" dj-id=\"1\"><!--dj-if id=\"if-64179bfc-0-0\"--><!--/dj-if--><!--dj-if id=\"if-64179bfc-0-1\"--><!--/dj-if--><!--dj-if id=\"if-64179bfc-0-2\"--><span class=\"badge\" dj-id=\"t\">eps</span><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-3\"--><span class=\"badge\" dj-id=\"p\">beta</span><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-4\"--><span class=\"badge\" dj-id=\"v\">delta</span><!--/dj-if--><!--dj-if id=\"if-64179bfc-0-5\"--><!--/dj-if--></p><em dj-id=\"2\">10</em></div>"
@@ -745,7 +769,9 @@
                 1,
                 0
               ],
-              "text": "11"
+              "text": "11",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"tags\" dj-id=\"1\"><!--dj-if id=\"if-64179bfc-0-0\"--><!--/dj-if--><!--dj-if id=\"if-64179bfc-0-1\"--><span class=\"badge\" dj-id=\"z\">beta</span><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-2\"--><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-3\"--><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-4\"--><span class=\"badge\" dj-id=\"v\">delta</span><!--/dj-if--></p><em dj-id=\"2\">11</em></div>"
@@ -759,7 +785,9 @@
                 1,
                 0
               ],
-              "text": "12"
+              "text": "12",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"tags\" dj-id=\"1\"><!--dj-if id=\"if-64179bfc-0-0\"--><!--/dj-if--><!--dj-if id=\"if-64179bfc-0-1\"--><span class=\"badge\" dj-id=\"z\">beta</span><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-2\"--><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-3\"--><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-4\"--><span class=\"badge\" dj-id=\"v\">delta</span><!--/dj-if--></p><em dj-id=\"2\">12</em></div>"
@@ -912,7 +940,9 @@
                 1,
                 0
               ],
-              "text": "13"
+              "text": "13",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"tags\" dj-id=\"1\"><!--dj-if id=\"if-64179bfc-0-0\"--><span class=\"badge\" dj-id=\"E\">eps</span><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-1\"--><span class=\"badge\" dj-id=\"z\">beta</span><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-2\"--><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-3\"--><span class=\"badge\" dj-id=\"G\">delta</span><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-4\"--><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-5\"--><span class=\"badge\" dj-id=\"H\">zeta</span><!--/dj-if--></p><em dj-id=\"2\">13</em></div>"
@@ -926,7 +956,9 @@
                 1,
                 0
               ],
-              "text": "14"
+              "text": "14",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"tags\" dj-id=\"1\"><!--dj-if id=\"if-64179bfc-0-0\"--><span class=\"badge\" dj-id=\"E\">eps</span><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-1\"--><span class=\"badge\" dj-id=\"z\">beta</span><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-2\"--><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-3\"--><span class=\"badge\" dj-id=\"G\">delta</span><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-4\"--><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-5\"--><span class=\"badge\" dj-id=\"H\">zeta</span><!--/dj-if--></p><em dj-id=\"2\">14</em></div>"
@@ -940,7 +972,9 @@
                 1,
                 0
               ],
-              "text": "15"
+              "text": "15",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"tags\" dj-id=\"1\"><!--dj-if id=\"if-64179bfc-0-0\"--><span class=\"badge\" dj-id=\"E\">eps</span><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-1\"--><span class=\"badge\" dj-id=\"z\">beta</span><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-2\"--><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-3\"--><span class=\"badge\" dj-id=\"G\">delta</span><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-4\"--><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-5\"--><span class=\"badge\" dj-id=\"H\">zeta</span><!--/dj-if--></p><em dj-id=\"2\">15</em></div>"
@@ -955,7 +989,9 @@
                 1,
                 0
               ],
-              "text": "delta"
+              "text": "delta",
+              "parent_d": "E",
+              "index": 0
             },
             {
               "type": "RemoveChild",
@@ -1035,7 +1071,9 @@
                 1,
                 0
               ],
-              "text": "16"
+              "text": "16",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"tags\" dj-id=\"1\"><!--dj-if id=\"if-64179bfc-0-0\"--><span class=\"badge\" dj-id=\"E\">delta</span><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-1\"--><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-2\"--><span class=\"badge\" dj-id=\"M\">alpha</span><!--/dj-if--></p><em dj-id=\"2\">16</em></div>"
@@ -1050,7 +1088,9 @@
                 1,
                 0
               ],
-              "text": "eps"
+              "text": "eps",
+              "parent_d": "E",
+              "index": 0
             },
             {
               "type": "InsertChild",
@@ -1086,7 +1126,9 @@
                 9,
                 0
               ],
-              "text": "delta"
+              "text": "delta",
+              "parent_d": "M",
+              "index": 0
             },
             {
               "type": "InsertSubtree",
@@ -1144,7 +1186,9 @@
                 1,
                 0
               ],
-              "text": "17"
+              "text": "17",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"tags\" dj-id=\"1\"><!--dj-if id=\"if-64179bfc-0-0\"--><span class=\"badge\" dj-id=\"E\">eps</span><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-1\"--><span class=\"badge\" dj-id=\"R\">gamma</span><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-2\"--><span class=\"badge\" dj-id=\"M\">delta</span><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-3\"--><span class=\"badge\" dj-id=\"T\">alpha</span><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-4\"--><span class=\"badge\" dj-id=\"U\">beta</span><!--/dj-if--></p><em dj-id=\"2\">17</em></div>"
@@ -1159,7 +1203,9 @@
                 1,
                 0
               ],
-              "text": "beta"
+              "text": "beta",
+              "parent_d": "E",
+              "index": 0
             },
             {
               "type": "RemoveChild",
@@ -1177,7 +1223,9 @@
                 8,
                 0
               ],
-              "text": "gamma"
+              "text": "gamma",
+              "parent_d": "M",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -1186,7 +1234,9 @@
                 12,
                 0
               ],
-              "text": "zeta"
+              "text": "zeta",
+              "parent_d": "T",
+              "index": 0
             },
             {
               "type": "MoveSubtree",
@@ -1220,7 +1270,9 @@
                 1,
                 0
               ],
-              "text": "18"
+              "text": "18",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"tags\" dj-id=\"1\"><!--dj-if id=\"if-64179bfc-0-0\"--><span class=\"badge\" dj-id=\"E\">beta</span><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-1\"--><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-2\"--><span class=\"badge\" dj-id=\"M\">gamma</span><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-3\"--><span class=\"badge\" dj-id=\"T\">zeta</span><!--/dj-if--><!--dj-if id=\"if-64179bfc-0-4\"--><!--/dj-if--></p><em dj-id=\"2\">18</em></div>"
@@ -1289,7 +1341,9 @@
                 7,
                 0
               ],
-              "text": "zeta"
+              "text": "zeta",
+              "parent_d": "M",
+              "index": 0
             },
             {
               "type": "MoveSubtree",
@@ -1352,7 +1406,9 @@
                 1,
                 0
               ],
-              "text": "19"
+              "text": "19",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"tags\" dj-id=\"1\"><!--dj-if id=\"if-64179bfc-0-0\"--><!--/dj-if--><!--dj-if id=\"if-64179bfc-0-1\"--><span class=\"badge\" dj-id=\"14\">gamma</span><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-2\"--><span class=\"badge\" dj-id=\"M\">zeta</span><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-3\"--><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-4\"--><span class=\"badge\" dj-id=\"16\">alpha</span><!--/dj-if--><!--dj-if id=\"if-64179bfc-0-5\"--><!--/dj-if--></p><em dj-id=\"2\">19</em></div>"
@@ -1421,7 +1477,9 @@
                 8,
                 0
               ],
-              "text": "delta"
+              "text": "delta",
+              "parent_d": "M",
+              "index": 0
             },
             {
               "type": "RemoveSubtree",
@@ -1445,7 +1503,9 @@
                 1,
                 0
               ],
-              "text": "20"
+              "text": "20",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"tags\" dj-id=\"1\"><!--dj-if id=\"if-64179bfc-0-0\"--><span class=\"badge\" dj-id=\"1a\">eps</span><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-1\"--><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-2\"--><span class=\"badge\" dj-id=\"M\">delta</span><!--/dj-if--><!--dj-if id=\"if-64179bfc-0-3\"--><!--/dj-if--></p><em dj-id=\"2\">20</em></div>"
@@ -1460,7 +1520,9 @@
                 1,
                 0
               ],
-              "text": "delta"
+              "text": "delta",
+              "parent_d": "1a",
+              "index": 0
             },
             {
               "type": "MoveSubtree",
@@ -1501,7 +1563,9 @@
                 1,
                 0
               ],
-              "text": "21"
+              "text": "21",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"tags\" dj-id=\"1\"><!--dj-if id=\"if-64179bfc-0-0\"--><span class=\"badge\" dj-id=\"1a\">delta</span><!--/dj-if--><!--dj-if id=\"if-64179bfc-0-1\"--><!--/dj-if--></p><em dj-id=\"2\">21</em></div>"
@@ -1515,7 +1579,9 @@
                 1,
                 0
               ],
-              "text": "22"
+              "text": "22",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"tags\" dj-id=\"1\"><!--dj-if id=\"if-64179bfc-0-0\"--><span class=\"badge\" dj-id=\"1a\">delta</span><!--/dj-if--><!--dj-if id=\"if-64179bfc-0-1\"--><!--/dj-if--></p><em dj-id=\"2\">22</em></div>"
@@ -1530,7 +1596,9 @@
                 1,
                 0
               ],
-              "text": "beta"
+              "text": "beta",
+              "parent_d": "1a",
+              "index": 0
             },
             {
               "type": "MoveSubtree",
@@ -1614,7 +1682,9 @@
                 1,
                 0
               ],
-              "text": "23"
+              "text": "23",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"tags\" dj-id=\"1\"><!--dj-if id=\"if-64179bfc-0-0\"--><span class=\"badge\" dj-id=\"1a\">beta</span><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-1\"--><span class=\"badge\" dj-id=\"1k\">alpha</span><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-2\"--><span class=\"badge\" dj-id=\"1l\">zeta</span><!--/dj-if--></p><em dj-id=\"2\">23</em></div>"
@@ -1721,7 +1791,9 @@
                 1,
                 0
               ],
-              "text": "24"
+              "text": "24",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"tags\" dj-id=\"1\"><!--dj-if id=\"if-64179bfc-0-0\"--><span class=\"badge\" dj-id=\"1a\">beta</span><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-1\"--><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-2\"--><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-3\"--><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-4\"--><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-5\"--><span class=\"badge\" dj-id=\"1q\">alpha</span><!--/dj-if--></p><em dj-id=\"2\">24</em></div>"
@@ -1735,7 +1807,9 @@
                 1,
                 0
               ],
-              "text": "25"
+              "text": "25",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"tags\" dj-id=\"1\"><!--dj-if id=\"if-64179bfc-0-0\"--><span class=\"badge\" dj-id=\"1a\">beta</span><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-1\"--><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-2\"--><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-3\"--><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-4\"--><!--/dj-if--> <!--dj-if id=\"if-64179bfc-0-5\"--><span class=\"badge\" dj-id=\"1q\">alpha</span><!--/dj-if--></p><em dj-id=\"2\">25</em></div>"
@@ -1823,7 +1897,9 @@
                 1,
                 0
               ],
-              "text": "26"
+              "text": "26",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"tags\" dj-id=\"1\"><!--dj-if id=\"if-64179bfc-0-0\"--><!--/dj-if--><!--dj-if id=\"if-64179bfc-0-1\"--><!--/dj-if--></p><em dj-id=\"2\">26</em></div>"
@@ -1837,7 +1913,9 @@
                 1,
                 0
               ],
-              "text": "27"
+              "text": "27",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"tags\" dj-id=\"1\"><!--dj-if id=\"if-64179bfc-0-0\"--><!--/dj-if--><!--dj-if id=\"if-64179bfc-0-1\"--><!--/dj-if--></p><em dj-id=\"2\">27</em></div>"
@@ -1851,7 +1929,9 @@
                 1,
                 0
               ],
-              "text": "28"
+              "text": "28",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"tags\" dj-id=\"1\"><!--dj-if id=\"if-64179bfc-0-0\"--><!--/dj-if--><!--dj-if id=\"if-64179bfc-0-1\"--><!--/dj-if--></p><em dj-id=\"2\">28</em></div>"
@@ -1865,7 +1945,9 @@
                 1,
                 0
               ],
-              "text": "29"
+              "text": "29",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"tags\" dj-id=\"1\"><!--dj-if id=\"if-64179bfc-0-0\"--><!--/dj-if--><!--dj-if id=\"if-64179bfc-0-1\"--><!--/dj-if--></p><em dj-id=\"2\">29</em></div>"
@@ -1879,7 +1961,9 @@
                 1,
                 0
               ],
-              "text": "30"
+              "text": "30",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"tags\" dj-id=\"1\"><!--dj-if id=\"if-64179bfc-0-0\"--><!--/dj-if--><!--dj-if id=\"if-64179bfc-0-1\"--><!--/dj-if--></p><em dj-id=\"2\">30</em></div>"
@@ -1899,7 +1983,9 @@
                 4,
                 0
               ],
-              "text": "1"
+              "text": "1",
+              "parent_d": "3",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-2ba75ff5-0-0\"--><span dj-id=\"2\">alpha</span><!--/dj-if--> <u dj-id=\"3\">1</u></p></div>"
@@ -1963,7 +2049,9 @@
                 2,
                 0
               ],
-              "text": "3"
+              "text": "3",
+              "parent_d": "6",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-2ba75ff5-0-0\"--><!--/dj-if--><u dj-id=\"6\">3</u></p></div>"
@@ -1978,7 +2066,9 @@
                 2,
                 0
               ],
-              "text": "4"
+              "text": "4",
+              "parent_d": "6",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-2ba75ff5-0-0\"--><!--/dj-if--><u dj-id=\"6\">4</u></p></div>"
@@ -2259,7 +2349,9 @@
                 20,
                 0
               ],
-              "text": "7"
+              "text": "7",
+              "parent_d": "g",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-2ba75ff5-0-0\"--><span dj-id=\"e\">beta</span><!--/dj-if--> <!--dj-if id=\"if-2ba75ff5-0-1\"--><!--/dj-if--> <!--dj-if id=\"if-2ba75ff5-0-2\"--><!--/dj-if--> <!--dj-if id=\"if-2ba75ff5-0-3\"--><!--/dj-if--> <!--dj-if id=\"if-2ba75ff5-0-4\"--><span dj-id=\"f\">delta</span><!--/dj-if--> <!--dj-if id=\"if-2ba75ff5-0-5\"--><!--/dj-if--> <u dj-id=\"g\">7</u></p></div>"
@@ -2274,7 +2366,9 @@
                 20,
                 0
               ],
-              "text": "8"
+              "text": "8",
+              "parent_d": "g",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-2ba75ff5-0-0\"--><span dj-id=\"e\">beta</span><!--/dj-if--> <!--dj-if id=\"if-2ba75ff5-0-1\"--><!--/dj-if--> <!--dj-if id=\"if-2ba75ff5-0-2\"--><!--/dj-if--> <!--dj-if id=\"if-2ba75ff5-0-3\"--><!--/dj-if--> <!--dj-if id=\"if-2ba75ff5-0-4\"--><span dj-id=\"f\">delta</span><!--/dj-if--> <!--dj-if id=\"if-2ba75ff5-0-5\"--><!--/dj-if--> <u dj-id=\"g\">8</u></p></div>"
@@ -2289,7 +2383,9 @@
                 20,
                 0
               ],
-              "text": "9"
+              "text": "9",
+              "parent_d": "g",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-2ba75ff5-0-0\"--><span dj-id=\"e\">beta</span><!--/dj-if--> <!--dj-if id=\"if-2ba75ff5-0-1\"--><!--/dj-if--> <!--dj-if id=\"if-2ba75ff5-0-2\"--><!--/dj-if--> <!--dj-if id=\"if-2ba75ff5-0-3\"--><!--/dj-if--> <!--dj-if id=\"if-2ba75ff5-0-4\"--><span dj-id=\"f\">delta</span><!--/dj-if--> <!--dj-if id=\"if-2ba75ff5-0-5\"--><!--/dj-if--> <u dj-id=\"g\">9</u></p></div>"
@@ -2365,7 +2461,9 @@
                 21,
                 0
               ],
-              "text": "10"
+              "text": "10",
+              "parent_d": "g",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-2ba75ff5-0-0\"--><span dj-id=\"e\">beta</span><!--/dj-if--> <!--dj-if id=\"if-2ba75ff5-0-1\"--><span dj-id=\"k\">zeta</span><!--/dj-if--> <!--dj-if id=\"if-2ba75ff5-0-2\"--><span dj-id=\"l\">eps</span><!--/dj-if--> <!--dj-if id=\"if-2ba75ff5-0-3\"--><!--/dj-if--> <!--dj-if id=\"if-2ba75ff5-0-4\"--><!--/dj-if--> <!--dj-if id=\"if-2ba75ff5-0-5\"--><!--/dj-if--> <u dj-id=\"g\">10</u></p></div>"
@@ -2489,7 +2587,9 @@
                 2,
                 0
               ],
-              "text": "12"
+              "text": "12",
+              "parent_d": "p",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-2ba75ff5-0-0\"--><!--/dj-if--><u dj-id=\"p\">12</u></p></div>"
@@ -2702,7 +2802,9 @@
                 23,
                 0
               ],
-              "text": "14"
+              "text": "14",
+              "parent_d": "x",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-2ba75ff5-0-0\"--><span dj-id=\"s\">delta</span><!--/dj-if--> <!--dj-if id=\"if-2ba75ff5-0-1\"--><span dj-id=\"t\">alpha</span><!--/dj-if--> <!--dj-if id=\"if-2ba75ff5-0-2\"--><span dj-id=\"u\">beta</span><!--/dj-if--> <!--dj-if id=\"if-2ba75ff5-0-3\"--><span dj-id=\"v\">zeta</span><!--/dj-if--> <!--dj-if id=\"if-2ba75ff5-0-4\"--><span dj-id=\"w\">eps</span><!--/dj-if--> <!--dj-if id=\"if-2ba75ff5-0-5\"--><!--/dj-if--> <u dj-id=\"x\">14</u></p></div>"
@@ -2717,7 +2819,9 @@
                 23,
                 0
               ],
-              "text": "15"
+              "text": "15",
+              "parent_d": "x",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-2ba75ff5-0-0\"--><span dj-id=\"s\">delta</span><!--/dj-if--> <!--dj-if id=\"if-2ba75ff5-0-1\"--><span dj-id=\"t\">alpha</span><!--/dj-if--> <!--dj-if id=\"if-2ba75ff5-0-2\"--><span dj-id=\"u\">beta</span><!--/dj-if--> <!--dj-if id=\"if-2ba75ff5-0-3\"--><span dj-id=\"v\">zeta</span><!--/dj-if--> <!--dj-if id=\"if-2ba75ff5-0-4\"--><span dj-id=\"w\">eps</span><!--/dj-if--> <!--dj-if id=\"if-2ba75ff5-0-5\"--><!--/dj-if--> <u dj-id=\"x\">15</u></p></div>"
@@ -2777,7 +2881,9 @@
                 10,
                 0
               ],
-              "text": "beta"
+              "text": "beta",
+              "parent_d": "v",
+              "index": 0
             },
             {
               "type": "MoveSubtree",
@@ -2795,7 +2901,9 @@
                 14,
                 0
               ],
-              "text": "gamma"
+              "text": "gamma",
+              "parent_d": "w",
+              "index": 0
             },
             {
               "type": "RemoveSubtree",
@@ -3032,7 +3140,9 @@
                 9,
                 0
               ],
-              "text": "19"
+              "text": "19",
+              "parent_d": "K",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-2ba75ff5-0-0\"--><!--/dj-if--><!--dj-if id=\"if-2ba75ff5-0-1\"--><span dj-id=\"J\">eps</span><!--/dj-if--> <!--dj-if id=\"if-2ba75ff5-0-2\"--><!--/dj-if--> <u dj-id=\"K\">19</u></p></div>"
@@ -3082,7 +3192,9 @@
                 5,
                 0
               ],
-              "text": "alpha"
+              "text": "alpha",
+              "parent_d": "J",
+              "index": 0
             },
             {
               "type": "MoveSubtree",
@@ -3223,7 +3335,9 @@
                 19,
                 0
               ],
-              "text": "21"
+              "text": "21",
+              "parent_d": "R",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-2ba75ff5-0-0\"--><span dj-id=\"N\">zeta</span><!--/dj-if--> <!--dj-if id=\"if-2ba75ff5-0-1\"--><span dj-id=\"J\">alpha</span><!--/dj-if--> <!--dj-if id=\"if-2ba75ff5-0-2\"--><span dj-id=\"P\">gamma</span><!--/dj-if--> <!--dj-if id=\"if-2ba75ff5-0-3\"--><span dj-id=\"Q\">beta</span><!--/dj-if--> <!--dj-if id=\"if-2ba75ff5-0-4\"--><!--/dj-if--> <u dj-id=\"R\">21</u></p></div>"
@@ -3238,7 +3352,9 @@
                 19,
                 0
               ],
-              "text": "22"
+              "text": "22",
+              "parent_d": "R",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-2ba75ff5-0-0\"--><span dj-id=\"N\">zeta</span><!--/dj-if--> <!--dj-if id=\"if-2ba75ff5-0-1\"--><span dj-id=\"J\">alpha</span><!--/dj-if--> <!--dj-if id=\"if-2ba75ff5-0-2\"--><span dj-id=\"P\">gamma</span><!--/dj-if--> <!--dj-if id=\"if-2ba75ff5-0-3\"--><span dj-id=\"Q\">beta</span><!--/dj-if--> <!--dj-if id=\"if-2ba75ff5-0-4\"--><!--/dj-if--> <u dj-id=\"R\">22</u></p></div>"
@@ -3253,7 +3369,9 @@
                 1,
                 0
               ],
-              "text": "beta"
+              "text": "beta",
+              "parent_d": "N",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -3262,7 +3380,9 @@
                 5,
                 0
               ],
-              "text": "zeta"
+              "text": "zeta",
+              "parent_d": "J",
+              "index": 0
             },
             {
               "type": "RemoveSubtree",
@@ -3339,7 +3459,9 @@
                 8,
                 0
               ],
-              "text": "24"
+              "text": "24",
+              "parent_d": "W",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-2ba75ff5-0-0\"--><span dj-id=\"N\">beta</span><!--/dj-if--> <!--dj-if id=\"if-2ba75ff5-0-1\"--><span dj-id=\"J\">zeta</span><!--/dj-if--> <u dj-id=\"W\">24</u></p></div>"
@@ -3538,7 +3660,9 @@
                 11,
                 0
               ],
-              "text": "27"
+              "text": "27",
+              "parent_d": "14",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-2ba75ff5-0-0\"--><span dj-id=\"12\">alpha</span><!--/dj-if--> <!--dj-if id=\"if-2ba75ff5-0-1\"--><span dj-id=\"13\">delta</span><!--/dj-if--> <!--dj-if id=\"if-2ba75ff5-0-2\"--><!--/dj-if--> <u dj-id=\"14\">27</u></p></div>"
@@ -3553,7 +3677,9 @@
                 1,
                 0
               ],
-              "text": "beta"
+              "text": "beta",
+              "parent_d": "12",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -3562,7 +3688,9 @@
                 5,
                 0
               ],
-              "text": "zeta"
+              "text": "zeta",
+              "parent_d": "13",
+              "index": 0
             },
             {
               "type": "InsertSubtree",
@@ -3628,7 +3756,9 @@
                 14,
                 0
               ],
-              "text": "29"
+              "text": "29",
+              "parent_d": "19",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-2ba75ff5-0-0\"--><span dj-id=\"12\">beta</span><!--/dj-if--> <!--dj-if id=\"if-2ba75ff5-0-1\"--><span dj-id=\"13\">zeta</span><!--/dj-if--> <!--dj-if id=\"if-2ba75ff5-0-2\"--><!--/dj-if--> <!--dj-if id=\"if-2ba75ff5-0-3\"--><!--/dj-if--> <u dj-id=\"19\">29</u></p></div>"
@@ -3643,7 +3773,9 @@
                 1,
                 0
               ],
-              "text": "eps"
+              "text": "eps",
+              "parent_d": "12",
+              "index": 0
             },
             {
               "type": "RemoveSubtree",
@@ -3725,7 +3857,9 @@
                 0,
                 0
               ],
-              "text": "1"
+              "text": "1",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><u dj-id=\"2\">1</u></p></div>"
@@ -3740,7 +3874,9 @@
                 0,
                 0
               ],
-              "text": "2"
+              "text": "2",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><u dj-id=\"2\">2</u></p></div>"
@@ -3755,7 +3891,9 @@
                 0,
                 0
               ],
-              "text": "3"
+              "text": "3",
+              "parent_d": "2",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><u dj-id=\"2\">3</u></p></div>"
@@ -3902,7 +4040,9 @@
                 16,
                 0
               ],
-              "text": "5"
+              "text": "5",
+              "parent_d": "9",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-d51ddb54-0-0\"--><b dj-id=\"5\" dj-key=\"beta\">beta</b><!--/dj-if--> <!--dj-if id=\"if-d51ddb54-0-1\"--><b dj-id=\"6\" dj-key=\"gamma\">gamma</b><!--/dj-if--> <!--dj-if id=\"if-d51ddb54-0-2\"--><b dj-id=\"7\" dj-key=\"alpha\">alpha</b><!--/dj-if--> <!--dj-if id=\"if-d51ddb54-0-3\"--><b dj-id=\"8\" dj-key=\"eps\">eps</b><!--/dj-if--> <u dj-id=\"9\">5</u></p></div>"
@@ -3917,7 +4057,9 @@
                 16,
                 0
               ],
-              "text": "6"
+              "text": "6",
+              "parent_d": "9",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-d51ddb54-0-0\"--><b dj-id=\"5\" dj-key=\"beta\">beta</b><!--/dj-if--> <!--dj-if id=\"if-d51ddb54-0-1\"--><b dj-id=\"6\" dj-key=\"gamma\">gamma</b><!--/dj-if--> <!--dj-if id=\"if-d51ddb54-0-2\"--><b dj-id=\"7\" dj-key=\"alpha\">alpha</b><!--/dj-if--> <!--dj-if id=\"if-d51ddb54-0-3\"--><b dj-id=\"8\" dj-key=\"eps\">eps</b><!--/dj-if--> <u dj-id=\"9\">6</u></p></div>"
@@ -4060,7 +4202,9 @@
                 8,
                 0
               ],
-              "text": "8"
+              "text": "8",
+              "parent_d": "e",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-d51ddb54-0-0\"--><b dj-id=\"c\" dj-key=\"delta\">delta</b><!--/dj-if--> <!--dj-if id=\"if-d51ddb54-0-1\"--><b dj-id=\"d\" dj-key=\"beta\">beta</b><!--/dj-if--> <u dj-id=\"e\">8</u></p></div>"
@@ -4075,7 +4219,9 @@
                 8,
                 0
               ],
-              "text": "9"
+              "text": "9",
+              "parent_d": "e",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-d51ddb54-0-0\"--><b dj-id=\"c\" dj-key=\"delta\">delta</b><!--/dj-if--> <!--dj-if id=\"if-d51ddb54-0-1\"--><b dj-id=\"d\" dj-key=\"beta\">beta</b><!--/dj-if--> <u dj-id=\"e\">9</u></p></div>"
@@ -4289,7 +4435,9 @@
                 6,
                 0
               ],
-              "text": "12"
+              "text": "12",
+              "parent_d": "o",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-d51ddb54-0-0\"--><!--/dj-if--><!--dj-if id=\"if-d51ddb54-0-1\"--><b dj-id=\"n\" dj-key=\"zeta\">zeta</b><!--/dj-if--> <u dj-id=\"o\">12</u></p></div>"
@@ -4447,7 +4595,9 @@
                 16,
                 0
               ],
-              "text": "14"
+              "text": "14",
+              "parent_d": "t",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-d51ddb54-0-0\"--><!--/dj-if--><!--dj-if id=\"if-d51ddb54-0-1\"--><b dj-id=\"r\" dj-key=\"alpha\">alpha</b><!--/dj-if--> <!--dj-if id=\"if-d51ddb54-0-2\"--><!--/dj-if--> <!--dj-if id=\"if-d51ddb54-0-3\"--><b dj-id=\"s\" dj-key=\"gamma\">gamma</b><!--/dj-if--> <!--dj-if id=\"if-d51ddb54-0-4\"--><!--/dj-if--> <u dj-id=\"t\">14</u></p></div>"
@@ -4796,7 +4946,9 @@
                 18,
                 0
               ],
-              "text": "17"
+              "text": "17",
+              "parent_d": "C",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-d51ddb54-0-0\"--><!--/dj-if--><!--dj-if id=\"if-d51ddb54-0-1\"--><!--/dj-if--><!--dj-if id=\"if-d51ddb54-0-2\"--><b dj-id=\"F\" dj-key=\"eps\">eps</b><!--/dj-if--> <!--dj-if id=\"if-d51ddb54-0-3\"--><!--/dj-if--> <!--dj-if id=\"if-d51ddb54-0-4\"--><!--/dj-if--> <!--dj-if id=\"if-d51ddb54-0-5\"--><b dj-id=\"G\" dj-key=\"gamma\">gamma</b><!--/dj-if--> <u dj-id=\"C\">17</u></p></div>"
@@ -4811,7 +4963,9 @@
                 18,
                 0
               ],
-              "text": "18"
+              "text": "18",
+              "parent_d": "C",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-d51ddb54-0-0\"--><!--/dj-if--><!--dj-if id=\"if-d51ddb54-0-1\"--><!--/dj-if--><!--dj-if id=\"if-d51ddb54-0-2\"--><b dj-id=\"F\" dj-key=\"eps\">eps</b><!--/dj-if--> <!--dj-if id=\"if-d51ddb54-0-3\"--><!--/dj-if--> <!--dj-if id=\"if-d51ddb54-0-4\"--><!--/dj-if--> <!--dj-if id=\"if-d51ddb54-0-5\"--><b dj-id=\"G\" dj-key=\"gamma\">gamma</b><!--/dj-if--> <u dj-id=\"C\">18</u></p></div>"
@@ -4826,7 +4980,9 @@
                 18,
                 0
               ],
-              "text": "19"
+              "text": "19",
+              "parent_d": "C",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-d51ddb54-0-0\"--><!--/dj-if--><!--dj-if id=\"if-d51ddb54-0-1\"--><!--/dj-if--><!--dj-if id=\"if-d51ddb54-0-2\"--><b dj-id=\"F\" dj-key=\"eps\">eps</b><!--/dj-if--> <!--dj-if id=\"if-d51ddb54-0-3\"--><!--/dj-if--> <!--dj-if id=\"if-d51ddb54-0-4\"--><!--/dj-if--> <!--dj-if id=\"if-d51ddb54-0-5\"--><b dj-id=\"G\" dj-key=\"gamma\">gamma</b><!--/dj-if--> <u dj-id=\"C\">19</u></p></div>"
@@ -5069,7 +5225,9 @@
                 0,
                 0
               ],
-              "text": "22"
+              "text": "22",
+              "parent_d": "Q",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><u dj-id=\"Q\">22</u></p></div>"
@@ -5443,7 +5601,9 @@
                 14,
                 0
               ],
-              "text": "26"
+              "text": "26",
+              "parent_d": "15",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-d51ddb54-0-0\"--><!--/dj-if--><!--dj-if id=\"if-d51ddb54-0-1\"--><b dj-id=\"Y\" dj-key=\"delta\">delta</b><!--/dj-if--> <!--dj-if id=\"if-d51ddb54-0-2\"--><b dj-id=\"13\" dj-key=\"gamma\">gamma</b><!--/dj-if--> <!--dj-if id=\"if-d51ddb54-0-3\"--><b dj-id=\"14\" dj-key=\"eps\">eps</b><!--/dj-if--> <u dj-id=\"15\">26</u></p></div>"
@@ -5458,7 +5618,9 @@
                 14,
                 0
               ],
-              "text": "27"
+              "text": "27",
+              "parent_d": "15",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-d51ddb54-0-0\"--><!--/dj-if--><!--dj-if id=\"if-d51ddb54-0-1\"--><b dj-id=\"Y\" dj-key=\"delta\">delta</b><!--/dj-if--> <!--dj-if id=\"if-d51ddb54-0-2\"--><b dj-id=\"13\" dj-key=\"gamma\">gamma</b><!--/dj-if--> <!--dj-if id=\"if-d51ddb54-0-3\"--><b dj-id=\"14\" dj-key=\"eps\">eps</b><!--/dj-if--> <u dj-id=\"15\">27</u></p></div>"
@@ -5545,7 +5707,9 @@
                 0,
                 0
               ],
-              "text": "29"
+              "text": "29",
+              "parent_d": "18",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><u dj-id=\"18\">29</u></p></div>"
@@ -5560,7 +5724,9 @@
                 0,
                 0
               ],
-              "text": "30"
+              "text": "30",
+              "parent_d": "18",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><u dj-id=\"18\">30</u></p></div>"
@@ -5580,7 +5746,9 @@
                 24,
                 0
               ],
-              "text": "1"
+              "text": "1",
+              "parent_d": "a",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><span dj-id=\"2\">beta</span><!--dj-if id=\"if-c5368f91-0-0\"--> <s dj-id=\"3\">old</s><!--/dj-if--> <span dj-id=\"4\">eps</span><!--dj-if id=\"if-c5368f91-0-1\"--> <em dj-id=\"5\">new</em><!--/dj-if--> <span dj-id=\"6\">zeta</span><!--dj-if id=\"if-c5368f91-0-2\"--> <em dj-id=\"7\">new</em><!--/dj-if--> <span dj-id=\"8\">alpha</span><!--dj-if id=\"if-c5368f91-0-3\"--> <s dj-id=\"9\">old</s><!--/dj-if--> <u dj-id=\"a\">1</u></p></div>"
@@ -5667,7 +5835,9 @@
                 0,
                 0
               ],
-              "text": "eps"
+              "text": "eps",
+              "parent_d": "2",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -5676,7 +5846,9 @@
                 6,
                 0
               ],
-              "text": "gamma"
+              "text": "gamma",
+              "parent_d": "4",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -5685,7 +5857,9 @@
                 12,
                 0
               ],
-              "text": "delta"
+              "text": "delta",
+              "parent_d": "6",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -5694,7 +5868,9 @@
                 18,
                 0
               ],
-              "text": "zeta"
+              "text": "zeta",
+              "parent_d": "8",
+              "index": 0
             },
             {
               "type": "Replace",
@@ -5817,7 +5993,9 @@
                 36,
                 0
               ],
-              "text": "3"
+              "text": "3",
+              "parent_d": "p",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><span dj-id=\"2\">eps</span><!--dj-if id=\"if-c5368f91-0-0\"--> <em dj-id=\"e\">new</em><!--/dj-if--> <span dj-id=\"4\">gamma</span><!--dj-if id=\"if-c5368f91-0-1\"--> <em dj-id=\"5\">new</em><!--/dj-if--> <span dj-id=\"6\">delta</span><!--dj-if id=\"if-c5368f91-0-2\"--> <em dj-id=\"7\">new</em><!--/dj-if--> <span dj-id=\"8\">zeta</span><!--dj-if id=\"if-c5368f91-0-3\"--> <em dj-id=\"k\">new</em><!--/dj-if--> <span dj-id=\"l\">beta</span><!--dj-if id=\"if-c5368f91-0-4\"--> <s dj-id=\"m\">old</s><!--/dj-if--> <span dj-id=\"n\">alpha</span><!--dj-if id=\"if-c5368f91-0-5\"--> <em dj-id=\"o\">new</em><!--/dj-if--> <u dj-id=\"p\">3</u></p></div>"
@@ -5866,7 +6044,9 @@
                 0,
                 0
               ],
-              "text": "beta"
+              "text": "beta",
+              "parent_d": "2",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -5875,7 +6055,9 @@
                 6,
                 0
               ],
-              "text": "eps"
+              "text": "eps",
+              "parent_d": "4",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -5884,7 +6066,9 @@
                 12,
                 0
               ],
-              "text": "alpha"
+              "text": "alpha",
+              "parent_d": "6",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -5893,7 +6077,9 @@
                 18,
                 0
               ],
-              "text": "delta"
+              "text": "delta",
+              "parent_d": "8",
+              "index": 0
             },
             {
               "type": "Replace",
@@ -5968,7 +6154,9 @@
                 24,
                 0
               ],
-              "text": "5"
+              "text": "5",
+              "parent_d": "A",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><span dj-id=\"2\">beta</span><!--dj-if id=\"if-c5368f91-0-0\"--> <em dj-id=\"e\">new</em><!--/dj-if--> <span dj-id=\"4\">eps</span><!--dj-if id=\"if-c5368f91-0-1\"--> <em dj-id=\"5\">new</em><!--/dj-if--> <span dj-id=\"6\">alpha</span><!--dj-if id=\"if-c5368f91-0-2\"--> <s dj-id=\"x\">old</s><!--/dj-if--> <span dj-id=\"8\">delta</span><!--dj-if id=\"if-c5368f91-0-3\"--> <em dj-id=\"k\">new</em><!--/dj-if--> <u dj-id=\"A\">5</u></p></div>"
@@ -6039,7 +6227,9 @@
                 0,
                 0
               ],
-              "text": "zeta"
+              "text": "zeta",
+              "parent_d": "2",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -6048,7 +6238,9 @@
                 6,
                 0
               ],
-              "text": "delta"
+              "text": "delta",
+              "parent_d": "4",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -6057,7 +6249,9 @@
                 12,
                 0
               ],
-              "text": "beta"
+              "text": "beta",
+              "parent_d": "6",
+              "index": 0
             },
             {
               "type": "Replace",
@@ -6171,7 +6365,9 @@
                 6,
                 0
               ],
-              "text": "alpha"
+              "text": "alpha",
+              "parent_d": "4",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -6180,7 +6376,9 @@
                 12,
                 0
               ],
-              "text": "delta"
+              "text": "delta",
+              "parent_d": "6",
+              "index": 0
             },
             {
               "type": "Replace",
@@ -6452,7 +6650,9 @@
                 6,
                 0
               ],
-              "text": "gamma"
+              "text": "gamma",
+              "parent_d": "4",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -6461,7 +6661,9 @@
                 18,
                 0
               ],
-              "text": "beta"
+              "text": "beta",
+              "parent_d": "S",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -6470,7 +6672,9 @@
                 24,
                 0
               ],
-              "text": "eps"
+              "text": "eps",
+              "parent_d": "U",
+              "index": 0
             },
             {
               "type": "Replace",
@@ -6584,7 +6788,9 @@
                 6,
                 0
               ],
-              "text": "delta"
+              "text": "delta",
+              "parent_d": "4",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -6593,7 +6799,9 @@
                 12,
                 0
               ],
-              "text": "gamma"
+              "text": "gamma",
+              "parent_d": "6",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -6602,7 +6810,9 @@
                 18,
                 0
               ],
-              "text": "eps"
+              "text": "eps",
+              "parent_d": "S",
+              "index": 0
             },
             {
               "type": "Replace",
@@ -6660,7 +6870,9 @@
                 24,
                 0
               ],
-              "text": "10"
+              "text": "10",
+              "parent_d": "1m",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><span dj-id=\"2\">zeta</span><!--dj-if id=\"if-c5368f91-0-0\"--> <s dj-id=\"12\">old</s><!--/dj-if--> <span dj-id=\"4\">delta</span><!--dj-if id=\"if-c5368f91-0-1\"--> <em dj-id=\"5\">new</em><!--/dj-if--> <span dj-id=\"6\">gamma</span><!--dj-if id=\"if-c5368f91-0-2\"--> <em dj-id=\"1j\">new</em><!--/dj-if--> <span dj-id=\"S\">eps</span><!--dj-if id=\"if-c5368f91-0-3\"--> <em dj-id=\"1l\">new</em><!--/dj-if--> <u dj-id=\"1m\">10</u></p></div>"
@@ -6791,7 +7003,9 @@
                 0,
                 0
               ],
-              "text": "12"
+              "text": "12",
+              "parent_d": "1p",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><u dj-id=\"1p\">12</u></p></div>"
@@ -6940,7 +7154,9 @@
                 12,
                 0
               ],
-              "text": "14"
+              "text": "14",
+              "parent_d": "1w",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><span dj-id=\"1s\">gamma</span><!--dj-if id=\"if-c5368f91-0-0\"--> <s dj-id=\"1t\">old</s><!--/dj-if--> <span dj-id=\"1u\">beta</span><!--dj-if id=\"if-c5368f91-0-1\"--> <em dj-id=\"1v\">new</em><!--/dj-if--> <u dj-id=\"1w\">14</u></p></div>"
@@ -6959,7 +7175,9 @@
                 0,
                 0
               ],
-              "text": "zeta"
+              "text": "zeta",
+              "parent_d": "1s",
+              "index": 0
             },
             {
               "type": "Replace",
@@ -7043,7 +7261,9 @@
                 0,
                 0
               ],
-              "text": "alpha"
+              "text": "alpha",
+              "parent_d": "1s",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -7052,7 +7272,9 @@
                 6,
                 0
               ],
-              "text": "16"
+              "text": "16",
+              "parent_d": "1B",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><span dj-id=\"1s\">alpha</span><!--dj-if id=\"if-c5368f91-0-0\"--> <em dj-id=\"1F\">new</em><!--/dj-if--> <u dj-id=\"1B\">16</u></p></div>"
@@ -7117,7 +7339,9 @@
                 0,
                 0
               ],
-              "text": "delta"
+              "text": "delta",
+              "parent_d": "1s",
+              "index": 0
             },
             {
               "type": "Replace",
@@ -7467,7 +7691,9 @@
                 0,
                 0
               ],
-              "text": "zeta"
+              "text": "zeta",
+              "parent_d": "1s",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -7476,7 +7702,9 @@
                 6,
                 0
               ],
-              "text": "delta"
+              "text": "delta",
+              "parent_d": "1L",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -7485,7 +7713,9 @@
                 12,
                 0
               ],
-              "text": "alpha"
+              "text": "alpha",
+              "parent_d": "1N",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -7494,7 +7724,9 @@
                 18,
                 0
               ],
-              "text": "gamma"
+              "text": "gamma",
+              "parent_d": "1P",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -7503,7 +7735,9 @@
                 24,
                 0
               ],
-              "text": "beta"
+              "text": "beta",
+              "parent_d": "1R",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -7512,7 +7746,9 @@
                 30,
                 0
               ],
-              "text": "eps"
+              "text": "eps",
+              "parent_d": "1T",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -7521,7 +7757,9 @@
                 36,
                 0
               ],
-              "text": "18"
+              "text": "18",
+              "parent_d": "1V",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><span dj-id=\"1s\">zeta</span><!--dj-if id=\"if-c5368f91-0-0\"--> <em dj-id=\"1F\">new</em><!--/dj-if--> <span dj-id=\"1L\">delta</span><!--dj-if id=\"if-c5368f91-0-1\"--> <em dj-id=\"1M\">new</em><!--/dj-if--> <span dj-id=\"1N\">alpha</span><!--dj-if id=\"if-c5368f91-0-2\"--> <s dj-id=\"23\">old</s><!--/dj-if--> <span dj-id=\"1P\">gamma</span><!--dj-if id=\"if-c5368f91-0-3\"--> <s dj-id=\"25\">old</s><!--/dj-if--> <span dj-id=\"1R\">beta</span><!--dj-if id=\"if-c5368f91-0-4\"--> <em dj-id=\"27\">new</em><!--/dj-if--> <span dj-id=\"1T\">eps</span><!--dj-if id=\"if-c5368f91-0-5\"--> <em dj-id=\"29\">new</em><!--/dj-if--> <u dj-id=\"1V\">18</u></p></div>"
@@ -7578,7 +7816,9 @@
                 0,
                 0
               ],
-              "text": "alpha"
+              "text": "alpha",
+              "parent_d": "1s",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -7587,7 +7827,9 @@
                 6,
                 0
               ],
-              "text": "zeta"
+              "text": "zeta",
+              "parent_d": "1L",
+              "index": 0
             },
             {
               "type": "Replace",
@@ -7696,7 +7938,9 @@
                 12,
                 0
               ],
-              "text": "20"
+              "text": "20",
+              "parent_d": "2h",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><span dj-id=\"1s\">alpha</span><!--dj-if id=\"if-c5368f91-0-0\"--> <em dj-id=\"1F\">new</em><!--/dj-if--> <span dj-id=\"1L\">zeta</span><!--dj-if id=\"if-c5368f91-0-1\"--> <s dj-id=\"2g\">old</s><!--/dj-if--> <u dj-id=\"2h\">20</u></p></div>"
@@ -7737,7 +7981,9 @@
                 6,
                 0
               ],
-              "text": "eps"
+              "text": "eps",
+              "parent_d": "1L",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -7746,7 +7992,9 @@
                 12,
                 0
               ],
-              "text": "21"
+              "text": "21",
+              "parent_d": "2h",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><span dj-id=\"1s\">alpha</span><!--dj-if id=\"if-c5368f91-0-0\"--> <em dj-id=\"1F\">new</em><!--/dj-if--> <span dj-id=\"1L\">eps</span><!--dj-if id=\"if-c5368f91-0-1\"--> <em dj-id=\"2n\">new</em><!--/dj-if--> <u dj-id=\"2h\">21</u></p></div>"
@@ -7761,7 +8009,9 @@
                 12,
                 0
               ],
-              "text": "22"
+              "text": "22",
+              "parent_d": "2h",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><span dj-id=\"1s\">alpha</span><!--dj-if id=\"if-c5368f91-0-0\"--> <em dj-id=\"1F\">new</em><!--/dj-if--> <span dj-id=\"1L\">eps</span><!--dj-if id=\"if-c5368f91-0-1\"--> <em dj-id=\"2n\">new</em><!--/dj-if--> <u dj-id=\"2h\">22</u></p></div>"
@@ -7776,7 +8026,9 @@
                 12,
                 0
               ],
-              "text": "23"
+              "text": "23",
+              "parent_d": "2h",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><span dj-id=\"1s\">alpha</span><!--dj-if id=\"if-c5368f91-0-0\"--> <em dj-id=\"1F\">new</em><!--/dj-if--> <span dj-id=\"1L\">eps</span><!--dj-if id=\"if-c5368f91-0-1\"--> <em dj-id=\"2n\">new</em><!--/dj-if--> <u dj-id=\"2h\">23</u></p></div>"
@@ -7817,7 +8069,9 @@
                 0,
                 0
               ],
-              "text": "delta"
+              "text": "delta",
+              "parent_d": "1s",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -7826,7 +8080,9 @@
                 6,
                 0
               ],
-              "text": "gamma"
+              "text": "gamma",
+              "parent_d": "1L",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -7835,7 +8091,9 @@
                 12,
                 0
               ],
-              "text": "24"
+              "text": "24",
+              "parent_d": "2h",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><span dj-id=\"1s\">delta</span><!--dj-if id=\"if-c5368f91-0-0\"--> <s dj-id=\"2s\">old</s><!--/dj-if--> <span dj-id=\"1L\">gamma</span><!--dj-if id=\"if-c5368f91-0-1\"--> <em dj-id=\"2n\">new</em><!--/dj-if--> <u dj-id=\"2h\">24</u></p></div>"
@@ -7916,7 +8174,9 @@
                 0,
                 0
               ],
-              "text": "beta"
+              "text": "beta",
+              "parent_d": "1s",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -7925,7 +8185,9 @@
                 6,
                 0
               ],
-              "text": "alpha"
+              "text": "alpha",
+              "parent_d": "1L",
+              "index": 0
             },
             {
               "type": "Replace",
@@ -8130,7 +8392,9 @@
                 36,
                 0
               ],
-              "text": "26"
+              "text": "26",
+              "parent_d": "2K",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><span dj-id=\"1s\">beta</span><!--dj-if id=\"if-c5368f91-0-0\"--> <s dj-id=\"2s\">old</s><!--/dj-if--> <span dj-id=\"1L\">alpha</span><!--dj-if id=\"if-c5368f91-0-1\"--> <s dj-id=\"2B\">old</s><!--/dj-if--> <span dj-id=\"2C\">eps</span><!--dj-if id=\"if-c5368f91-0-2\"--> <s dj-id=\"2D\">old</s><!--/dj-if--> <span dj-id=\"2E\">zeta</span><!--dj-if id=\"if-c5368f91-0-3\"--> <em dj-id=\"2F\">new</em><!--/dj-if--> <span dj-id=\"2G\">delta</span><!--dj-if id=\"if-c5368f91-0-4\"--> <em dj-id=\"2H\">new</em><!--/dj-if--> <span dj-id=\"2I\">gamma</span><!--dj-if id=\"if-c5368f91-0-5\"--> <s dj-id=\"2J\">old</s><!--/dj-if--> <u dj-id=\"2K\">26</u></p></div>"
@@ -8205,7 +8469,9 @@
                 6,
                 0
               ],
-              "text": "delta"
+              "text": "delta",
+              "parent_d": "1L",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -8214,7 +8480,9 @@
                 12,
                 0
               ],
-              "text": "gamma"
+              "text": "gamma",
+              "parent_d": "2C",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -8223,7 +8491,9 @@
                 18,
                 0
               ],
-              "text": "alpha"
+              "text": "alpha",
+              "parent_d": "2E",
+              "index": 0
             },
             {
               "type": "Replace",
@@ -8360,7 +8630,9 @@
                 0,
                 0
               ],
-              "text": "gamma"
+              "text": "gamma",
+              "parent_d": "1s",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -8369,7 +8641,9 @@
                 6,
                 0
               ],
-              "text": "alpha"
+              "text": "alpha",
+              "parent_d": "1L",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -8378,7 +8652,9 @@
                 12,
                 0
               ],
-              "text": "delta"
+              "text": "delta",
+              "parent_d": "2C",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -8387,7 +8663,9 @@
                 18,
                 0
               ],
-              "text": "zeta"
+              "text": "zeta",
+              "parent_d": "2E",
+              "index": 0
             },
             {
               "type": "Replace",
@@ -8511,7 +8789,9 @@
                 0,
                 0
               ],
-              "text": "eps"
+              "text": "eps",
+              "parent_d": "1s",
+              "index": 0
             },
             {
               "type": "Replace",
@@ -8620,7 +8900,9 @@
                 6,
                 0
               ],
-              "text": "30"
+              "text": "30",
+              "parent_d": "3d",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><span dj-id=\"1s\">eps</span><!--dj-if id=\"if-c5368f91-0-0\"--> <s dj-id=\"3c\">old</s><!--/dj-if--> <u dj-id=\"3d\">30</u></p></div>"
@@ -8640,7 +8922,9 @@
                 1,
                 0
               ],
-              "text": "eps"
+              "text": "eps",
+              "parent_d": "2",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -8649,7 +8933,9 @@
                 4,
                 0
               ],
-              "text": "beta"
+              "text": "beta",
+              "parent_d": "3",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -8658,7 +8944,9 @@
                 8,
                 0
               ],
-              "text": "gamma"
+              "text": "gamma",
+              "parent_d": "4",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -8666,7 +8954,9 @@
                 1,
                 0
               ],
-              "text": "1"
+              "text": "1",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><!--dj-if id=\"if-b2f7df7d-0-0\"--><div dj-id=\"2\">eps</div><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-1\"--><span dj-id=\"3\">beta</span><!--/dj-if--> <!--dj-if id=\"if-b2f7df7d-0-2\"--><span dj-id=\"4\">gamma</span><!--/dj-if--></div><u dj-id=\"5\">1</u></div>"
@@ -8680,7 +8970,9 @@
                 1,
                 0
               ],
-              "text": "2"
+              "text": "2",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><!--dj-if id=\"if-b2f7df7d-0-0\"--><div dj-id=\"2\">eps</div><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-1\"--><span dj-id=\"3\">beta</span><!--/dj-if--> <!--dj-if id=\"if-b2f7df7d-0-2\"--><span dj-id=\"4\">gamma</span><!--/dj-if--></div><u dj-id=\"5\">2</u></div>"
@@ -8694,7 +8986,9 @@
                 1,
                 0
               ],
-              "text": "3"
+              "text": "3",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><!--dj-if id=\"if-b2f7df7d-0-0\"--><div dj-id=\"2\">eps</div><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-1\"--><span dj-id=\"3\">beta</span><!--/dj-if--> <!--dj-if id=\"if-b2f7df7d-0-2\"--><span dj-id=\"4\">gamma</span><!--/dj-if--></div><u dj-id=\"5\">3</u></div>"
@@ -8728,7 +9022,9 @@
                 1,
                 0
               ],
-              "text": "4"
+              "text": "4",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"></div><u dj-id=\"5\">4</u></div>"
@@ -8744,7 +9040,7 @@
               ],
               "d": "1",
               "index": 0,
-              "html": "<!--dj-if id=\"if-b2f7df7d-0-0\"--><div dj-id=\"h\">beta</div><!--/dj-if-->"
+              "html": "<!--dj-if id=\"if-b2f7df7d-0-0\"--><div dj-id=\"b\">beta</div><!--/dj-if-->"
             },
             {
               "type": "InsertSubtree",
@@ -8754,7 +9050,7 @@
               ],
               "d": "1",
               "index": 3,
-              "html": "<!--dj-if id=\"if-b2f7df7d-0-1\"--><div dj-id=\"i\">gamma</div><!--/dj-if-->"
+              "html": "<!--dj-if id=\"if-b2f7df7d-0-1\"--><div dj-id=\"c\">gamma</div><!--/dj-if-->"
             },
             {
               "type": "InsertSubtree",
@@ -8764,7 +9060,7 @@
               ],
               "d": "1",
               "index": 6,
-              "html": "<!--dj-if id=\"if-b2f7df7d-0-2\"--><span dj-id=\"j\">eps</span><!--/dj-if-->"
+              "html": "<!--dj-if id=\"if-b2f7df7d-0-2\"--><span dj-id=\"d\">eps</span><!--/dj-if-->"
             },
             {
               "type": "InsertSubtree",
@@ -8774,7 +9070,7 @@
               ],
               "d": "1",
               "index": 9,
-              "html": "<!--dj-if id=\"if-b2f7df7d-0-3\"--><div dj-id=\"k\">zeta</div><!--/dj-if-->"
+              "html": "<!--dj-if id=\"if-b2f7df7d-0-3\"--><div dj-id=\"e\">zeta</div><!--/dj-if-->"
             },
             {
               "type": "InsertSubtree",
@@ -8784,7 +9080,7 @@
               ],
               "d": "1",
               "index": 12,
-              "html": "<!--dj-if id=\"if-b2f7df7d-0-4\"--><div dj-id=\"l\">delta</div><!--/dj-if-->"
+              "html": "<!--dj-if id=\"if-b2f7df7d-0-4\"--><div dj-id=\"f\">delta</div><!--/dj-if-->"
             },
             {
               "type": "SetText",
@@ -8792,10 +9088,12 @@
                 1,
                 0
               ],
-              "text": "5"
+              "text": "5",
+              "parent_d": "5",
+              "index": 0
             }
           ],
-          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><!--dj-if id=\"if-b2f7df7d-0-0\"--><div dj-id=\"h\">beta</div><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-1\"--><div dj-id=\"i\">gamma</div><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-2\"--><span dj-id=\"j\">eps</span><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-3\"--><div dj-id=\"k\">zeta</div><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-4\"--><div dj-id=\"l\">delta</div><!--/dj-if--></div><u dj-id=\"5\">5</u></div>"
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><!--dj-if id=\"if-b2f7df7d-0-0\"--><div dj-id=\"b\">beta</div><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-1\"--><div dj-id=\"c\">gamma</div><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-2\"--><span dj-id=\"d\">eps</span><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-3\"--><div dj-id=\"e\">zeta</div><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-4\"--><div dj-id=\"f\">delta</div><!--/dj-if--></div><u dj-id=\"5\">5</u></div>"
         },
         {
           "label": "step 6",
@@ -8826,7 +9124,9 @@
                 1,
                 0
               ],
-              "text": "6"
+              "text": "6",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"></div><u dj-id=\"5\">6</u></div>"
@@ -8840,7 +9140,9 @@
                 1,
                 0
               ],
-              "text": "7"
+              "text": "7",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"></div><u dj-id=\"5\">7</u></div>"
@@ -8854,7 +9156,9 @@
                 1,
                 0
               ],
-              "text": "8"
+              "text": "8",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"></div><u dj-id=\"5\">8</u></div>"
@@ -8868,7 +9172,9 @@
                 1,
                 0
               ],
-              "text": "9"
+              "text": "9",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"></div><u dj-id=\"5\">9</u></div>"
@@ -8882,7 +9188,9 @@
                 1,
                 0
               ],
-              "text": "10"
+              "text": "10",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"></div><u dj-id=\"5\">10</u></div>"
@@ -8898,7 +9206,7 @@
               ],
               "d": "1",
               "index": 0,
-              "html": "<!--dj-if id=\"if-b2f7df7d-0-0\"--><div dj-id=\"s\">zeta</div><!--/dj-if-->"
+              "html": "<!--dj-if id=\"if-b2f7df7d-0-0\"--><div dj-id=\"m\">zeta</div><!--/dj-if-->"
             },
             {
               "type": "SetText",
@@ -8906,10 +9214,12 @@
                 1,
                 0
               ],
-              "text": "11"
+              "text": "11",
+              "parent_d": "5",
+              "index": 0
             }
           ],
-          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><!--dj-if id=\"if-b2f7df7d-0-0\"--><div dj-id=\"s\">zeta</div><!--/dj-if--></div><u dj-id=\"5\">11</u></div>"
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><!--dj-if id=\"if-b2f7df7d-0-0\"--><div dj-id=\"m\">zeta</div><!--/dj-if--></div><u dj-id=\"5\">11</u></div>"
         },
         {
           "label": "step 12",
@@ -8921,7 +9231,9 @@
                 1,
                 0
               ],
-              "text": "delta"
+              "text": "delta",
+              "parent_d": "m",
+              "index": 0
             },
             {
               "type": "InsertSubtree",
@@ -8931,7 +9243,7 @@
               ],
               "d": "1",
               "index": 3,
-              "html": "<!--dj-if id=\"if-b2f7df7d-0-1\"--><div dj-id=\"x\">beta</div><!--/dj-if-->"
+              "html": "<!--dj-if id=\"if-b2f7df7d-0-1\"--><div dj-id=\"r\">beta</div><!--/dj-if-->"
             },
             {
               "type": "InsertSubtree",
@@ -8941,7 +9253,7 @@
               ],
               "d": "1",
               "index": 6,
-              "html": "<!--dj-if id=\"if-b2f7df7d-0-2\"--><div dj-id=\"y\">alpha</div><!--/dj-if-->"
+              "html": "<!--dj-if id=\"if-b2f7df7d-0-2\"--><div dj-id=\"s\">alpha</div><!--/dj-if-->"
             },
             {
               "type": "InsertSubtree",
@@ -8951,7 +9263,7 @@
               ],
               "d": "1",
               "index": 9,
-              "html": "<!--dj-if id=\"if-b2f7df7d-0-3\"--><div dj-id=\"z\">gamma</div><!--/dj-if-->"
+              "html": "<!--dj-if id=\"if-b2f7df7d-0-3\"--><div dj-id=\"t\">gamma</div><!--/dj-if-->"
             },
             {
               "type": "SetText",
@@ -8959,10 +9271,12 @@
                 1,
                 0
               ],
-              "text": "12"
+              "text": "12",
+              "parent_d": "5",
+              "index": 0
             }
           ],
-          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><!--dj-if id=\"if-b2f7df7d-0-0\"--><div dj-id=\"s\">delta</div><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-1\"--><div dj-id=\"x\">beta</div><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-2\"--><div dj-id=\"y\">alpha</div><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-3\"--><div dj-id=\"z\">gamma</div><!--/dj-if--></div><u dj-id=\"5\">12</u></div>"
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><!--dj-if id=\"if-b2f7df7d-0-0\"--><div dj-id=\"m\">delta</div><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-1\"--><div dj-id=\"r\">beta</div><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-2\"--><div dj-id=\"s\">alpha</div><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-3\"--><div dj-id=\"t\">gamma</div><!--/dj-if--></div><u dj-id=\"5\">12</u></div>"
         },
         {
           "label": "step 13",
@@ -8973,10 +9287,12 @@
                 1,
                 0
               ],
-              "text": "13"
+              "text": "13",
+              "parent_d": "5",
+              "index": 0
             }
           ],
-          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><!--dj-if id=\"if-b2f7df7d-0-0\"--><div dj-id=\"s\">delta</div><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-1\"--><div dj-id=\"x\">beta</div><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-2\"--><div dj-id=\"y\">alpha</div><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-3\"--><div dj-id=\"z\">gamma</div><!--/dj-if--></div><u dj-id=\"5\">13</u></div>"
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><!--dj-if id=\"if-b2f7df7d-0-0\"--><div dj-id=\"m\">delta</div><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-1\"--><div dj-id=\"r\">beta</div><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-2\"--><div dj-id=\"s\">alpha</div><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-3\"--><div dj-id=\"t\">gamma</div><!--/dj-if--></div><u dj-id=\"5\">13</u></div>"
         },
         {
           "label": "step 14",
@@ -8987,11 +9303,11 @@
                 0,
                 1
               ],
-              "d": "s",
+              "d": "m",
               "node": {
                 "tag": "span",
                 "attrs": {
-                  "dj-id": "D"
+                  "dj-id": "x"
                 },
                 "children": [
                   {
@@ -9004,7 +9320,7 @@
                 ],
                 "text": null,
                 "key": null,
-                "djust_id": "D"
+                "djust_id": "x"
               }
             },
             {
@@ -9021,10 +9337,12 @@
                 1,
                 0
               ],
-              "text": "14"
+              "text": "14",
+              "parent_d": "5",
+              "index": 0
             }
           ],
-          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><!--dj-if id=\"if-b2f7df7d-0-0\"--><span dj-id=\"D\">gamma</span><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-1\"--><div dj-id=\"x\">beta</div><!--/dj-if--></div><u dj-id=\"5\">14</u></div>"
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><!--dj-if id=\"if-b2f7df7d-0-0\"--><span dj-id=\"x\">gamma</span><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-1\"--><div dj-id=\"r\">beta</div><!--/dj-if--></div><u dj-id=\"5\">14</u></div>"
         },
         {
           "label": "step 15",
@@ -9035,11 +9353,11 @@
                 0,
                 1
               ],
-              "d": "D",
+              "d": "x",
               "node": {
                 "tag": "div",
                 "attrs": {
-                  "dj-id": "I"
+                  "dj-id": "C"
                 },
                 "children": [
                   {
@@ -9052,7 +9370,7 @@
                 ],
                 "text": null,
                 "key": null,
-                "djust_id": "I"
+                "djust_id": "C"
               }
             },
             {
@@ -9062,7 +9380,9 @@
                 4,
                 0
               ],
-              "text": "zeta"
+              "text": "zeta",
+              "parent_d": "r",
+              "index": 0
             },
             {
               "type": "InsertSubtree",
@@ -9072,7 +9392,7 @@
               ],
               "d": "1",
               "index": 6,
-              "html": "<!--dj-if id=\"if-b2f7df7d-0-2\"--><div dj-id=\"K\">eps</div><!--/dj-if-->"
+              "html": "<!--dj-if id=\"if-b2f7df7d-0-2\"--><div dj-id=\"E\">eps</div><!--/dj-if-->"
             },
             {
               "type": "InsertSubtree",
@@ -9082,7 +9402,7 @@
               ],
               "d": "1",
               "index": 9,
-              "html": "<!--dj-if id=\"if-b2f7df7d-0-3\"--><span dj-id=\"L\">delta</span><!--/dj-if-->"
+              "html": "<!--dj-if id=\"if-b2f7df7d-0-3\"--><span dj-id=\"F\">delta</span><!--/dj-if-->"
             },
             {
               "type": "SetText",
@@ -9090,10 +9410,12 @@
                 1,
                 0
               ],
-              "text": "15"
+              "text": "15",
+              "parent_d": "5",
+              "index": 0
             }
           ],
-          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><!--dj-if id=\"if-b2f7df7d-0-0\"--><div dj-id=\"I\">alpha</div><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-1\"--><div dj-id=\"x\">zeta</div><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-2\"--><div dj-id=\"K\">eps</div><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-3\"--><span dj-id=\"L\">delta</span><!--/dj-if--></div><u dj-id=\"5\">15</u></div>"
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><!--dj-if id=\"if-b2f7df7d-0-0\"--><div dj-id=\"C\">alpha</div><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-1\"--><div dj-id=\"r\">zeta</div><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-2\"--><div dj-id=\"E\">eps</div><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-3\"--><span dj-id=\"F\">delta</span><!--/dj-if--></div><u dj-id=\"5\">15</u></div>"
         },
         {
           "label": "step 16",
@@ -9105,7 +9427,9 @@
                 1,
                 0
               ],
-              "text": "beta"
+              "text": "beta",
+              "parent_d": "C",
+              "index": 0
             },
             {
               "type": "RemoveSubtree",
@@ -9125,10 +9449,12 @@
                 1,
                 0
               ],
-              "text": "16"
+              "text": "16",
+              "parent_d": "5",
+              "index": 0
             }
           ],
-          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><!--dj-if id=\"if-b2f7df7d-0-0\"--><div dj-id=\"I\">beta</div><!--/dj-if--></div><u dj-id=\"5\">16</u></div>"
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><!--dj-if id=\"if-b2f7df7d-0-0\"--><div dj-id=\"C\">beta</div><!--/dj-if--></div><u dj-id=\"5\">16</u></div>"
         },
         {
           "label": "step 17",
@@ -9139,10 +9465,12 @@
                 1,
                 0
               ],
-              "text": "17"
+              "text": "17",
+              "parent_d": "5",
+              "index": 0
             }
           ],
-          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><!--dj-if id=\"if-b2f7df7d-0-0\"--><div dj-id=\"I\">beta</div><!--/dj-if--></div><u dj-id=\"5\">17</u></div>"
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><!--dj-if id=\"if-b2f7df7d-0-0\"--><div dj-id=\"C\">beta</div><!--/dj-if--></div><u dj-id=\"5\">17</u></div>"
         },
         {
           "label": "step 18",
@@ -9153,11 +9481,11 @@
                 0,
                 1
               ],
-              "d": "I",
+              "d": "C",
               "node": {
                 "tag": "span",
                 "attrs": {
-                  "dj-id": "T"
+                  "dj-id": "N"
                 },
                 "children": [
                   {
@@ -9170,7 +9498,7 @@
                 ],
                 "text": null,
                 "key": null,
-                "djust_id": "T"
+                "djust_id": "N"
               }
             },
             {
@@ -9179,10 +9507,12 @@
                 1,
                 0
               ],
-              "text": "18"
+              "text": "18",
+              "parent_d": "5",
+              "index": 0
             }
           ],
-          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><!--dj-if id=\"if-b2f7df7d-0-0\"--><span dj-id=\"T\">zeta</span><!--/dj-if--></div><u dj-id=\"5\">18</u></div>"
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><!--dj-if id=\"if-b2f7df7d-0-0\"--><span dj-id=\"N\">zeta</span><!--/dj-if--></div><u dj-id=\"5\">18</u></div>"
         },
         {
           "label": "step 19",
@@ -9193,10 +9523,12 @@
                 1,
                 0
               ],
-              "text": "19"
+              "text": "19",
+              "parent_d": "5",
+              "index": 0
             }
           ],
-          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><!--dj-if id=\"if-b2f7df7d-0-0\"--><span dj-id=\"T\">zeta</span><!--/dj-if--></div><u dj-id=\"5\">19</u></div>"
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><!--dj-if id=\"if-b2f7df7d-0-0\"--><span dj-id=\"N\">zeta</span><!--/dj-if--></div><u dj-id=\"5\">19</u></div>"
         },
         {
           "label": "step 20",
@@ -9208,7 +9540,9 @@
                 1,
                 0
               ],
-              "text": "eps"
+              "text": "eps",
+              "parent_d": "N",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -9216,10 +9550,12 @@
                 1,
                 0
               ],
-              "text": "20"
+              "text": "20",
+              "parent_d": "5",
+              "index": 0
             }
           ],
-          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><!--dj-if id=\"if-b2f7df7d-0-0\"--><span dj-id=\"T\">eps</span><!--/dj-if--></div><u dj-id=\"5\">20</u></div>"
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><!--dj-if id=\"if-b2f7df7d-0-0\"--><span dj-id=\"N\">eps</span><!--/dj-if--></div><u dj-id=\"5\">20</u></div>"
         },
         {
           "label": "step 21",
@@ -9230,11 +9566,11 @@
                 0,
                 1
               ],
-              "d": "T",
+              "d": "N",
               "node": {
                 "tag": "div",
                 "attrs": {
-                  "dj-id": "11"
+                  "dj-id": "R"
                 },
                 "children": [
                   {
@@ -9247,7 +9583,7 @@
                 ],
                 "text": null,
                 "key": null,
-                "djust_id": "11"
+                "djust_id": "R"
               }
             },
             {
@@ -9256,10 +9592,12 @@
                 1,
                 0
               ],
-              "text": "21"
+              "text": "21",
+              "parent_d": "5",
+              "index": 0
             }
           ],
-          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><!--dj-if id=\"if-b2f7df7d-0-0\"--><div dj-id=\"11\">delta</div><!--/dj-if--></div><u dj-id=\"5\">21</u></div>"
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><!--dj-if id=\"if-b2f7df7d-0-0\"--><div dj-id=\"R\">delta</div><!--/dj-if--></div><u dj-id=\"5\">21</u></div>"
         },
         {
           "label": "step 22",
@@ -9270,11 +9608,11 @@
                 0,
                 1
               ],
-              "d": "11",
+              "d": "R",
               "node": {
                 "tag": "span",
                 "attrs": {
-                  "dj-id": "15"
+                  "dj-id": "V"
                 },
                 "children": [
                   {
@@ -9287,7 +9625,7 @@
                 ],
                 "text": null,
                 "key": null,
-                "djust_id": "15"
+                "djust_id": "V"
               }
             },
             {
@@ -9298,7 +9636,7 @@
               ],
               "d": "1",
               "index": 3,
-              "html": "<!--dj-if id=\"if-b2f7df7d-0-1\"--><div dj-id=\"16\">eps</div><!--/dj-if-->"
+              "html": "<!--dj-if id=\"if-b2f7df7d-0-1\"--><div dj-id=\"W\">eps</div><!--/dj-if-->"
             },
             {
               "type": "InsertSubtree",
@@ -9308,7 +9646,7 @@
               ],
               "d": "1",
               "index": 6,
-              "html": "<!--dj-if id=\"if-b2f7df7d-0-2\"--><div dj-id=\"17\">beta</div><!--/dj-if-->"
+              "html": "<!--dj-if id=\"if-b2f7df7d-0-2\"--><div dj-id=\"X\">beta</div><!--/dj-if-->"
             },
             {
               "type": "SetText",
@@ -9316,10 +9654,12 @@
                 1,
                 0
               ],
-              "text": "22"
+              "text": "22",
+              "parent_d": "5",
+              "index": 0
             }
           ],
-          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><!--dj-if id=\"if-b2f7df7d-0-0\"--><span dj-id=\"15\">gamma</span><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-1\"--><div dj-id=\"16\">eps</div><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-2\"--><div dj-id=\"17\">beta</div><!--/dj-if--></div><u dj-id=\"5\">22</u></div>"
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><!--dj-if id=\"if-b2f7df7d-0-0\"--><span dj-id=\"V\">gamma</span><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-1\"--><div dj-id=\"W\">eps</div><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-2\"--><div dj-id=\"X\">beta</div><!--/dj-if--></div><u dj-id=\"5\">22</u></div>"
         },
         {
           "label": "step 23",
@@ -9330,10 +9670,12 @@
                 1,
                 0
               ],
-              "text": "23"
+              "text": "23",
+              "parent_d": "5",
+              "index": 0
             }
           ],
-          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><!--dj-if id=\"if-b2f7df7d-0-0\"--><span dj-id=\"15\">gamma</span><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-1\"--><div dj-id=\"16\">eps</div><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-2\"--><div dj-id=\"17\">beta</div><!--/dj-if--></div><u dj-id=\"5\">23</u></div>"
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><!--dj-if id=\"if-b2f7df7d-0-0\"--><span dj-id=\"V\">gamma</span><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-1\"--><div dj-id=\"W\">eps</div><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-2\"--><div dj-id=\"X\">beta</div><!--/dj-if--></div><u dj-id=\"5\">23</u></div>"
         },
         {
           "label": "step 24",
@@ -9344,11 +9686,11 @@
                 0,
                 1
               ],
-              "d": "15",
+              "d": "V",
               "node": {
                 "tag": "div",
                 "attrs": {
-                  "dj-id": "1b"
+                  "dj-id": "11"
                 },
                 "children": [
                   {
@@ -9361,7 +9703,7 @@
                 ],
                 "text": null,
                 "key": null,
-                "djust_id": "1b"
+                "djust_id": "11"
               }
             },
             {
@@ -9371,7 +9713,9 @@
                 4,
                 0
               ],
-              "text": "beta"
+              "text": "beta",
+              "parent_d": "W",
+              "index": 0
             },
             {
               "type": "RemoveSubtree",
@@ -9383,10 +9727,12 @@
                 1,
                 0
               ],
-              "text": "24"
+              "text": "24",
+              "parent_d": "5",
+              "index": 0
             }
           ],
-          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><!--dj-if id=\"if-b2f7df7d-0-0\"--><div dj-id=\"1b\">eps</div><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-1\"--><div dj-id=\"16\">beta</div><!--/dj-if--></div><u dj-id=\"5\">24</u></div>"
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><!--dj-if id=\"if-b2f7df7d-0-0\"--><div dj-id=\"11\">eps</div><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-1\"--><div dj-id=\"W\">beta</div><!--/dj-if--></div><u dj-id=\"5\">24</u></div>"
         },
         {
           "label": "step 25",
@@ -9397,11 +9743,11 @@
                 0,
                 1
               ],
-              "d": "1b",
+              "d": "11",
               "node": {
                 "tag": "span",
                 "attrs": {
-                  "dj-id": "1g"
+                  "dj-id": "16"
                 },
                 "children": [
                   {
@@ -9414,7 +9760,7 @@
                 ],
                 "text": null,
                 "key": null,
-                "djust_id": "1g"
+                "djust_id": "16"
               }
             },
             {
@@ -9432,11 +9778,11 @@
                 0,
                 5
               ],
-              "d": "16",
+              "d": "W",
               "node": {
                 "tag": "span",
                 "attrs": {
-                  "dj-id": "1h"
+                  "dj-id": "17"
                 },
                 "children": [
                   {
@@ -9449,7 +9795,7 @@
                 ],
                 "text": null,
                 "key": null,
-                "djust_id": "1h"
+                "djust_id": "17"
               }
             },
             {
@@ -9460,7 +9806,7 @@
               ],
               "d": "1",
               "index": 8,
-              "html": "<!--dj-if id=\"if-b2f7df7d-0-2\"--><span dj-id=\"1i\">alpha</span><!--/dj-if-->"
+              "html": "<!--dj-if id=\"if-b2f7df7d-0-2\"--><span dj-id=\"18\">alpha</span><!--/dj-if-->"
             },
             {
               "type": "InsertChild",
@@ -9498,10 +9844,12 @@
                 1,
                 0
               ],
-              "text": "25"
+              "text": "25",
+              "parent_d": "5",
+              "index": 0
             }
           ],
-          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><!--dj-if id=\"if-b2f7df7d-0-0\"--><span dj-id=\"1g\">delta</span><!--/dj-if--> <!--dj-if id=\"if-b2f7df7d-0-1\"--><span dj-id=\"1h\">beta</span><!--/dj-if--> <!--dj-if id=\"if-b2f7df7d-0-2\"--><span dj-id=\"1i\">alpha</span><!--/dj-if--></div><u dj-id=\"5\">25</u></div>"
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><!--dj-if id=\"if-b2f7df7d-0-0\"--><span dj-id=\"16\">delta</span><!--/dj-if--> <!--dj-if id=\"if-b2f7df7d-0-1\"--><span dj-id=\"17\">beta</span><!--/dj-if--> <!--dj-if id=\"if-b2f7df7d-0-2\"--><span dj-id=\"18\">alpha</span><!--/dj-if--></div><u dj-id=\"5\">25</u></div>"
         },
         {
           "label": "step 26",
@@ -9512,11 +9860,11 @@
                 0,
                 1
               ],
-              "d": "1g",
+              "d": "16",
               "node": {
                 "tag": "div",
                 "attrs": {
-                  "dj-id": "1m"
+                  "dj-id": "1c"
                 },
                 "children": [
                   {
@@ -9529,7 +9877,7 @@
                 ],
                 "text": null,
                 "key": null,
-                "djust_id": "1m"
+                "djust_id": "1c"
               }
             },
             {
@@ -9547,11 +9895,11 @@
                 0,
                 4
               ],
-              "d": "1h",
+              "d": "17",
               "node": {
                 "tag": "div",
                 "attrs": {
-                  "dj-id": "1n"
+                  "dj-id": "1d"
                 },
                 "children": [
                   {
@@ -9564,7 +9912,7 @@
                 ],
                 "text": null,
                 "key": null,
-                "djust_id": "1n"
+                "djust_id": "1d"
               }
             },
             {
@@ -9593,10 +9941,12 @@
                 1,
                 0
               ],
-              "text": "26"
+              "text": "26",
+              "parent_d": "5",
+              "index": 0
             }
           ],
-          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><!--dj-if id=\"if-b2f7df7d-0-0\"--><div dj-id=\"1m\">alpha</div><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-1\"--><div dj-id=\"1n\">delta</div><!--/dj-if--></div><u dj-id=\"5\">26</u></div>"
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><!--dj-if id=\"if-b2f7df7d-0-0\"--><div dj-id=\"1c\">alpha</div><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-1\"--><div dj-id=\"1d\">delta</div><!--/dj-if--></div><u dj-id=\"5\">26</u></div>"
         },
         {
           "label": "step 27",
@@ -9607,10 +9957,12 @@
                 1,
                 0
               ],
-              "text": "27"
+              "text": "27",
+              "parent_d": "5",
+              "index": 0
             }
           ],
-          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><!--dj-if id=\"if-b2f7df7d-0-0\"--><div dj-id=\"1m\">alpha</div><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-1\"--><div dj-id=\"1n\">delta</div><!--/dj-if--></div><u dj-id=\"5\">27</u></div>"
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><!--dj-if id=\"if-b2f7df7d-0-0\"--><div dj-id=\"1c\">alpha</div><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-1\"--><div dj-id=\"1d\">delta</div><!--/dj-if--></div><u dj-id=\"5\">27</u></div>"
         },
         {
           "label": "step 28",
@@ -9621,10 +9973,12 @@
                 1,
                 0
               ],
-              "text": "28"
+              "text": "28",
+              "parent_d": "5",
+              "index": 0
             }
           ],
-          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><!--dj-if id=\"if-b2f7df7d-0-0\"--><div dj-id=\"1m\">alpha</div><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-1\"--><div dj-id=\"1n\">delta</div><!--/dj-if--></div><u dj-id=\"5\">28</u></div>"
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><!--dj-if id=\"if-b2f7df7d-0-0\"--><div dj-id=\"1c\">alpha</div><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-1\"--><div dj-id=\"1d\">delta</div><!--/dj-if--></div><u dj-id=\"5\">28</u></div>"
         },
         {
           "label": "step 29",
@@ -9635,10 +9989,12 @@
                 1,
                 0
               ],
-              "text": "29"
+              "text": "29",
+              "parent_d": "5",
+              "index": 0
             }
           ],
-          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><!--dj-if id=\"if-b2f7df7d-0-0\"--><div dj-id=\"1m\">alpha</div><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-1\"--><div dj-id=\"1n\">delta</div><!--/dj-if--></div><u dj-id=\"5\">29</u></div>"
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><!--dj-if id=\"if-b2f7df7d-0-0\"--><div dj-id=\"1c\">alpha</div><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-1\"--><div dj-id=\"1d\">delta</div><!--/dj-if--></div><u dj-id=\"5\">29</u></div>"
         },
         {
           "label": "step 30",
@@ -9649,11 +10005,11 @@
                 0,
                 1
               ],
-              "d": "1m",
+              "d": "1c",
               "node": {
                 "tag": "span",
                 "attrs": {
-                  "dj-id": "1r"
+                  "dj-id": "1h"
                 },
                 "children": [
                   {
@@ -9666,7 +10022,7 @@
                 ],
                 "text": null,
                 "key": null,
-                "djust_id": "1r"
+                "djust_id": "1h"
               }
             },
             {
@@ -9684,11 +10040,11 @@
                 0,
                 5
               ],
-              "d": "1n",
+              "d": "1d",
               "node": {
                 "tag": "span",
                 "attrs": {
-                  "dj-id": "1s"
+                  "dj-id": "1i"
                 },
                 "children": [
                   {
@@ -9701,7 +10057,7 @@
                 ],
                 "text": null,
                 "key": null,
-                "djust_id": "1s"
+                "djust_id": "1i"
               }
             },
             {
@@ -9712,7 +10068,7 @@
               ],
               "d": "1",
               "index": 8,
-              "html": "<!--dj-if id=\"if-b2f7df7d-0-2\"--><span dj-id=\"1t\">zeta</span><!--/dj-if-->"
+              "html": "<!--dj-if id=\"if-b2f7df7d-0-2\"--><span dj-id=\"1j\">zeta</span><!--/dj-if-->"
             },
             {
               "type": "InsertSubtree",
@@ -9722,7 +10078,7 @@
               ],
               "d": "1",
               "index": 11,
-              "html": "<!--dj-if id=\"if-b2f7df7d-0-3\"--><div dj-id=\"1u\">delta</div><!--/dj-if-->"
+              "html": "<!--dj-if id=\"if-b2f7df7d-0-3\"--><div dj-id=\"1k\">delta</div><!--/dj-if-->"
             },
             {
               "type": "InsertSubtree",
@@ -9732,7 +10088,7 @@
               ],
               "d": "1",
               "index": 14,
-              "html": "<!--dj-if id=\"if-b2f7df7d-0-4\"--><span dj-id=\"1v\">gamma</span><!--/dj-if-->"
+              "html": "<!--dj-if id=\"if-b2f7df7d-0-4\"--><span dj-id=\"1l\">gamma</span><!--/dj-if-->"
             },
             {
               "type": "InsertSubtree",
@@ -9742,7 +10098,7 @@
               ],
               "d": "1",
               "index": 17,
-              "html": "<!--dj-if id=\"if-b2f7df7d-0-5\"--><div dj-id=\"1w\">eps</div><!--/dj-if-->"
+              "html": "<!--dj-if id=\"if-b2f7df7d-0-5\"--><div dj-id=\"1m\">eps</div><!--/dj-if-->"
             },
             {
               "type": "InsertChild",
@@ -9780,10 +10136,12 @@
                 1,
                 0
               ],
-              "text": "30"
+              "text": "30",
+              "parent_d": "5",
+              "index": 0
             }
           ],
-          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><!--dj-if id=\"if-b2f7df7d-0-0\"--><span dj-id=\"1r\">beta</span><!--/dj-if--> <!--dj-if id=\"if-b2f7df7d-0-1\"--><span dj-id=\"1s\">alpha</span><!--/dj-if--> <!--dj-if id=\"if-b2f7df7d-0-2\"--><span dj-id=\"1t\">zeta</span><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-3\"--><div dj-id=\"1u\">delta</div><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-4\"--><span dj-id=\"1v\">gamma</span><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-5\"--><div dj-id=\"1w\">eps</div><!--/dj-if--></div><u dj-id=\"5\">30</u></div>"
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><div dj-id=\"1\"><!--dj-if id=\"if-b2f7df7d-0-0\"--><span dj-id=\"1h\">beta</span><!--/dj-if--> <!--dj-if id=\"if-b2f7df7d-0-1\"--><span dj-id=\"1i\">alpha</span><!--/dj-if--> <!--dj-if id=\"if-b2f7df7d-0-2\"--><span dj-id=\"1j\">zeta</span><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-3\"--><div dj-id=\"1k\">delta</div><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-4\"--><span dj-id=\"1l\">gamma</span><!--/dj-if--><!--dj-if id=\"if-b2f7df7d-0-5\"--><div dj-id=\"1m\">eps</div><!--/dj-if--></div><u dj-id=\"5\">30</u></div>"
         }
       ]
     },
@@ -9838,7 +10196,9 @@
                 2,
                 0
               ],
-              "text": "1"
+              "text": "1",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-aac365b7-0\"--><!--/dj-if--><em dj-id=\"5\">1</em></p></div>"
@@ -9945,7 +10305,9 @@
                 8,
                 0
               ],
-              "text": "2"
+              "text": "2",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-aac365b7-0\"--><b dj-id=\"b\">A</b> <!--dj-if id=\"if-aac365b7-1\"--><!--/dj-if--> <u dj-id=\"c\">U</u><!--/dj-if--><em dj-id=\"5\">2</em></p></div>"
@@ -9960,7 +10322,9 @@
                 8,
                 0
               ],
-              "text": "3"
+              "text": "3",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-aac365b7-0\"--><b dj-id=\"b\">A</b> <!--dj-if id=\"if-aac365b7-1\"--><!--/dj-if--> <u dj-id=\"c\">U</u><!--/dj-if--><em dj-id=\"5\">3</em></p></div>"
@@ -10001,7 +10365,9 @@
                 9,
                 0
               ],
-              "text": "4"
+              "text": "4",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-aac365b7-0\"--><b dj-id=\"b\">A</b> <!--dj-if id=\"if-aac365b7-1\"--><i dj-id=\"h\">I</i><!--/dj-if--> <u dj-id=\"c\">U</u><!--/dj-if--><em dj-id=\"5\">4</em></p></div>"
@@ -10054,7 +10420,9 @@
                 2,
                 0
               ],
-              "text": "5"
+              "text": "5",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-aac365b7-0\"--><!--/dj-if--><em dj-id=\"5\">5</em></p></div>"
@@ -10161,7 +10529,9 @@
                 9,
                 0
               ],
-              "text": "6"
+              "text": "6",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-aac365b7-0\"--><b dj-id=\"p\">A</b> <!--dj-if id=\"if-aac365b7-1\"--><i dj-id=\"q\">I</i><!--/dj-if--> <u dj-id=\"r\">U</u><!--/dj-if--><em dj-id=\"5\">6</em></p></div>"
@@ -10214,7 +10584,9 @@
                 2,
                 0
               ],
-              "text": "7"
+              "text": "7",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-aac365b7-0\"--><!--/dj-if--><em dj-id=\"5\">7</em></p></div>"
@@ -10229,7 +10601,9 @@
                 2,
                 0
               ],
-              "text": "8"
+              "text": "8",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-aac365b7-0\"--><!--/dj-if--><em dj-id=\"5\">8</em></p></div>"
@@ -10244,7 +10618,9 @@
                 2,
                 0
               ],
-              "text": "9"
+              "text": "9",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-aac365b7-0\"--><!--/dj-if--><em dj-id=\"5\">9</em></p></div>"
@@ -10259,7 +10635,9 @@
                 2,
                 0
               ],
-              "text": "10"
+              "text": "10",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-aac365b7-0\"--><!--/dj-if--><em dj-id=\"5\">10</em></p></div>"
@@ -10274,7 +10652,9 @@
                 2,
                 0
               ],
-              "text": "11"
+              "text": "11",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-aac365b7-0\"--><!--/dj-if--><em dj-id=\"5\">11</em></p></div>"
@@ -10289,7 +10669,9 @@
                 2,
                 0
               ],
-              "text": "12"
+              "text": "12",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-aac365b7-0\"--><!--/dj-if--><em dj-id=\"5\">12</em></p></div>"
@@ -10304,7 +10686,9 @@
                 2,
                 0
               ],
-              "text": "13"
+              "text": "13",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-aac365b7-0\"--><!--/dj-if--><em dj-id=\"5\">13</em></p></div>"
@@ -10319,7 +10703,9 @@
                 2,
                 0
               ],
-              "text": "14"
+              "text": "14",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-aac365b7-0\"--><!--/dj-if--><em dj-id=\"5\">14</em></p></div>"
@@ -10334,7 +10720,9 @@
                 2,
                 0
               ],
-              "text": "15"
+              "text": "15",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-aac365b7-0\"--><!--/dj-if--><em dj-id=\"5\">15</em></p></div>"
@@ -10441,7 +10829,9 @@
                 9,
                 0
               ],
-              "text": "16"
+              "text": "16",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-aac365b7-0\"--><b dj-id=\"y\">A</b> <!--dj-if id=\"if-aac365b7-1\"--><i dj-id=\"z\">I</i><!--/dj-if--> <u dj-id=\"A\">U</u><!--/dj-if--><em dj-id=\"5\">16</em></p></div>"
@@ -10456,7 +10846,9 @@
                 9,
                 0
               ],
-              "text": "17"
+              "text": "17",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-aac365b7-0\"--><b dj-id=\"y\">A</b> <!--dj-if id=\"if-aac365b7-1\"--><i dj-id=\"z\">I</i><!--/dj-if--> <u dj-id=\"A\">U</u><!--/dj-if--><em dj-id=\"5\">17</em></p></div>"
@@ -10509,7 +10901,9 @@
                 2,
                 0
               ],
-              "text": "18"
+              "text": "18",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-aac365b7-0\"--><!--/dj-if--><em dj-id=\"5\">18</em></p></div>"
@@ -10524,7 +10918,9 @@
                 2,
                 0
               ],
-              "text": "19"
+              "text": "19",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-aac365b7-0\"--><!--/dj-if--><em dj-id=\"5\">19</em></p></div>"
@@ -10539,7 +10935,9 @@
                 2,
                 0
               ],
-              "text": "20"
+              "text": "20",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-aac365b7-0\"--><!--/dj-if--><em dj-id=\"5\">20</em></p></div>"
@@ -10554,7 +10952,9 @@
                 2,
                 0
               ],
-              "text": "21"
+              "text": "21",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-aac365b7-0\"--><!--/dj-if--><em dj-id=\"5\">21</em></p></div>"
@@ -10569,7 +10969,9 @@
                 2,
                 0
               ],
-              "text": "22"
+              "text": "22",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-aac365b7-0\"--><!--/dj-if--><em dj-id=\"5\">22</em></p></div>"
@@ -10584,7 +10986,9 @@
                 2,
                 0
               ],
-              "text": "23"
+              "text": "23",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-aac365b7-0\"--><!--/dj-if--><em dj-id=\"5\">23</em></p></div>"
@@ -10599,7 +11003,9 @@
                 2,
                 0
               ],
-              "text": "24"
+              "text": "24",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-aac365b7-0\"--><!--/dj-if--><em dj-id=\"5\">24</em></p></div>"
@@ -10614,7 +11020,9 @@
                 2,
                 0
               ],
-              "text": "25"
+              "text": "25",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-aac365b7-0\"--><!--/dj-if--><em dj-id=\"5\">25</em></p></div>"
@@ -10629,7 +11037,9 @@
                 2,
                 0
               ],
-              "text": "26"
+              "text": "26",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-aac365b7-0\"--><!--/dj-if--><em dj-id=\"5\">26</em></p></div>"
@@ -10736,7 +11146,9 @@
                 8,
                 0
               ],
-              "text": "27"
+              "text": "27",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-aac365b7-0\"--><b dj-id=\"H\">A</b> <!--dj-if id=\"if-aac365b7-1\"--><!--/dj-if--> <u dj-id=\"I\">U</u><!--/dj-if--><em dj-id=\"5\">27</em></p></div>"
@@ -10751,7 +11163,9 @@
                 8,
                 0
               ],
-              "text": "28"
+              "text": "28",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-aac365b7-0\"--><b dj-id=\"H\">A</b> <!--dj-if id=\"if-aac365b7-1\"--><!--/dj-if--> <u dj-id=\"I\">U</u><!--/dj-if--><em dj-id=\"5\">28</em></p></div>"
@@ -10792,7 +11206,9 @@
                 9,
                 0
               ],
-              "text": "29"
+              "text": "29",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-aac365b7-0\"--><b dj-id=\"H\">A</b> <!--dj-if id=\"if-aac365b7-1\"--><i dj-id=\"N\">I</i><!--/dj-if--> <u dj-id=\"I\">U</u><!--/dj-if--><em dj-id=\"5\">29</em></p></div>"
@@ -10807,7 +11223,9 @@
                 9,
                 0
               ],
-              "text": "30"
+              "text": "30",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><!--dj-if id=\"if-aac365b7-0\"--><b dj-id=\"H\">A</b> <!--dj-if id=\"if-aac365b7-1\"--><i dj-id=\"N\">I</i><!--/dj-if--> <u dj-id=\"I\">U</u><!--/dj-if--><em dj-id=\"5\">30</em></p></div>"
@@ -10826,7 +11244,9 @@
                 1,
                 0
               ],
-              "text": "1"
+              "text": "1",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"who\" dj-id=\"1\"><!--dj-if id=\"if-67c47a08-0\"--><strong dj-id=\"2\">bob</strong> <!--dj-if id=\"if-67c47a08-1\"--><em dj-id=\"3\">(admin)</em><!--/dj-if--> <a dj-id=\"4\" href=\"#\">Log out</a><!--/dj-if--></p><u dj-id=\"5\">1</u></div>"
@@ -10840,7 +11260,9 @@
                 1,
                 0
               ],
-              "text": "2"
+              "text": "2",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"who\" dj-id=\"1\"><!--dj-if id=\"if-67c47a08-0\"--><strong dj-id=\"2\">bob</strong> <!--dj-if id=\"if-67c47a08-1\"--><em dj-id=\"3\">(admin)</em><!--/dj-if--> <a dj-id=\"4\" href=\"#\">Log out</a><!--/dj-if--></p><u dj-id=\"5\">2</u></div>"
@@ -10854,7 +11276,9 @@
                 1,
                 0
               ],
-              "text": "3"
+              "text": "3",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"who\" dj-id=\"1\"><!--dj-if id=\"if-67c47a08-0\"--><strong dj-id=\"2\">bob</strong> <!--dj-if id=\"if-67c47a08-1\"--><em dj-id=\"3\">(admin)</em><!--/dj-if--> <a dj-id=\"4\" href=\"#\">Log out</a><!--/dj-if--></p><u dj-id=\"5\">3</u></div>"
@@ -10868,7 +11292,9 @@
                 1,
                 0
               ],
-              "text": "4"
+              "text": "4",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"who\" dj-id=\"1\"><!--dj-if id=\"if-67c47a08-0\"--><strong dj-id=\"2\">bob</strong> <!--dj-if id=\"if-67c47a08-1\"--><em dj-id=\"3\">(admin)</em><!--/dj-if--> <a dj-id=\"4\" href=\"#\">Log out</a><!--/dj-if--></p><u dj-id=\"5\">4</u></div>"
@@ -10882,7 +11308,9 @@
                 1,
                 0
               ],
-              "text": "5"
+              "text": "5",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"who\" dj-id=\"1\"><!--dj-if id=\"if-67c47a08-0\"--><strong dj-id=\"2\">bob</strong> <!--dj-if id=\"if-67c47a08-1\"--><em dj-id=\"3\">(admin)</em><!--/dj-if--> <a dj-id=\"4\" href=\"#\">Log out</a><!--/dj-if--></p><u dj-id=\"5\">5</u></div>"
@@ -10896,7 +11324,9 @@
                 1,
                 0
               ],
-              "text": "6"
+              "text": "6",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"who\" dj-id=\"1\"><!--dj-if id=\"if-67c47a08-0\"--><strong dj-id=\"2\">bob</strong> <!--dj-if id=\"if-67c47a08-1\"--><em dj-id=\"3\">(admin)</em><!--/dj-if--> <a dj-id=\"4\" href=\"#\">Log out</a><!--/dj-if--></p><u dj-id=\"5\">6</u></div>"
@@ -10919,7 +11349,9 @@
                 1,
                 0
               ],
-              "text": "7"
+              "text": "7",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"who\" dj-id=\"1\"><!--dj-if id=\"if-67c47a08-0\"--><strong dj-id=\"2\">bob</strong> <!--dj-if id=\"if-67c47a08-1\"--><!--/dj-if--> <a dj-id=\"4\" href=\"#\">Log out</a><!--/dj-if--></p><u dj-id=\"5\">7</u></div>"
@@ -10933,7 +11365,9 @@
                 1,
                 0
               ],
-              "text": "8"
+              "text": "8",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"who\" dj-id=\"1\"><!--dj-if id=\"if-67c47a08-0\"--><strong dj-id=\"2\">bob</strong> <!--dj-if id=\"if-67c47a08-1\"--><!--/dj-if--> <a dj-id=\"4\" href=\"#\">Log out</a><!--/dj-if--></p><u dj-id=\"5\">8</u></div>"
@@ -10947,7 +11381,9 @@
                 1,
                 0
               ],
-              "text": "9"
+              "text": "9",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"who\" dj-id=\"1\"><!--dj-if id=\"if-67c47a08-0\"--><strong dj-id=\"2\">bob</strong> <!--dj-if id=\"if-67c47a08-1\"--><!--/dj-if--> <a dj-id=\"4\" href=\"#\">Log out</a><!--/dj-if--></p><u dj-id=\"5\">9</u></div>"
@@ -10962,7 +11398,9 @@
                 1,
                 0
               ],
-              "text": "ann"
+              "text": "ann",
+              "parent_d": "2",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -10970,7 +11408,9 @@
                 1,
                 0
               ],
-              "text": "10"
+              "text": "10",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"who\" dj-id=\"1\"><!--dj-if id=\"if-67c47a08-0\"--><strong dj-id=\"2\">ann</strong> <!--dj-if id=\"if-67c47a08-1\"--><!--/dj-if--> <a dj-id=\"4\" href=\"#\">Log out</a><!--/dj-if--></p><u dj-id=\"5\">10</u></div>"
@@ -10984,7 +11424,9 @@
                 1,
                 0
               ],
-              "text": "11"
+              "text": "11",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"who\" dj-id=\"1\"><!--dj-if id=\"if-67c47a08-0\"--><strong dj-id=\"2\">ann</strong> <!--dj-if id=\"if-67c47a08-1\"--><!--/dj-if--> <a dj-id=\"4\" href=\"#\">Log out</a><!--/dj-if--></p><u dj-id=\"5\">11</u></div>"
@@ -11036,7 +11478,9 @@
                 1,
                 0
               ],
-              "text": "12"
+              "text": "12",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"who\" dj-id=\"1\"><!--dj-if id=\"if-67c47a08-0\"--><!--/dj-if--></p><u dj-id=\"5\">12</u></div>"
@@ -11064,7 +11508,7 @@
               "node": {
                 "tag": "strong",
                 "attrs": {
-                  "dj-id": "l"
+                  "dj-id": "g"
                 },
                 "children": [
                   {
@@ -11077,7 +11521,7 @@
                 ],
                 "text": null,
                 "key": null,
-                "djust_id": "l"
+                "djust_id": "g"
               }
             },
             {
@@ -11120,7 +11564,7 @@
               "node": {
                 "tag": "a",
                 "attrs": {
-                  "dj-id": "m",
+                  "dj-id": "h",
                   "href": "#"
                 },
                 "children": [
@@ -11134,7 +11578,7 @@
                 ],
                 "text": null,
                 "key": null,
-                "djust_id": "m"
+                "djust_id": "h"
               }
             },
             {
@@ -11143,10 +11587,12 @@
                 1,
                 0
               ],
-              "text": "13"
+              "text": "13",
+              "parent_d": "5",
+              "index": 0
             }
           ],
-          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"who\" dj-id=\"1\"><!--dj-if id=\"if-67c47a08-0\"--><strong dj-id=\"l\">bob</strong> <!--dj-if id=\"if-67c47a08-1\"--><!--/dj-if--> <a dj-id=\"m\" href=\"#\">Log out</a><!--/dj-if--></p><u dj-id=\"5\">13</u></div>"
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"who\" dj-id=\"1\"><!--dj-if id=\"if-67c47a08-0\"--><strong dj-id=\"g\">bob</strong> <!--dj-if id=\"if-67c47a08-1\"--><!--/dj-if--> <a dj-id=\"h\" href=\"#\">Log out</a><!--/dj-if--></p><u dj-id=\"5\">13</u></div>"
         },
         {
           "label": "step 14",
@@ -11161,7 +11607,7 @@
               "node": {
                 "tag": "em",
                 "attrs": {
-                  "dj-id": "r"
+                  "dj-id": "m"
                 },
                 "children": [
                   {
@@ -11174,7 +11620,7 @@
                 ],
                 "text": null,
                 "key": null,
-                "djust_id": "r"
+                "djust_id": "m"
               }
             },
             {
@@ -11183,10 +11629,12 @@
                 1,
                 0
               ],
-              "text": "14"
+              "text": "14",
+              "parent_d": "5",
+              "index": 0
             }
           ],
-          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"who\" dj-id=\"1\"><!--dj-if id=\"if-67c47a08-0\"--><strong dj-id=\"l\">bob</strong> <!--dj-if id=\"if-67c47a08-1\"--><em dj-id=\"r\">(admin)</em><!--/dj-if--> <a dj-id=\"m\" href=\"#\">Log out</a><!--/dj-if--></p><u dj-id=\"5\">14</u></div>"
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"who\" dj-id=\"1\"><!--dj-if id=\"if-67c47a08-0\"--><strong dj-id=\"g\">bob</strong> <!--dj-if id=\"if-67c47a08-1\"--><em dj-id=\"m\">(admin)</em><!--/dj-if--> <a dj-id=\"h\" href=\"#\">Log out</a><!--/dj-if--></p><u dj-id=\"5\">14</u></div>"
         },
         {
           "label": "step 15",
@@ -11197,10 +11645,12 @@
                 1,
                 0
               ],
-              "text": "15"
+              "text": "15",
+              "parent_d": "5",
+              "index": 0
             }
           ],
-          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"who\" dj-id=\"1\"><!--dj-if id=\"if-67c47a08-0\"--><strong dj-id=\"l\">bob</strong> <!--dj-if id=\"if-67c47a08-1\"--><em dj-id=\"r\">(admin)</em><!--/dj-if--> <a dj-id=\"m\" href=\"#\">Log out</a><!--/dj-if--></p><u dj-id=\"5\">15</u></div>"
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"who\" dj-id=\"1\"><!--dj-if id=\"if-67c47a08-0\"--><strong dj-id=\"g\">bob</strong> <!--dj-if id=\"if-67c47a08-1\"--><em dj-id=\"m\">(admin)</em><!--/dj-if--> <a dj-id=\"h\" href=\"#\">Log out</a><!--/dj-if--></p><u dj-id=\"5\">15</u></div>"
         },
         {
           "label": "step 16",
@@ -11216,7 +11666,7 @@
               ],
               "d": "1",
               "index": 7,
-              "child_d": "m"
+              "child_d": "h"
             },
             {
               "type": "RemoveChild",
@@ -11241,7 +11691,7 @@
               ],
               "d": "1",
               "index": 1,
-              "child_d": "l"
+              "child_d": "g"
             },
             {
               "type": "SetText",
@@ -11249,7 +11699,9 @@
                 1,
                 0
               ],
-              "text": "16"
+              "text": "16",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"who\" dj-id=\"1\"><!--dj-if id=\"if-67c47a08-0\"--><!--/dj-if--></p><u dj-id=\"5\">16</u></div>"
@@ -11265,7 +11717,7 @@
               ],
               "d": "1",
               "index": 3,
-              "html": "<!--dj-if id=\"if-67c47a08-1\"--><em dj-id=\"A\">(admin)</em><!--/dj-if-->"
+              "html": "<!--dj-if id=\"if-67c47a08-1\"--><em dj-id=\"v\">(admin)</em><!--/dj-if-->"
             },
             {
               "type": "InsertChild",
@@ -11277,7 +11729,7 @@
               "node": {
                 "tag": "strong",
                 "attrs": {
-                  "dj-id": "z"
+                  "dj-id": "u"
                 },
                 "children": [
                   {
@@ -11290,7 +11742,7 @@
                 ],
                 "text": null,
                 "key": null,
-                "djust_id": "z"
+                "djust_id": "u"
               }
             },
             {
@@ -11333,7 +11785,7 @@
               "node": {
                 "tag": "a",
                 "attrs": {
-                  "dj-id": "B",
+                  "dj-id": "w",
                   "href": "#"
                 },
                 "children": [
@@ -11347,7 +11799,7 @@
                 ],
                 "text": null,
                 "key": null,
-                "djust_id": "B"
+                "djust_id": "w"
               }
             },
             {
@@ -11356,10 +11808,12 @@
                 1,
                 0
               ],
-              "text": "17"
+              "text": "17",
+              "parent_d": "5",
+              "index": 0
             }
           ],
-          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"who\" dj-id=\"1\"><!--dj-if id=\"if-67c47a08-0\"--><strong dj-id=\"z\">ann</strong> <!--dj-if id=\"if-67c47a08-1\"--><em dj-id=\"A\">(admin)</em><!--/dj-if--> <a dj-id=\"B\" href=\"#\">Log out</a><!--/dj-if--></p><u dj-id=\"5\">17</u></div>"
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"who\" dj-id=\"1\"><!--dj-if id=\"if-67c47a08-0\"--><strong dj-id=\"u\">ann</strong> <!--dj-if id=\"if-67c47a08-1\"--><em dj-id=\"v\">(admin)</em><!--/dj-if--> <a dj-id=\"w\" href=\"#\">Log out</a><!--/dj-if--></p><u dj-id=\"5\">17</u></div>"
         },
         {
           "label": "step 18",
@@ -11370,10 +11824,12 @@
                 1,
                 0
               ],
-              "text": "18"
+              "text": "18",
+              "parent_d": "5",
+              "index": 0
             }
           ],
-          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"who\" dj-id=\"1\"><!--dj-if id=\"if-67c47a08-0\"--><strong dj-id=\"z\">ann</strong> <!--dj-if id=\"if-67c47a08-1\"--><em dj-id=\"A\">(admin)</em><!--/dj-if--> <a dj-id=\"B\" href=\"#\">Log out</a><!--/dj-if--></p><u dj-id=\"5\">18</u></div>"
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"who\" dj-id=\"1\"><!--dj-if id=\"if-67c47a08-0\"--><strong dj-id=\"u\">ann</strong> <!--dj-if id=\"if-67c47a08-1\"--><em dj-id=\"v\">(admin)</em><!--/dj-if--> <a dj-id=\"w\" href=\"#\">Log out</a><!--/dj-if--></p><u dj-id=\"5\">18</u></div>"
         },
         {
           "label": "step 19",
@@ -11389,7 +11845,7 @@
               ],
               "d": "1",
               "index": 7,
-              "child_d": "B"
+              "child_d": "w"
             },
             {
               "type": "RemoveChild",
@@ -11414,7 +11870,7 @@
               ],
               "d": "1",
               "index": 1,
-              "child_d": "z"
+              "child_d": "u"
             },
             {
               "type": "SetText",
@@ -11422,7 +11878,9 @@
                 1,
                 0
               ],
-              "text": "19"
+              "text": "19",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"who\" dj-id=\"1\"><!--dj-if id=\"if-67c47a08-0\"--><!--/dj-if--></p><u dj-id=\"5\">19</u></div>"
@@ -11436,7 +11894,9 @@
                 1,
                 0
               ],
-              "text": "20"
+              "text": "20",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"who\" dj-id=\"1\"><!--dj-if id=\"if-67c47a08-0\"--><!--/dj-if--></p><u dj-id=\"5\">20</u></div>"
@@ -11450,7 +11910,9 @@
                 1,
                 0
               ],
-              "text": "21"
+              "text": "21",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"who\" dj-id=\"1\"><!--dj-if id=\"if-67c47a08-0\"--><!--/dj-if--></p><u dj-id=\"5\">21</u></div>"
@@ -11466,7 +11928,7 @@
               ],
               "d": "1",
               "index": 3,
-              "html": "<!--dj-if id=\"if-67c47a08-1\"--><em dj-id=\"J\">(admin)</em><!--/dj-if-->"
+              "html": "<!--dj-if id=\"if-67c47a08-1\"--><em dj-id=\"E\">(admin)</em><!--/dj-if-->"
             },
             {
               "type": "InsertChild",
@@ -11478,7 +11940,7 @@
               "node": {
                 "tag": "strong",
                 "attrs": {
-                  "dj-id": "I"
+                  "dj-id": "D"
                 },
                 "children": [
                   {
@@ -11491,7 +11953,7 @@
                 ],
                 "text": null,
                 "key": null,
-                "djust_id": "I"
+                "djust_id": "D"
               }
             },
             {
@@ -11534,7 +11996,7 @@
               "node": {
                 "tag": "a",
                 "attrs": {
-                  "dj-id": "K",
+                  "dj-id": "F",
                   "href": "#"
                 },
                 "children": [
@@ -11548,7 +12010,7 @@
                 ],
                 "text": null,
                 "key": null,
-                "djust_id": "K"
+                "djust_id": "F"
               }
             },
             {
@@ -11557,10 +12019,12 @@
                 1,
                 0
               ],
-              "text": "22"
+              "text": "22",
+              "parent_d": "5",
+              "index": 0
             }
           ],
-          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"who\" dj-id=\"1\"><!--dj-if id=\"if-67c47a08-0\"--><strong dj-id=\"I\">bob</strong> <!--dj-if id=\"if-67c47a08-1\"--><em dj-id=\"J\">(admin)</em><!--/dj-if--> <a dj-id=\"K\" href=\"#\">Log out</a><!--/dj-if--></p><u dj-id=\"5\">22</u></div>"
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"who\" dj-id=\"1\"><!--dj-if id=\"if-67c47a08-0\"--><strong dj-id=\"D\">bob</strong> <!--dj-if id=\"if-67c47a08-1\"--><em dj-id=\"E\">(admin)</em><!--/dj-if--> <a dj-id=\"F\" href=\"#\">Log out</a><!--/dj-if--></p><u dj-id=\"5\">22</u></div>"
         },
         {
           "label": "step 23",
@@ -11572,7 +12036,7 @@
               ],
               "d": "1",
               "index": 4,
-              "child_d": "J"
+              "child_d": "E"
             },
             {
               "type": "SetText",
@@ -11581,7 +12045,9 @@
                 1,
                 0
               ],
-              "text": "ann"
+              "text": "ann",
+              "parent_d": "D",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -11589,10 +12055,12 @@
                 1,
                 0
               ],
-              "text": "23"
+              "text": "23",
+              "parent_d": "5",
+              "index": 0
             }
           ],
-          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"who\" dj-id=\"1\"><!--dj-if id=\"if-67c47a08-0\"--><strong dj-id=\"I\">ann</strong> <!--dj-if id=\"if-67c47a08-1\"--><!--/dj-if--> <a dj-id=\"K\" href=\"#\">Log out</a><!--/dj-if--></p><u dj-id=\"5\">23</u></div>"
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"who\" dj-id=\"1\"><!--dj-if id=\"if-67c47a08-0\"--><strong dj-id=\"D\">ann</strong> <!--dj-if id=\"if-67c47a08-1\"--><!--/dj-if--> <a dj-id=\"F\" href=\"#\">Log out</a><!--/dj-if--></p><u dj-id=\"5\">23</u></div>"
         },
         {
           "label": "step 24",
@@ -11604,7 +12072,9 @@
                 1,
                 0
               ],
-              "text": "bob"
+              "text": "bob",
+              "parent_d": "D",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -11612,10 +12082,12 @@
                 1,
                 0
               ],
-              "text": "24"
+              "text": "24",
+              "parent_d": "5",
+              "index": 0
             }
           ],
-          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"who\" dj-id=\"1\"><!--dj-if id=\"if-67c47a08-0\"--><strong dj-id=\"I\">bob</strong> <!--dj-if id=\"if-67c47a08-1\"--><!--/dj-if--> <a dj-id=\"K\" href=\"#\">Log out</a><!--/dj-if--></p><u dj-id=\"5\">24</u></div>"
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"who\" dj-id=\"1\"><!--dj-if id=\"if-67c47a08-0\"--><strong dj-id=\"D\">bob</strong> <!--dj-if id=\"if-67c47a08-1\"--><!--/dj-if--> <a dj-id=\"F\" href=\"#\">Log out</a><!--/dj-if--></p><u dj-id=\"5\">24</u></div>"
         },
         {
           "label": "step 25",
@@ -11631,7 +12103,7 @@
               ],
               "d": "1",
               "index": 6,
-              "child_d": "K"
+              "child_d": "F"
             },
             {
               "type": "RemoveChild",
@@ -11656,7 +12128,7 @@
               ],
               "d": "1",
               "index": 1,
-              "child_d": "I"
+              "child_d": "D"
             },
             {
               "type": "SetText",
@@ -11664,7 +12136,9 @@
                 1,
                 0
               ],
-              "text": "25"
+              "text": "25",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"who\" dj-id=\"1\"><!--dj-if id=\"if-67c47a08-0\"--><!--/dj-if--></p><u dj-id=\"5\">25</u></div>"
@@ -11678,7 +12152,9 @@
                 1,
                 0
               ],
-              "text": "26"
+              "text": "26",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"who\" dj-id=\"1\"><!--dj-if id=\"if-67c47a08-0\"--><!--/dj-if--></p><u dj-id=\"5\">26</u></div>"
@@ -11692,7 +12168,9 @@
                 1,
                 0
               ],
-              "text": "27"
+              "text": "27",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"who\" dj-id=\"1\"><!--dj-if id=\"if-67c47a08-0\"--><!--/dj-if--></p><u dj-id=\"5\">27</u></div>"
@@ -11706,7 +12184,9 @@
                 1,
                 0
               ],
-              "text": "28"
+              "text": "28",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"who\" dj-id=\"1\"><!--dj-if id=\"if-67c47a08-0\"--><!--/dj-if--></p><u dj-id=\"5\">28</u></div>"
@@ -11720,7 +12200,9 @@
                 1,
                 0
               ],
-              "text": "29"
+              "text": "29",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"who\" dj-id=\"1\"><!--dj-if id=\"if-67c47a08-0\"--><!--/dj-if--></p><u dj-id=\"5\">29</u></div>"
@@ -11748,7 +12230,7 @@
               "node": {
                 "tag": "strong",
                 "attrs": {
-                  "dj-id": "11"
+                  "dj-id": "R"
                 },
                 "children": [
                   {
@@ -11761,7 +12243,7 @@
                 ],
                 "text": null,
                 "key": null,
-                "djust_id": "11"
+                "djust_id": "R"
               }
             },
             {
@@ -11804,7 +12286,7 @@
               "node": {
                 "tag": "a",
                 "attrs": {
-                  "dj-id": "12",
+                  "dj-id": "S",
                   "href": "#"
                 },
                 "children": [
@@ -11818,7 +12300,7 @@
                 ],
                 "text": null,
                 "key": null,
-                "djust_id": "12"
+                "djust_id": "S"
               }
             },
             {
@@ -11827,10 +12309,12 @@
                 1,
                 0
               ],
-              "text": "30"
+              "text": "30",
+              "parent_d": "5",
+              "index": 0
             }
           ],
-          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"who\" dj-id=\"1\"><!--dj-if id=\"if-67c47a08-0\"--><strong dj-id=\"11\">bob</strong> <!--dj-if id=\"if-67c47a08-1\"--><!--/dj-if--> <a dj-id=\"12\" href=\"#\">Log out</a><!--/dj-if--></p><u dj-id=\"5\">30</u></div>"
+          "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p class=\"who\" dj-id=\"1\"><!--dj-if id=\"if-67c47a08-0\"--><strong dj-id=\"R\">bob</strong> <!--dj-if id=\"if-67c47a08-1\"--><!--/dj-if--> <a dj-id=\"S\" href=\"#\">Log out</a><!--/dj-if--></p><u dj-id=\"5\">30</u></div>"
         }
       ]
     },
@@ -11873,7 +12357,9 @@
                 12,
                 0
               ],
-              "text": "1"
+              "text": "1",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b> <!--dj-if id=\"if-edd98ab8-0\"--><i dj-id=\"9\">I</i><!--/dj-if--> <!--dj-if id=\"if-edd98ab8-1\"--><s dj-id=\"3\">S</s><!--/dj-if--> <u dj-id=\"4\">U</u> <em dj-id=\"5\">1</em></p></div>"
@@ -11906,7 +12392,9 @@
                 10,
                 0
               ],
-              "text": "2"
+              "text": "2",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b> <!--dj-if id=\"if-edd98ab8-0\"--><!--/dj-if--> <!--dj-if id=\"if-edd98ab8-1\"--><!--/dj-if--> <u dj-id=\"4\">U</u> <em dj-id=\"5\">2</em></p></div>"
@@ -11973,7 +12461,9 @@
                 12,
                 0
               ],
-              "text": "3"
+              "text": "3",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b> <!--dj-if id=\"if-edd98ab8-0\"--><i dj-id=\"l\">I</i><!--/dj-if--> <!--dj-if id=\"if-edd98ab8-1\"--><s dj-id=\"m\">S</s><!--/dj-if--> <u dj-id=\"4\">U</u> <em dj-id=\"5\">3</em></p></div>"
@@ -11997,7 +12487,9 @@
                 11,
                 0
               ],
-              "text": "4"
+              "text": "4",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b> <!--dj-if id=\"if-edd98ab8-0\"--><i dj-id=\"l\">I</i><!--/dj-if--> <!--dj-if id=\"if-edd98ab8-1\"--><!--/dj-if--> <u dj-id=\"4\">U</u> <em dj-id=\"5\">4</em></p></div>"
@@ -12021,7 +12513,9 @@
                 10,
                 0
               ],
-              "text": "5"
+              "text": "5",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b> <!--dj-if id=\"if-edd98ab8-0\"--><!--/dj-if--> <!--dj-if id=\"if-edd98ab8-1\"--><!--/dj-if--> <u dj-id=\"4\">U</u> <em dj-id=\"5\">5</em></p></div>"
@@ -12062,7 +12556,9 @@
                 11,
                 0
               ],
-              "text": "6"
+              "text": "6",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b> <!--dj-if id=\"if-edd98ab8-0\"--><!--/dj-if--> <!--dj-if id=\"if-edd98ab8-1\"--><s dj-id=\"D\">S</s><!--/dj-if--> <u dj-id=\"4\">U</u> <em dj-id=\"5\">6</em></p></div>"
@@ -12077,7 +12573,9 @@
                 11,
                 0
               ],
-              "text": "7"
+              "text": "7",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b> <!--dj-if id=\"if-edd98ab8-0\"--><!--/dj-if--> <!--dj-if id=\"if-edd98ab8-1\"--><s dj-id=\"D\">S</s><!--/dj-if--> <u dj-id=\"4\">U</u> <em dj-id=\"5\">7</em></p></div>"
@@ -12118,7 +12616,9 @@
                 12,
                 0
               ],
-              "text": "8"
+              "text": "8",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b> <!--dj-if id=\"if-edd98ab8-0\"--><i dj-id=\"J\">I</i><!--/dj-if--> <!--dj-if id=\"if-edd98ab8-1\"--><s dj-id=\"D\">S</s><!--/dj-if--> <u dj-id=\"4\">U</u> <em dj-id=\"5\">8</em></p></div>"
@@ -12133,7 +12633,9 @@
                 12,
                 0
               ],
-              "text": "9"
+              "text": "9",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b> <!--dj-if id=\"if-edd98ab8-0\"--><i dj-id=\"J\">I</i><!--/dj-if--> <!--dj-if id=\"if-edd98ab8-1\"--><s dj-id=\"D\">S</s><!--/dj-if--> <u dj-id=\"4\">U</u> <em dj-id=\"5\">9</em></p></div>"
@@ -12148,7 +12650,9 @@
                 12,
                 0
               ],
-              "text": "10"
+              "text": "10",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b> <!--dj-if id=\"if-edd98ab8-0\"--><i dj-id=\"J\">I</i><!--/dj-if--> <!--dj-if id=\"if-edd98ab8-1\"--><s dj-id=\"D\">S</s><!--/dj-if--> <u dj-id=\"4\">U</u> <em dj-id=\"5\">10</em></p></div>"
@@ -12172,7 +12676,9 @@
                 11,
                 0
               ],
-              "text": "11"
+              "text": "11",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b> <!--dj-if id=\"if-edd98ab8-0\"--><!--/dj-if--> <!--dj-if id=\"if-edd98ab8-1\"--><s dj-id=\"D\">S</s><!--/dj-if--> <u dj-id=\"4\">U</u> <em dj-id=\"5\">11</em></p></div>"
@@ -12213,7 +12719,9 @@
                 12,
                 0
               ],
-              "text": "12"
+              "text": "12",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b> <!--dj-if id=\"if-edd98ab8-0\"--><i dj-id=\"W\">I</i><!--/dj-if--> <!--dj-if id=\"if-edd98ab8-1\"--><s dj-id=\"D\">S</s><!--/dj-if--> <u dj-id=\"4\">U</u> <em dj-id=\"5\">12</em></p></div>"
@@ -12246,7 +12754,9 @@
                 10,
                 0
               ],
-              "text": "13"
+              "text": "13",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b> <!--dj-if id=\"if-edd98ab8-0\"--><!--/dj-if--> <!--dj-if id=\"if-edd98ab8-1\"--><!--/dj-if--> <u dj-id=\"4\">U</u> <em dj-id=\"5\">13</em></p></div>"
@@ -12261,7 +12771,9 @@
                 10,
                 0
               ],
-              "text": "14"
+              "text": "14",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b> <!--dj-if id=\"if-edd98ab8-0\"--><!--/dj-if--> <!--dj-if id=\"if-edd98ab8-1\"--><!--/dj-if--> <u dj-id=\"4\">U</u> <em dj-id=\"5\">14</em></p></div>"
@@ -12276,7 +12788,9 @@
                 10,
                 0
               ],
-              "text": "15"
+              "text": "15",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b> <!--dj-if id=\"if-edd98ab8-0\"--><!--/dj-if--> <!--dj-if id=\"if-edd98ab8-1\"--><!--/dj-if--> <u dj-id=\"4\">U</u> <em dj-id=\"5\">15</em></p></div>"
@@ -12317,7 +12831,9 @@
                 11,
                 0
               ],
-              "text": "16"
+              "text": "16",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b> <!--dj-if id=\"if-edd98ab8-0\"--><!--/dj-if--> <!--dj-if id=\"if-edd98ab8-1\"--><s dj-id=\"18\">S</s><!--/dj-if--> <u dj-id=\"4\">U</u> <em dj-id=\"5\">16</em></p></div>"
@@ -12341,7 +12857,9 @@
                 10,
                 0
               ],
-              "text": "17"
+              "text": "17",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b> <!--dj-if id=\"if-edd98ab8-0\"--><!--/dj-if--> <!--dj-if id=\"if-edd98ab8-1\"--><!--/dj-if--> <u dj-id=\"4\">U</u> <em dj-id=\"5\">17</em></p></div>"
@@ -12356,7 +12874,9 @@
                 10,
                 0
               ],
-              "text": "18"
+              "text": "18",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b> <!--dj-if id=\"if-edd98ab8-0\"--><!--/dj-if--> <!--dj-if id=\"if-edd98ab8-1\"--><!--/dj-if--> <u dj-id=\"4\">U</u> <em dj-id=\"5\">18</em></p></div>"
@@ -12397,7 +12917,9 @@
                 11,
                 0
               ],
-              "text": "19"
+              "text": "19",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b> <!--dj-if id=\"if-edd98ab8-0\"--><i dj-id=\"1j\">I</i><!--/dj-if--> <!--dj-if id=\"if-edd98ab8-1\"--><!--/dj-if--> <u dj-id=\"4\">U</u> <em dj-id=\"5\">19</em></p></div>"
@@ -12421,7 +12943,9 @@
                 10,
                 0
               ],
-              "text": "20"
+              "text": "20",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b> <!--dj-if id=\"if-edd98ab8-0\"--><!--/dj-if--> <!--dj-if id=\"if-edd98ab8-1\"--><!--/dj-if--> <u dj-id=\"4\">U</u> <em dj-id=\"5\">20</em></p></div>"
@@ -12462,7 +12986,9 @@
                 11,
                 0
               ],
-              "text": "21"
+              "text": "21",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b> <!--dj-if id=\"if-edd98ab8-0\"--><i dj-id=\"1u\">I</i><!--/dj-if--> <!--dj-if id=\"if-edd98ab8-1\"--><!--/dj-if--> <u dj-id=\"4\">U</u> <em dj-id=\"5\">21</em></p></div>"
@@ -12477,7 +13003,9 @@
                 11,
                 0
               ],
-              "text": "22"
+              "text": "22",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b> <!--dj-if id=\"if-edd98ab8-0\"--><i dj-id=\"1u\">I</i><!--/dj-if--> <!--dj-if id=\"if-edd98ab8-1\"--><!--/dj-if--> <u dj-id=\"4\">U</u> <em dj-id=\"5\">22</em></p></div>"
@@ -12501,7 +13029,9 @@
                 10,
                 0
               ],
-              "text": "23"
+              "text": "23",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b> <!--dj-if id=\"if-edd98ab8-0\"--><!--/dj-if--> <!--dj-if id=\"if-edd98ab8-1\"--><!--/dj-if--> <u dj-id=\"4\">U</u> <em dj-id=\"5\">23</em></p></div>"
@@ -12516,7 +13046,9 @@
                 10,
                 0
               ],
-              "text": "24"
+              "text": "24",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b> <!--dj-if id=\"if-edd98ab8-0\"--><!--/dj-if--> <!--dj-if id=\"if-edd98ab8-1\"--><!--/dj-if--> <u dj-id=\"4\">U</u> <em dj-id=\"5\">24</em></p></div>"
@@ -12557,7 +13089,9 @@
                 11,
                 0
               ],
-              "text": "25"
+              "text": "25",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b> <!--dj-if id=\"if-edd98ab8-0\"--><!--/dj-if--> <!--dj-if id=\"if-edd98ab8-1\"--><s dj-id=\"1F\">S</s><!--/dj-if--> <u dj-id=\"4\">U</u> <em dj-id=\"5\">25</em></p></div>"
@@ -12607,7 +13141,9 @@
                 11,
                 0
               ],
-              "text": "26"
+              "text": "26",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b> <!--dj-if id=\"if-edd98ab8-0\"--><i dj-id=\"1L\">I</i><!--/dj-if--> <!--dj-if id=\"if-edd98ab8-1\"--><!--/dj-if--> <u dj-id=\"4\">U</u> <em dj-id=\"5\">26</em></p></div>"
@@ -12622,7 +13158,9 @@
                 11,
                 0
               ],
-              "text": "27"
+              "text": "27",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b> <!--dj-if id=\"if-edd98ab8-0\"--><i dj-id=\"1L\">I</i><!--/dj-if--> <!--dj-if id=\"if-edd98ab8-1\"--><!--/dj-if--> <u dj-id=\"4\">U</u> <em dj-id=\"5\">27</em></p></div>"
@@ -12637,7 +13175,9 @@
                 11,
                 0
               ],
-              "text": "28"
+              "text": "28",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b> <!--dj-if id=\"if-edd98ab8-0\"--><i dj-id=\"1L\">I</i><!--/dj-if--> <!--dj-if id=\"if-edd98ab8-1\"--><!--/dj-if--> <u dj-id=\"4\">U</u> <em dj-id=\"5\">28</em></p></div>"
@@ -12678,7 +13218,9 @@
                 12,
                 0
               ],
-              "text": "29"
+              "text": "29",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b> <!--dj-if id=\"if-edd98ab8-0\"--><i dj-id=\"1L\">I</i><!--/dj-if--> <!--dj-if id=\"if-edd98ab8-1\"--><s dj-id=\"1S\">S</s><!--/dj-if--> <u dj-id=\"4\">U</u> <em dj-id=\"5\">29</em></p></div>"
@@ -12711,7 +13253,9 @@
                 10,
                 0
               ],
-              "text": "30"
+              "text": "30",
+              "parent_d": "5",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b> <!--dj-if id=\"if-edd98ab8-0\"--><!--/dj-if--> <!--dj-if id=\"if-edd98ab8-1\"--><!--/dj-if--> <u dj-id=\"4\">U</u> <em dj-id=\"5\">30</em></p></div>"
@@ -12730,7 +13274,9 @@
                 1,
                 0
               ],
-              "text": "1"
+              "text": "1",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><form dj-id=\"1\"><input dj-id=\"2\" name=\"email\" /> <span class=\"error\" dj-id=\"3\"></span></form><u dj-id=\"4\">1</u></div>"
@@ -12760,7 +13306,9 @@
                 1,
                 0
               ],
-              "text": "2"
+              "text": "2",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><form dj-id=\"1\"><input dj-id=\"2\" name=\"email\" /> <span class=\"error\" dj-id=\"3\">Required</span></form><u dj-id=\"4\">2</u></div>"
@@ -12783,7 +13331,9 @@
                 1,
                 0
               ],
-              "text": "3"
+              "text": "3",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><form dj-id=\"1\"><input dj-id=\"2\" name=\"email\" /> <span class=\"error\" dj-id=\"3\"></span></form><u dj-id=\"4\">3</u></div>"
@@ -12813,7 +13363,9 @@
                 1,
                 0
               ],
-              "text": "4"
+              "text": "4",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><form dj-id=\"1\"><input dj-id=\"2\" name=\"email\" /> <span class=\"error\" dj-id=\"3\">Invalid email</span></form><u dj-id=\"4\">4</u></div>"
@@ -12827,7 +13379,9 @@
                 1,
                 0
               ],
-              "text": "5"
+              "text": "5",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><form dj-id=\"1\"><input dj-id=\"2\" name=\"email\" /> <span class=\"error\" dj-id=\"3\">Invalid email</span></form><u dj-id=\"4\">5</u></div>"
@@ -12841,7 +13395,9 @@
                 1,
                 0
               ],
-              "text": "6"
+              "text": "6",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><form dj-id=\"1\"><input dj-id=\"2\" name=\"email\" /> <span class=\"error\" dj-id=\"3\">Invalid email</span></form><u dj-id=\"4\">6</u></div>"
@@ -12864,7 +13420,9 @@
                 1,
                 0
               ],
-              "text": "7"
+              "text": "7",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><form dj-id=\"1\"><input dj-id=\"2\" name=\"email\" /> <span class=\"error\" dj-id=\"3\"></span></form><u dj-id=\"4\">7</u></div>"
@@ -12878,7 +13436,9 @@
                 1,
                 0
               ],
-              "text": "8"
+              "text": "8",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><form dj-id=\"1\"><input dj-id=\"2\" name=\"email\" /> <span class=\"error\" dj-id=\"3\"></span></form><u dj-id=\"4\">8</u></div>"
@@ -12892,7 +13452,9 @@
                 1,
                 0
               ],
-              "text": "9"
+              "text": "9",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><form dj-id=\"1\"><input dj-id=\"2\" name=\"email\" /> <span class=\"error\" dj-id=\"3\"></span></form><u dj-id=\"4\">9</u></div>"
@@ -12922,7 +13484,9 @@
                 1,
                 0
               ],
-              "text": "10"
+              "text": "10",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><form dj-id=\"1\"><input dj-id=\"2\" name=\"email\" /> <span class=\"error\" dj-id=\"3\">Required</span></form><u dj-id=\"4\">10</u></div>"
@@ -12945,7 +13509,9 @@
                 1,
                 0
               ],
-              "text": "11"
+              "text": "11",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><form dj-id=\"1\"><input dj-id=\"2\" name=\"email\" /> <span class=\"error\" dj-id=\"3\"></span></form><u dj-id=\"4\">11</u></div>"
@@ -12959,7 +13525,9 @@
                 1,
                 0
               ],
-              "text": "12"
+              "text": "12",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><form dj-id=\"1\"><input dj-id=\"2\" name=\"email\" /> <span class=\"error\" dj-id=\"3\"></span></form><u dj-id=\"4\">12</u></div>"
@@ -12989,7 +13557,9 @@
                 1,
                 0
               ],
-              "text": "13"
+              "text": "13",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><form dj-id=\"1\"><input dj-id=\"2\" name=\"email\" /> <span class=\"error\" dj-id=\"3\">Invalid email</span></form><u dj-id=\"4\">13</u></div>"
@@ -13004,7 +13574,9 @@
                 2,
                 0
               ],
-              "text": "Required"
+              "text": "Required",
+              "parent_d": "3",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -13012,7 +13584,9 @@
                 1,
                 0
               ],
-              "text": "14"
+              "text": "14",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><form dj-id=\"1\"><input dj-id=\"2\" name=\"email\" /> <span class=\"error\" dj-id=\"3\">Required</span></form><u dj-id=\"4\">14</u></div>"
@@ -13026,7 +13600,9 @@
                 1,
                 0
               ],
-              "text": "15"
+              "text": "15",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><form dj-id=\"1\"><input dj-id=\"2\" name=\"email\" /> <span class=\"error\" dj-id=\"3\">Required</span></form><u dj-id=\"4\">15</u></div>"
@@ -13040,7 +13616,9 @@
                 1,
                 0
               ],
-              "text": "16"
+              "text": "16",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><form dj-id=\"1\"><input dj-id=\"2\" name=\"email\" /> <span class=\"error\" dj-id=\"3\">Required</span></form><u dj-id=\"4\">16</u></div>"
@@ -13063,7 +13641,9 @@
                 1,
                 0
               ],
-              "text": "17"
+              "text": "17",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><form dj-id=\"1\"><input dj-id=\"2\" name=\"email\" /> <span class=\"error\" dj-id=\"3\"></span></form><u dj-id=\"4\">17</u></div>"
@@ -13093,7 +13673,9 @@
                 1,
                 0
               ],
-              "text": "18"
+              "text": "18",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><form dj-id=\"1\"><input dj-id=\"2\" name=\"email\" /> <span class=\"error\" dj-id=\"3\">Invalid email</span></form><u dj-id=\"4\">18</u></div>"
@@ -13108,7 +13690,9 @@
                 2,
                 0
               ],
-              "text": "Too short"
+              "text": "Too short",
+              "parent_d": "3",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -13116,7 +13700,9 @@
                 1,
                 0
               ],
-              "text": "19"
+              "text": "19",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><form dj-id=\"1\"><input dj-id=\"2\" name=\"email\" /> <span class=\"error\" dj-id=\"3\">Too short</span></form><u dj-id=\"4\">19</u></div>"
@@ -13139,7 +13725,9 @@
                 1,
                 0
               ],
-              "text": "20"
+              "text": "20",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><form dj-id=\"1\"><input dj-id=\"2\" name=\"email\" /> <span class=\"error\" dj-id=\"3\"></span></form><u dj-id=\"4\">20</u></div>"
@@ -13153,7 +13741,9 @@
                 1,
                 0
               ],
-              "text": "21"
+              "text": "21",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><form dj-id=\"1\"><input dj-id=\"2\" name=\"email\" /> <span class=\"error\" dj-id=\"3\"></span></form><u dj-id=\"4\">21</u></div>"
@@ -13167,7 +13757,9 @@
                 1,
                 0
               ],
-              "text": "22"
+              "text": "22",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><form dj-id=\"1\"><input dj-id=\"2\" name=\"email\" /> <span class=\"error\" dj-id=\"3\"></span></form><u dj-id=\"4\">22</u></div>"
@@ -13197,7 +13789,9 @@
                 1,
                 0
               ],
-              "text": "23"
+              "text": "23",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><form dj-id=\"1\"><input dj-id=\"2\" name=\"email\" /> <span class=\"error\" dj-id=\"3\">Too short</span></form><u dj-id=\"4\">23</u></div>"
@@ -13212,7 +13806,9 @@
                 2,
                 0
               ],
-              "text": "Required"
+              "text": "Required",
+              "parent_d": "3",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -13220,7 +13816,9 @@
                 1,
                 0
               ],
-              "text": "24"
+              "text": "24",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><form dj-id=\"1\"><input dj-id=\"2\" name=\"email\" /> <span class=\"error\" dj-id=\"3\">Required</span></form><u dj-id=\"4\">24</u></div>"
@@ -13234,7 +13832,9 @@
                 1,
                 0
               ],
-              "text": "25"
+              "text": "25",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><form dj-id=\"1\"><input dj-id=\"2\" name=\"email\" /> <span class=\"error\" dj-id=\"3\">Required</span></form><u dj-id=\"4\">25</u></div>"
@@ -13249,7 +13849,9 @@
                 2,
                 0
               ],
-              "text": "Too short"
+              "text": "Too short",
+              "parent_d": "3",
+              "index": 0
             },
             {
               "type": "SetText",
@@ -13257,7 +13859,9 @@
                 1,
                 0
               ],
-              "text": "26"
+              "text": "26",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><form dj-id=\"1\"><input dj-id=\"2\" name=\"email\" /> <span class=\"error\" dj-id=\"3\">Too short</span></form><u dj-id=\"4\">26</u></div>"
@@ -13271,7 +13875,9 @@
                 1,
                 0
               ],
-              "text": "27"
+              "text": "27",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><form dj-id=\"1\"><input dj-id=\"2\" name=\"email\" /> <span class=\"error\" dj-id=\"3\">Too short</span></form><u dj-id=\"4\">27</u></div>"
@@ -13285,7 +13891,9 @@
                 1,
                 0
               ],
-              "text": "28"
+              "text": "28",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><form dj-id=\"1\"><input dj-id=\"2\" name=\"email\" /> <span class=\"error\" dj-id=\"3\">Too short</span></form><u dj-id=\"4\">28</u></div>"
@@ -13299,7 +13907,9 @@
                 1,
                 0
               ],
-              "text": "29"
+              "text": "29",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><form dj-id=\"1\"><input dj-id=\"2\" name=\"email\" /> <span class=\"error\" dj-id=\"3\">Too short</span></form><u dj-id=\"4\">29</u></div>"
@@ -13313,7 +13923,9 @@
                 1,
                 0
               ],
-              "text": "30"
+              "text": "30",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><form dj-id=\"1\"><input dj-id=\"2\" name=\"email\" /> <span class=\"error\" dj-id=\"3\">Too short</span></form><u dj-id=\"4\">30</u></div>"
@@ -13333,7 +13945,9 @@
                 4,
                 0
               ],
-              "text": "1"
+              "text": "1",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b>x<i dj-id=\"3\">B</i> <u dj-id=\"4\">1</u></p></div>"
@@ -13348,7 +13962,9 @@
                 4,
                 0
               ],
-              "text": "2"
+              "text": "2",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b>x<i dj-id=\"3\">B</i> <u dj-id=\"4\">2</u></p></div>"
@@ -13363,7 +13979,9 @@
                 4,
                 0
               ],
-              "text": "3"
+              "text": "3",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b>x<i dj-id=\"3\">B</i> <u dj-id=\"4\">3</u></p></div>"
@@ -13378,7 +13996,9 @@
                 4,
                 0
               ],
-              "text": "4"
+              "text": "4",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b>x<i dj-id=\"3\">B</i> <u dj-id=\"4\">4</u></p></div>"
@@ -13393,7 +14013,9 @@
                 4,
                 0
               ],
-              "text": "5"
+              "text": "5",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b>x<i dj-id=\"3\">B</i> <u dj-id=\"4\">5</u></p></div>"
@@ -13408,7 +14030,9 @@
                 4,
                 0
               ],
-              "text": "6"
+              "text": "6",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b>x<i dj-id=\"3\">B</i> <u dj-id=\"4\">6</u></p></div>"
@@ -13423,7 +14047,9 @@
                 4,
                 0
               ],
-              "text": "7"
+              "text": "7",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b>x<i dj-id=\"3\">B</i> <u dj-id=\"4\">7</u></p></div>"
@@ -13438,7 +14064,9 @@
                 4,
                 0
               ],
-              "text": "8"
+              "text": "8",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b>x<i dj-id=\"3\">B</i> <u dj-id=\"4\">8</u></p></div>"
@@ -13453,7 +14081,9 @@
                 4,
                 0
               ],
-              "text": "9"
+              "text": "9",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b>x<i dj-id=\"3\">B</i> <u dj-id=\"4\">9</u></p></div>"
@@ -13467,7 +14097,9 @@
                 0,
                 1
               ],
-              "text": "y"
+              "text": "y",
+              "parent_d": "1",
+              "index": 1
             },
             {
               "type": "SetText",
@@ -13476,7 +14108,9 @@
                 4,
                 0
               ],
-              "text": "10"
+              "text": "10",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b>y<i dj-id=\"3\">B</i> <u dj-id=\"4\">10</u></p></div>"
@@ -13490,7 +14124,9 @@
                 0,
                 1
               ],
-              "text": "-"
+              "text": "-",
+              "parent_d": "1",
+              "index": 1
             },
             {
               "type": "SetText",
@@ -13499,7 +14135,9 @@
                 4,
                 0
               ],
-              "text": "11"
+              "text": "11",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b>-<i dj-id=\"3\">B</i> <u dj-id=\"4\">11</u></p></div>"
@@ -13514,7 +14152,9 @@
                 4,
                 0
               ],
-              "text": "12"
+              "text": "12",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b>-<i dj-id=\"3\">B</i> <u dj-id=\"4\">12</u></p></div>"
@@ -13529,7 +14169,9 @@
                 4,
                 0
               ],
-              "text": "13"
+              "text": "13",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b>-<i dj-id=\"3\">B</i> <u dj-id=\"4\">13</u></p></div>"
@@ -13543,7 +14185,9 @@
                 0,
                 1
               ],
-              "text": " "
+              "text": " ",
+              "parent_d": "1",
+              "index": 1
             },
             {
               "type": "SetText",
@@ -13552,7 +14196,9 @@
                 4,
                 0
               ],
-              "text": "14"
+              "text": "14",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b> <i dj-id=\"3\">B</i> <u dj-id=\"4\">14</u></p></div>"
@@ -13567,7 +14213,9 @@
                 4,
                 0
               ],
-              "text": "15"
+              "text": "15",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b> <i dj-id=\"3\">B</i> <u dj-id=\"4\">15</u></p></div>"
@@ -13582,7 +14230,9 @@
                 4,
                 0
               ],
-              "text": "16"
+              "text": "16",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b> <i dj-id=\"3\">B</i> <u dj-id=\"4\">16</u></p></div>"
@@ -13597,7 +14247,9 @@
                 4,
                 0
               ],
-              "text": "17"
+              "text": "17",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b> <i dj-id=\"3\">B</i> <u dj-id=\"4\">17</u></p></div>"
@@ -13612,7 +14264,9 @@
                 4,
                 0
               ],
-              "text": "18"
+              "text": "18",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b> <i dj-id=\"3\">B</i> <u dj-id=\"4\">18</u></p></div>"
@@ -13626,7 +14280,9 @@
                 0,
                 1
               ],
-              "text": "-"
+              "text": "-",
+              "parent_d": "1",
+              "index": 1
             },
             {
               "type": "SetText",
@@ -13635,7 +14291,9 @@
                 4,
                 0
               ],
-              "text": "19"
+              "text": "19",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b>-<i dj-id=\"3\">B</i> <u dj-id=\"4\">19</u></p></div>"
@@ -13649,7 +14307,9 @@
                 0,
                 1
               ],
-              "text": " "
+              "text": " ",
+              "parent_d": "1",
+              "index": 1
             },
             {
               "type": "SetText",
@@ -13658,7 +14318,9 @@
                 4,
                 0
               ],
-              "text": "20"
+              "text": "20",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b> <i dj-id=\"3\">B</i> <u dj-id=\"4\">20</u></p></div>"
@@ -13673,7 +14335,9 @@
                 4,
                 0
               ],
-              "text": "21"
+              "text": "21",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b> <i dj-id=\"3\">B</i> <u dj-id=\"4\">21</u></p></div>"
@@ -13688,7 +14352,9 @@
                 4,
                 0
               ],
-              "text": "22"
+              "text": "22",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b> <i dj-id=\"3\">B</i> <u dj-id=\"4\">22</u></p></div>"
@@ -13703,7 +14369,9 @@
                 4,
                 0
               ],
-              "text": "23"
+              "text": "23",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b> <i dj-id=\"3\">B</i> <u dj-id=\"4\">23</u></p></div>"
@@ -13717,7 +14385,9 @@
                 0,
                 1
               ],
-              "text": "y"
+              "text": "y",
+              "parent_d": "1",
+              "index": 1
             },
             {
               "type": "SetText",
@@ -13726,7 +14396,9 @@
                 4,
                 0
               ],
-              "text": "24"
+              "text": "24",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b>y<i dj-id=\"3\">B</i> <u dj-id=\"4\">24</u></p></div>"
@@ -13741,7 +14413,9 @@
                 4,
                 0
               ],
-              "text": "25"
+              "text": "25",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b>y<i dj-id=\"3\">B</i> <u dj-id=\"4\">25</u></p></div>"
@@ -13756,7 +14430,9 @@
                 4,
                 0
               ],
-              "text": "26"
+              "text": "26",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b>y<i dj-id=\"3\">B</i> <u dj-id=\"4\">26</u></p></div>"
@@ -13771,7 +14447,9 @@
                 4,
                 0
               ],
-              "text": "27"
+              "text": "27",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b>y<i dj-id=\"3\">B</i> <u dj-id=\"4\">27</u></p></div>"
@@ -13785,7 +14463,9 @@
                 0,
                 1
               ],
-              "text": " "
+              "text": " ",
+              "parent_d": "1",
+              "index": 1
             },
             {
               "type": "SetText",
@@ -13794,7 +14474,9 @@
                 4,
                 0
               ],
-              "text": "28"
+              "text": "28",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b> <i dj-id=\"3\">B</i> <u dj-id=\"4\">28</u></p></div>"
@@ -13809,7 +14491,9 @@
                 4,
                 0
               ],
-              "text": "29"
+              "text": "29",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b> <i dj-id=\"3\">B</i> <u dj-id=\"4\">29</u></p></div>"
@@ -13824,7 +14508,9 @@
                 4,
                 0
               ],
-              "text": "30"
+              "text": "30",
+              "parent_d": "4",
+              "index": 0
             }
           ],
           "expected_html": "<div class=\"ws-root\" dj-id=\"0\"><p dj-id=\"1\"><b dj-id=\"2\">A</b> <i dj-id=\"3\">B</i> <u dj-id=\"4\">30</u></p></div>"
