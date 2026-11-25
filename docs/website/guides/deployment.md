@@ -380,6 +380,11 @@ to another process.
   default interval, up to 2 seconds of them. Run it with
   `DJUST_STATE_SAVE_INTERVAL = 0` (every turn saved before its reply), or use
   uvicorn.
+- **More than one process** (several workers, several hosts): use a channel
+  layer shared between them (`channels_redis`). A reconnect that reaches
+  another process asks the tab's old connection to save through it; with an
+  in-memory layer it cannot, and restores the last save, up to one interval
+  behind (system check `djust.C046`).
 - **A kill** (SIGKILL, an out-of-memory kill, a lost host) under any server
   restores the last save, at most the interval behind
   (`test_a_kill_between_saves_restores_the_last_save`).

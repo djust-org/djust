@@ -220,10 +220,16 @@ deferred shows one past what storage has, a save writes the serial with the
 state. A reconnecting page sends its last serial back with its mount frame.
 
 - **The old connection is still open** (the browser moved before the server
-  noticed the drop): the reconnect asks it to save first, through the channel
-  layer (a WebSocket holder joins its tab's group with its first deferred
-  turn), and waits up to one second for storage to catch up. The page sees
-  every change; nothing is shown.
+  noticed the drop): the reconnect asks it to save first, and waits up to one
+  second for storage to catch up. The page sees every change; nothing is
+  shown. A connection in the same process is asked directly. One in another
+  process (another worker, another host) is asked through the channel layer
+  (a WebSocket holder joins its tab's group with its first deferred turn),
+  so **with more than one process the channel layer must be shared between
+  them** (`channels_redis`). With an in-memory layer, or none, a reconnect
+  that lands on another worker restores the last save, up to one interval
+  behind, and the old connection's later save is refused because the new one
+  took the tab (system check `djust.C046`).
 - **Storage is still behind** (the process was killed, or the old connection
   is an SSE stream, which has no channel to ask): the reconnect restores the
   last save and the page gets a transient notice, `state_not_restored`
@@ -235,6 +241,9 @@ state. A reconnecting page sends its last serial back with its mount frame.
 
 ## What it does not cover
 
+- Several worker processes with an in-memory channel layer: a reconnect to
+  another worker cannot reach the old connection (above); up to one interval
+  is lost. Use a shared layer, or `DJUST_STATE_SAVE_INTERVAL = 0`.
 - daphne 4 cancels the application on SIGTERM without delivering the socket
   close and runs no `lifespan`: a graceful stop there loses up to the
   interval. See [what a graceful stop keeps, per server](../guides/deployment.md#what-a-graceful-stop-keeps-per-server).

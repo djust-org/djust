@@ -454,3 +454,145 @@ async def test_the_page_is_told_once_when_its_saves_keep_failing(runtimes, monke
             await comm.disconnect()
     assert notice["code"] == "state_error" and notice["transient"] is True, notice
     assert "not saved yet" in notice["error"]
+
+
+# ---------------------------------------------------------------------------
+# review of item 1 (#4164): the flush request's reach and its failures
+# ---------------------------------------------------------------------------
+
+
+async def test_a_holder_in_this_process_is_asked_without_a_channel_layer(runtimes, monkeypatch):
+    """No layer (or one that does not reach it): the holder in this process is
+    asked directly, and the reconnect restores every change."""
+    import channels.layers
+
+    from djust import _state_flush_request
+
+    sent: List[Any] = []
+
+    class NoReach:
+        async def group_send(self, group, message):
+            sent.append(group)  # delivers nothing, as a layer of another process
+
+    with _settings(DJUST_STATE_SAVE_INTERVAL=60):
+        key = await sync_to_async(sf.page_get)(Counter)
+        comm_a, _ = await _mount(key)
+        rt_a = runtimes[-1]
+        await harness.event(comm_a, "inc")
+        shown = (await harness.event(comm_a, "inc"))["state_serial"]
+        assert rt_a.state_unsaved
+        assert _state_flush_request._local_holders(
+            rt_a.view_instance.__dict__["_djust_flush_group"]
+        ) == [rt_a]
+        monkeypatch.setattr(channels.layers, "get_channel_layer", lambda *a, **k: NoReach())
+        try:
+            comm_b, mounted = await _mount(key, reconnect=True, state_serial=shown)
+            assert await comm_b.receive_nothing(timeout=0.3)
+            values = await sync_to_async(lambda: sf.only_envelope(key)["values"])()
+            await comm_b.disconnect()
+        finally:
+            monkeypatch.undo()
+            await comm_a.disconnect()
+    assert sent == []  # asked in-process, not through the layer
+    assert mounted["state_serial"] == shown and values["count"] == 2
+
+
+async def test_one_refusal_of_a_flush_request_keeps_the_change_owed(runtimes, monkeypatch):
+    """A flush request is made while the connection is up: like the interval,
+    one refusal (a ``cache`` session read as empty looks like a logout) does
+    not drop the change, and the turn locks are waited for briefly."""
+    from django.core.exceptions import PermissionDenied
+
+    with _settings(DJUST_STATE_SAVE_INTERVAL=60):
+        key = await sync_to_async(sf.page_get)(Counter)
+        comm, _ = await _mount(key)
+        rt = runtimes[-1]
+        try:
+            await harness.event(comm, "inc")
+            waits: List[float] = []
+            real_locks = rt._flush_locks
+
+            def locks(wait):
+                waits.append(wait)
+                return real_locks(wait)
+
+            async def refused(view):
+                raise PermissionDenied("refused once")
+
+            monkeypatch.setattr(rt, "_flush_locks", locks)
+            monkeypatch.setattr(rt, "authorize_explicit_turn", refused)
+            await rt.answer_flush_request()
+            assert rt.state_unsaved, "one refusal dropped the owed change"
+            assert rt._state_timer is not None, "the interval no longer tries again"
+        finally:
+            monkeypatch.undo()
+            await comm.disconnect()
+    assert waits == [runtime._FLUSH_REQUEST_LOCK_WAIT_S]
+    assert runtime._FLUSH_REQUEST_LOCK_WAIT_S < _state_flush_request_wait()
+
+
+def _state_flush_request_wait() -> float:
+    from djust import _state_flush_request
+
+    return _state_flush_request.WAIT_S
+
+
+@pytest.mark.parametrize(
+    "stored,page,asks,reloads",
+    [(5, 5, False, True), (6, 5, False, True), (5, 6, True, False), (5, 9, False, False)],
+    ids=["caught_up", "ahead", "one_behind", "never_shown"],
+)
+async def test_what_a_reconnect_does_for_each_stored_serial(
+    monkeypatch, stored, page, asks, reloads
+):
+    """Storage caught up: the mount's session is read again (it may predate the
+    save). One behind: the holder is asked. A serial more than one past the
+    store was never shown by this server: nothing is asked."""
+    from djust import _state_flush_request as fr
+
+    asked: List[str] = []
+    reloaded: List[Any] = []
+    monkeypatch.setattr(fr, "WAIT_S", 0.05)
+    monkeypatch.setattr(fr, "flush_group", lambda view, request: "g")
+    monkeypatch.setattr(fr, "stored_serial", lambda view, request: stored)
+    monkeypatch.setattr(fr, "_reload_session", lambda session: reloaded.append(session))
+    monkeypatch.setattr(fr, "_local_holders", lambda group: asked.append(group) or [])
+
+    class Request:
+        session = object()
+
+    import channels.layers
+
+    class Layer:
+        async def group_send(self, group, message):
+            asked.append("layer")
+
+    monkeypatch.setattr(channels.layers, "get_channel_layer", lambda *a, **k: Layer())
+    await fr.request_flush(object(), Request(), page)
+    assert bool(asked) is asks, asked
+    assert bool(reloaded) is reloads, reloaded
+
+
+def test_c046_reports_a_layer_that_cannot_reach_another_process(monkeypatch, settings):
+    from djust.checks import configuration
+
+    monkeypatch.setattr(configuration, "_is_production", lambda: True)
+    settings.DJUST_STATE_SAVE_INTERVAL = 2
+
+    def ids() -> List[str]:
+        found: List[Any] = []
+        configuration._check_state_flush_reach(found)
+        return [m.id for m in found]
+
+    settings.CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
+    assert ids() == ["djust.C046"]
+    del settings.CHANNEL_LAYERS
+    assert ids() == ["djust.C046"]
+    settings.CHANNEL_LAYERS = {"default": {"BACKEND": "channels_redis.core.RedisChannelLayer"}}
+    assert ids() == []
+    settings.CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
+    settings.DJUST_STATE_SAVE_INTERVAL = 0
+    assert ids() == []
+    settings.DJUST_STATE_SAVE_INTERVAL = 2
+    monkeypatch.setattr(configuration, "_is_production", lambda: False)
+    assert ids() == []

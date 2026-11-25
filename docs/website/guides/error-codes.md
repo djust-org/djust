@@ -512,6 +512,14 @@ Retired in 2.0 (#4199). Nothing reports it; djust refuses the keys at startup. D
 
 ---
 
+### C046: A reconnect cannot ask another process to save
+
+**Severity**: Info
+
+**What causes it**: `DEBUG = False`, the state save interval on (it is by default), and no `CHANNEL_LAYERS` or `channels.layers.InMemoryChannelLayer` (or djust's in-memory layers).
+
+**Fix**: With more than one process (several uvicorn or gunicorn workers, several hosts), use a shared channel layer such as `channels_redis.core.RedisChannelLayer`. With one process, suppress the check. To save every turn before its reply instead, set `DJUST_STATE_SAVE_INTERVAL = 0`.
+
 ### C301: Invalid VDOM cache TTL
 
 **Severity**: Error

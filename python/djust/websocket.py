@@ -212,6 +212,11 @@ _IMMUTABLE_TYPES = (str, int, float, bool, type(None), bytes, tuple, frozenset)
 _SERVER_TURN_LOCK_WAIT_S = 0.1
 
 
+def _log_flush_answer_failure(task: "asyncio.Future[Any]") -> None:
+    if not task.cancelled() and task.exception() is not None:
+        logger.warning("djust: a state flush request could not be answered")
+
+
 async def _flush_states_of(consumers: List[Any], *, reason: str = "disconnect") -> None:
     """Flush the deferred save of each consumer's view, then forget it.
 
@@ -5388,11 +5393,16 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         to be saved now (#4164 item 1, :mod:`djust._state_flush_request`)."""
         runtime = getattr(self, "_runtime", None)
         answer = getattr(runtime, "answer_flush_request", None)
-        if callable(answer):
-            try:
-                await answer()
-            except Exception:  # noqa: BLE001 — flush_state never raises; belt and braces
-                logger.warning("djust: a state flush request could not be answered")
+        if not callable(answer):
+            return
+        # Not awaited here: Channels dispatches this socket's messages one at a
+        # time, and the flush waits for the turn locks and the save.
+        task = asyncio.ensure_future(answer())
+        answers: Set["asyncio.Future[Any]"] = getattr(self, "_djust_flush_answers", None) or set()
+        self._djust_flush_answers = answers
+        answers.add(task)
+        task.add_done_callback(answers.discard)
+        task.add_done_callback(_log_flush_answer_failure)
 
     async def server_push(self, event: Dict[str, Any]) -> None:
         """

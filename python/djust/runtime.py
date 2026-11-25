@@ -402,6 +402,14 @@ _REFUSALS_BEFORE_FORGET = 3
 #: tries again a moment later (a turn in progress holds them).
 _STATE_FLUSH_LOCK_WAIT_S = 0.1
 _STATE_FLUSH_RETRY_S = 0.5
+#: Flushes made while the connection is up: a busy connection or a failure
+#: is retried, and a refusal is final only when it repeats. The interval's,
+#: and a reconnect's request to save (#4164 item 1).
+_LIVE_FLUSHES = ("interval", "flush_request")
+#: A flush request waits this long for the turn locks: within the
+#: reconnect's own wait (``_state_flush_request.WAIT_S``), so the save can
+#: still land before the reconnect restores.
+_FLUSH_REQUEST_LOCK_WAIT_S = 0.5
 
 
 #: Every runtime holding a change no save has written, in this process: what
@@ -3982,7 +3990,10 @@ class ViewRuntime(RuntimeTurnPort):
                 from ._automatic_state import turn_serial
 
                 restored_serial = turn_serial(view_instance)
-                if restored_serial is not None and restored_serial < page_serial:
+                if (
+                    restored_serial is not None
+                    and restored_serial < page_serial <= restored_serial + 1
+                ):
                     view_instance.__dict__["_djust_not_restored"] = True
             from django.conf import settings
 
@@ -6943,8 +6954,10 @@ class ViewRuntime(RuntimeTurnPort):
 
     async def answer_flush_request(self) -> None:
         """Another connection of this tab is mounting and the store is behind
-        what this page showed: save now (#4164 item 1). Not interactive: the
-        10 s cap, no retry; the change stays owed when it fails."""
+        what this page showed: save now (#4164 item 1). As the interval's
+        flush: a busy connection or a failure is retried, one refusal does not
+        drop the change; the locks are waited for at most
+        :data:`_FLUSH_REQUEST_LOCK_WAIT_S`."""
         view = self._state_dirty_view
         if not self.state_unsaved:
             return
@@ -7055,8 +7068,13 @@ class ViewRuntime(RuntimeTurnPort):
         if view is not self.view_instance:
             self._forget_state_flush()  # the view it was owed for is gone
             return True
-        interactive = reason == "interval"
-        wait = _STATE_FLUSH_LOCK_WAIT_S if interactive else MAX_EXPLICIT_STATE_SAVE_TIMEOUT_S
+        interactive = reason in _LIVE_FLUSHES
+        if reason == "flush_request":
+            wait = _FLUSH_REQUEST_LOCK_WAIT_S
+        elif interactive:
+            wait = _STATE_FLUSH_LOCK_WAIT_S
+        else:
+            wait = MAX_EXPLICIT_STATE_SAVE_TIMEOUT_S
         try:
             async with self._flush_locks(wait):
                 if self._state_dirty_view is not view or self.view_instance is not view:
@@ -7086,7 +7104,7 @@ class ViewRuntime(RuntimeTurnPort):
         from .state_store import StateSuperseded
 
         self._cancel_state_timer()
-        interactive = reason == "interval"
+        interactive = reason in _LIVE_FLUSHES
         try:
             await self.authorize_explicit_turn(view)
         except Exception as exc:  # noqa: BLE001 — no auth provider values on the wire/log

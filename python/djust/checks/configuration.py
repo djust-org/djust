@@ -1396,6 +1396,54 @@ def _check_in_memory_channel_layer(errors: list[CheckMessage]) -> None:
     )
 
 
+def _check_state_flush_reach(errors: list[CheckMessage]) -> None:
+    """C046 (info) — a reconnect cannot ask another process to save (#4164).
+
+    With the save interval on (the default, 2 seconds) a reconnect whose
+    stored state is behind what the page showed asks the tab's old connection
+    to save first. A connection in the same process is asked directly; one in
+    another process only through a channel layer shared between processes.
+    With no layer or an in-memory one, a reconnect that lands on another
+    process restores what was last saved, up to one interval behind, and the
+    old connection's later save is refused. Whether the site runs more than
+    one process cannot be seen from settings, so this is information, with
+    ``DEBUG`` off only.
+    """
+    from django.conf import settings
+
+    if _is_check_suppressed("djust.C046") or not _is_production():
+        return
+    try:
+        from djust import _save_policy
+    except ImportError:
+        return
+    if _save_policy.state_save_interval() <= 0:
+        return
+    layers = getattr(settings, "CHANNEL_LAYERS", None)
+    config = layers.get("default") if isinstance(layers, dict) else None
+    backend = config.get("BACKEND") if isinstance(config, dict) else None
+    if backend is not None and backend not in _IN_MEMORY_LAYERS:
+        return
+    errors.append(
+        DjustInfo(
+            "The state save interval is on and CHANNEL_LAYERS['default'] is %s: a reconnect "
+            "that lands on another process cannot ask the tab's old connection to save, "
+            "so it restores the last save, up to %s seconds behind what the page showed."
+            % (backend or "not set", _save_policy.state_save_interval()),
+            hint=(
+                "With more than one process, use a channel layer shared between them "
+                "(channels_redis). With one process, ignore this (suppress djust.C046), "
+                "or set DJUST_STATE_SAVE_INTERVAL = 0 to save every turn before its reply."
+            ),
+            id="djust.C046",
+            fix_hint=(
+                "Set `CHANNEL_LAYERS = {'default': {'BACKEND': "
+                "'channels_redis.core.RedisChannelLayer', 'CONFIG': {'hosts': [REDIS_URL]}}}`."
+            ),
+        )
+    )
+
+
 def _check_memory_presence_backend(errors: list[CheckMessage]) -> None:
     """C033 — presence is counted per process (#4104).
 
@@ -2106,6 +2154,8 @@ def check_configuration(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     # C032 / C033 -- in-memory channel layer, memory presence backend (#4104)
     _check_in_memory_channel_layer(errors)
     _check_memory_presence_backend(errors)
+    # C046 -- a reconnect cannot ask another process to save (#4164)
+    _check_state_flush_reach(errors)
 
     # C005 -- WebSocket routes missing AuthMiddlewareStack
     # A001 -- WebSocket routes missing AllowedHostsOriginValidator (#659)
