@@ -97,6 +97,8 @@ fn snapshot_patch_set_text() {
         path: vec![0, 1],
         d: Some("3z".to_string()),
         text: "hello".to_string(),
+        parent_d: None,
+        index: None,
     };
     let json = serde_json::to_string(&p).unwrap();
     assert_eq!(
@@ -113,6 +115,8 @@ fn snapshot_patch_set_text_no_djust_id() {
         path: vec![0],
         d: None,
         text: "x".to_string(),
+        parent_d: None,
+        index: None,
     };
     let json = serde_json::to_string(&p).unwrap();
     assert_eq!(json, r#"{"type":"SetText","path":[0],"text":"x"}"#);
@@ -547,6 +551,8 @@ fn snapshot_all_variants_round_trip_via_serde() {
             path: vec![0],
             d: Some("a".to_string()),
             text: "t".to_string(),
+            parent_d: None,
+            index: None,
         },
         Patch::SetAttr {
             path: vec![],
@@ -648,6 +654,8 @@ fn virtual_update_json_shape_nests_its_inner_patches() {
             path: vec![0],
             d: None,
             text: "edited".into(),
+            parent_d: None,
+            index: None,
         }],
     };
     let json = serde_json::to_string(&p).unwrap();
@@ -749,11 +757,15 @@ fn every_patch_shape() -> Vec<Patch> {
             path: vec![0],
             d: None,
             text: "hi".into(),
+            parent_d: None,
+            index: None,
         },
         Patch::SetText {
             path: vec![0],
             d: Some("v".into()),
             text: "hi".into(),
+            parent_d: None,
+            index: None,
         },
         Patch::InsertChild {
             path: vec![0],
@@ -804,6 +816,8 @@ fn every_patch_shape() -> Vec<Patch> {
                 path: vec![0],
                 d: None,
                 text: "t".into(),
+                parent_d: None,
+                index: None,
             }],
         },
         Patch::VirtualUpdate {
@@ -853,6 +867,8 @@ fn msgpack_positional_is_the_broken_encoding_this_replaced() {
         path: vec![0],
         d: None,
         text: "hi".into(),
+        parent_d: None,
+        index: None,
     };
     let bytes = rmp_serde::to_vec(&broken).unwrap();
     assert_eq!(

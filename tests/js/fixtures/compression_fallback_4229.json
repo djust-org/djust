@@ -13,6 +13,8 @@
    "event_name": "touch",
    "patches": [
     {
+     "index": 0,
+     "parent_d": "2s",
      "path": [
       1,
       0
@@ -30,6 +32,8 @@
    "event_name": "touch",
    "patches": [
     {
+     "index": 0,
+     "parent_d": "2s",
      "path": [
       1,
       0

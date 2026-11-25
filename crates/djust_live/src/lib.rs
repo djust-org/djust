@@ -2631,11 +2631,12 @@ impl RustLiveViewBackend {
                                 } else {
                                     Some(djust_id.clone())
                                 };
-                                patches.push(djust_vdom::Patch::SetText {
-                                    path: path.clone(),
+                                patches.push(djust_vdom::set_text_patch(
+                                    &vdom,
+                                    path.clone(),
                                     d,
-                                    text: new_text.clone(),
-                                });
+                                    new_text.clone(),
+                                ));
                             }
                             Some((vdom, patches))
                         } else {
@@ -6438,11 +6439,7 @@ fn try_text_region_fast_path(
     } else {
         Some(djust_id)
     };
-    let patch = djust_vdom::Patch::SetText {
-        path,
-        d,
-        text: new_text,
-    };
+    let patch = djust_vdom::set_text_patch(&new_vdom, path, d, new_text);
     Some((new_vdom, vec![patch]))
 }
 

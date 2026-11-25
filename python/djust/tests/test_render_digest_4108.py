@@ -468,12 +468,15 @@ def test_path_addressed_removes_the_id_hints_and_nothing_else():
         {"type": "InsertChild", "path": [0], "d": "0", "ref_d": "3", "index": 1, "node": {"d": 1}},
         {"type": "RemoveChild", "path": [0], "child_d": "4", "index": 2},
         {"type": "SetAttr", "path": [], "key": "class", "value": "d"},
+        # #4001: a SetText's parent id goes, and its index (counted in that parent) with it.
+        {"type": "SetText", "path": [2, 0], "text": "y", "parent_d": "7", "index": 0},
     ]
     assert _render_digest.path_addressed(patches) == [
         {"type": "SetText", "path": [0, 1], "text": "x"},
         {"type": "InsertChild", "path": [0], "index": 1, "node": {"d": 1}},
         {"type": "RemoveChild", "path": [0], "index": 2},
         {"type": "SetAttr", "path": [], "key": "class", "value": "d"},
+        {"type": "SetText", "path": [2, 0], "text": "y"},
     ]
     # The input is not changed.
     assert patches[0]["d"] == "1a"

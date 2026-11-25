@@ -1465,11 +1465,25 @@ pub enum Patch {
         node: VNode,
     },
     /// Update text content
+    ///
+    /// A text node has no `djust_id`, so `d` is normally `None` and `path`
+    /// alone would make the client walk child lists from the root. `parent_d`
+    /// and `index` (#4001) name the text node's parent element by its dj-id
+    /// and the node's position among that parent's significant children
+    /// (the same frame as `InsertChild.index`), so the client finds it with
+    /// one id lookup. Both are optional on the wire: a client resolving by
+    /// `path` ignores them, and a patch without them still resolves by `path`.
     SetText {
         path: Vec<usize>,
         #[serde(skip_serializing_if = "Option::is_none")]
         d: Option<String>,
         text: String,
+        /// The parent element's djust_id (#4001).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent_d: Option<String>,
+        /// The node's index among the parent's significant children (#4001).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        index: Option<usize>,
     },
     /// Set an attribute
     SetAttr {
@@ -2018,14 +2032,34 @@ pub fn try_text_patches(old_vdom: &VNode, old_html: &str, new_html: &str) -> Opt
         .map(|change| {
             let d = get_text_node_at_path(old_vdom, &change.path)
                 .and_then(|node| node.djust_id.clone());
-            Patch::SetText {
-                path: change.path,
-                d,
-                text: change.new_text,
-            }
+            set_text_patch(old_vdom, change.path, d, change.new_text)
         })
         .collect();
     Some(patches)
+}
+
+/// A `SetText` for the text node at `path` under `root`, naming its parent
+/// element by dj-id plus the node's index in it (#4001), so the client finds
+/// the node with one id lookup instead of walking `path` from the root. The
+/// parent fields are left out when the parent has no dj-id (or `path` is
+/// empty); `path` still resolves the node then.
+pub fn set_text_patch(root: &VNode, path: Vec<usize>, d: Option<String>, text: String) -> Patch {
+    let (parent_d, index) = match path.split_last() {
+        Some((&last, parent_path)) => match get_text_node_at_path(root, parent_path)
+            .and_then(|parent| parent.djust_id.clone())
+        {
+            Some(pid) => (Some(pid), Some(last)),
+            None => (None, None),
+        },
+        None => (None, None),
+    };
+    Patch::SetText {
+        path,
+        d,
+        text,
+        parent_d,
+        index,
+    }
 }
 
 fn get_text_node_at_path<'a>(vdom: &'a VNode, path: &[usize]) -> Option<&'a VNode> {
