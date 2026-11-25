@@ -2863,6 +2863,93 @@ pub fn render_nodes_collecting<L: TemplateLoader>(
     Ok((output, fragments))
 }
 
+/// Can rendering `node` bind a name that a LATER sibling reads (#4124)?
+///
+/// The partial renderer's latch question, kept apart from "does this node
+/// read keys we cannot name" (the `"*"` dependency). Conservative by
+/// construction: every node kind not proven binding-free answers `true`,
+/// and a container answers `true` when anything inside it does — Django's
+/// `{% if %}` renders its body in the enclosing context, so an
+/// `{% if %}{% url 'x' as u %}{% endif %}` binds `u` for what follows.
+///
+/// Binding-free leaves: plain text and variables, and an inline custom tag
+/// whose handler either cannot return bindings at all, or declared
+/// `BINDS_ONLY_AS_VAR` and is used without an `as` operand.
+pub fn node_may_bind_names(node: &Node) -> bool {
+    let any = |nodes: &[Node]| nodes.iter().any(node_may_bind_names);
+    match node {
+        Node::Located {
+            nodes,
+            registry_namespace,
+            ..
+        } => {
+            // Handler flags live in the template's registry namespace, the
+            // one the render itself enters for this node.
+            let _namespace = crate::registry_scope::NamespaceGuard::enter(*registry_namespace);
+            any(nodes)
+        }
+        Node::Text(_)
+        | Node::Variable(..)
+        | Node::Comment
+        | Node::Load(_)
+        | Node::CsrfToken
+        | Node::DjustAudio
+        | Node::Static(_)
+        | Node::Now(_)
+        | Node::TemplateTag(_)
+        | Node::InlineIf { .. } => false,
+        Node::WidthRatio { asvar, .. } | Node::FirstOf { asvar, .. } => asvar.is_some(),
+        Node::Cycle { name, .. } => name.is_some(),
+        Node::CustomTag { name, args } => {
+            if !crate::registry::tag_handler_returns_bindings(name) {
+                false
+            } else if crate::registry::tag_handler_binds_only_as_var(name) {
+                // Any `as` operand at all, not only Django's `bits[-2]`:
+                // a false positive costs a re-render, a false negative a
+                // stale page.
+                args.iter().any(|arg| arg == "as")
+            } else {
+                true
+            }
+        }
+        Node::BlockCustomTag { name, children, .. } => {
+            crate::registry::block_handler_returns_bindings(name) || any(children)
+        }
+        Node::If {
+            true_nodes,
+            false_nodes,
+            ..
+        } => any(true_nodes) || any(false_nodes),
+        Node::For {
+            nodes, empty_nodes, ..
+        } => any(nodes) || any(empty_nodes),
+        Node::IfChanged {
+            nodes, else_nodes, ..
+        } => any(nodes) || any(else_nodes),
+        Node::BlockSuperScope { super_nodes, nodes } => any(super_nodes) || any(nodes),
+        Node::Block { nodes, .. }
+        | Node::With { nodes, .. }
+        | Node::Spaceless { nodes }
+        | Node::AutoEscape { nodes, .. }
+        | Node::Filter { nodes, .. } => any(nodes),
+        // Context-mutating or not statically knowable: an assign tag, a
+        // raw-block bridge, an include (the included template is not in
+        // view here), partials, cycle resets, locale scopes, an unknown tag.
+        Node::AssignTag { .. }
+        | Node::RawBlockCustomTag { .. }
+        | Node::Include { .. }
+        | Node::PartialCall { .. }
+        | Node::PartialDef { .. }
+        | Node::ResetCycle { .. }
+        | Node::Extends(_)
+        | Node::UnsupportedTag { .. }
+        | Node::Language { .. }
+        | Node::Timezone { .. }
+        | Node::Localize { .. }
+        | Node::LocalTime { .. } => true,
+    }
+}
+
 /// Partial render: only re-render nodes whose deps overlap `changed_keys`.
 ///
 /// Returns `(full_html, new_fragments, changed_indices)`.
@@ -2881,11 +2968,18 @@ pub fn render_nodes_partial<L: TemplateLoader>(
     let mut changed = Vec::new();
     let mut context_may_have_changed = false;
     for (i, node) in nodes.iter().enumerate() {
-        // Wildcard nodes may bind names used by later siblings, including
-        // through nested control flow or custom tags. Their effects cannot
-        // be inferred from the caller's changed input keys. Re-evaluate
-        // following dynamic nodes; literal text remains reusable.
-        context_may_have_changed |= node_deps.get(i).is_none_or(|deps| deps.contains("*"));
+        // A wildcard node READS keys we cannot name, so it always re-renders
+        // itself. Only a node that may also BIND names (an assign tag, an
+        // `as <var>` form, a bridged tag that may write the context, an
+        // include, …) can change what later siblings read; those effects
+        // cannot be inferred from the caller's changed input keys, so the
+        // following dynamic nodes re-evaluate. An inline `{% url %}` /
+        // `{% static %}` / `{% now %}` / simple tag without `as` reads
+        // unknown keys but binds nothing, and no longer latches (#4124).
+        // Literal text remains reusable either way.
+        context_may_have_changed |= node_deps
+            .get(i)
+            .is_none_or(|deps| deps.contains("*") && node_may_bind_names(node));
         let needs_render = node_deps.get(i).is_none_or(|deps| {
             (context_may_have_changed && !deps.is_empty())
                 || deps.contains("*")

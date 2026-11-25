@@ -398,6 +398,25 @@ fn read_accepts_as_var(handler: &Bound<'_, PyAny>) -> PyResult<bool> {
     handler.getattr("ACCEPTS_AS_VAR")?.is_truthy()
 }
 
+/// The handler's "my only context effect is Django's `as <name>` tail"
+/// declaration (#4124).
+///
+/// A `RETURNS_BINDINGS` handler may bind ANY name, so the partial renderer
+/// must re-render every later sibling after it: a binding is invisible to
+/// the changed-key set. Most bindings tags bind only through `as <name>`
+/// (`{% url %}`, `{% static %}`, `{% now %}`, a `simple_tag` without
+/// `takes_context`). A handler that sets `BINDS_ONLY_AS_VAR = True` promises
+/// exactly that, so a use with no `as` operand re-renders only itself and
+/// leaves the later siblings' fragment cache alone.
+///
+/// Absent or falsy = "may bind anything" (the safe historical reading).
+fn read_binds_only_as_var(handler: &Bound<'_, PyAny>) -> PyResult<bool> {
+    if !handler.hasattr("BINDS_ONLY_AS_VAR")? {
+        return Ok(false);
+    }
+    handler.getattr("BINDS_ONLY_AS_VAR")?.is_truthy()
+}
+
 /// The handler's opt-in "hand me the `{% autoescape %}` policy" declaration
 /// (#2556).
 ///
@@ -537,6 +556,8 @@ struct TagHandlerEntry {
     returns_bindings: bool,
     /// See [`read_accepts_as_var`] (#2563).
     accepts_as_var: bool,
+    /// See [`read_binds_only_as_var`] (#4124).
+    binds_only_as_var: bool,
     /// See [`read_wants_autoescape`] (#2556).
     wants_autoescape: bool,
     /// See [`read_wants_typed_args`] (#3756).
@@ -739,6 +760,7 @@ pub fn register_tag_handler(py: Python<'_>, name: String, handler: Py<PyAny>) ->
     let resolve_positions = read_resolve_positions(handler_ref)?;
     let returns_bindings = read_returns_bindings(handler_ref)?;
     let accepts_as_var = read_accepts_as_var(handler_ref)?;
+    let binds_only_as_var = read_binds_only_as_var(handler_ref)?;
     let wants_autoescape = read_wants_autoescape(handler_ref)?;
     let wants_typed_args = read_wants_typed_args(handler_ref)?;
     let typed_standins_only = read_typed_standins_only(handler_ref)?;
@@ -766,6 +788,7 @@ pub fn register_tag_handler(py: Python<'_>, name: String, handler: Py<PyAny>) ->
             resolve_positions,
             returns_bindings,
             accepts_as_var,
+            binds_only_as_var,
             wants_autoescape,
             wants_typed_args,
             typed_standins_only,
@@ -1409,6 +1432,16 @@ pub fn block_handler_wants_typed_args(name: &str) -> bool {
         .read()
         .ok()
         .and_then(|registry| registry.get(name).map(|entry| entry.wants_typed_args))
+        .unwrap_or(false)
+}
+
+/// Internal Rust API — did the inline handler for `name` declare
+/// `BINDS_ONLY_AS_VAR` (#4124)? `false` for an unregistered name.
+pub fn tag_handler_binds_only_as_var(name: &str) -> bool {
+    TAG_HANDLERS
+        .read()
+        .ok()
+        .and_then(|registry| registry.get(name).map(|entry| entry.binds_only_as_var))
         .unwrap_or(false)
 }
 
