@@ -69,22 +69,6 @@ class ShellPage(LiveView):
         return super().get_context_data(n=self.n, **kwargs)
 
 
-class LegacyShellWidget(LiveView):
-    exposure_policy = "legacy"
-    sticky = True
-    sticky_id = "legacy-shell"
-    template = '<div><button dj-click="poke">x</button></div>'
-
-    @event_handler()
-    def poke(self):
-        pass
-
-
-class LegacyShellPage(LiveView):
-    exposure_policy = "legacy"
-    template_name = "e3_6_legacy_page.html"
-
-
 @pytest.fixture(autouse=True)
 async def close_reconnect_worker_connections(transactional_db):
     """Release connections opened by reconnect session creation on the async worker."""
@@ -107,15 +91,6 @@ def staged(monkeypatch, settings, tmp_path):
     (tmp_path / "e3_6_shell_page.html").write_text(
         '{% extends "e3_6_base.html" %}{% block main %}'
         "<div dj-root>Page={{ n }}</div>{% endblock %}"
-    )
-    (tmp_path / "e3_6_legacy_base.html").write_text(
-        "{% load live_tags %}<html><body>"
-        f'{{% live_render "{MODULE}.LegacyShellWidget" sticky=True %}}'
-        "{% block main %}{% endblock %}</body></html>"
-    )
-    (tmp_path / "e3_6_legacy_page.html").write_text(
-        '{% extends "e3_6_legacy_base.html" %}{% block main %}'
-        "<div dj-root>Legacy</div>{% endblock %}"
     )
 
 
@@ -184,18 +159,6 @@ async def test_shell_child_is_reconstructed_with_state_and_routes_after_reconnec
         finally:
             await comm.disconnect()
         assert (await stored_shell(session_key))["count"] == 3
-
-
-async def test_legacy_shell_page_reconnect_behavior_is_unchanged():
-    """Legacy control: a legacy page still mounts only its live root on reconnect."""
-    session_key = await sync_to_async(new_session)()
-    with override_settings(**WS_SETTINGS):
-        comm = await connect(session_key, "LegacyShellPage")
-        try:
-            reply = await event_reply(comm, "poke", view_id="legacy-shell")
-            assert reply["type"] == "error" and reply["error"] == "Embedded view not found"
-        finally:
-            await comm.disconnect()
 
 
 class IgnoredWidget(ShellWidget):

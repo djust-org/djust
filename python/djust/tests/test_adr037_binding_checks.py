@@ -67,7 +67,7 @@ def audited(function):
 
 
 class Decorated(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = """<div dj-root><button dj-click="archive">x</button></div>"""
 
     @event_handler
@@ -83,7 +83,7 @@ class UserForm(forms.ModelForm):
 
 
 class EditUser(ModelFormMixin[User], LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     """A managed ``self.object``: the framework owns its persistence."""
 
     model = User
@@ -96,7 +96,7 @@ class EditUser(ModelFormMixin[User], LiveView):
 
 
 class UserList(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     """Authorized ORM values rendered from the context, never persisted."""
 
     template = """<div dj-root>{% for user in users %}
@@ -107,7 +107,7 @@ class UserList(LiveView):
         context["users"] = User.objects.filter(is_active=True)
         return context
 
-    @event_handler
+    @event_handler(parameter_policy="legacy")  # legacy parameter policy is the subject (T020-T022, T028): #4205
     def pick(self, user_id: int = 0, **kwargs):
         pass
 
@@ -119,7 +119,7 @@ class Handlers:
 
 
 class Names(Handlers, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = """<div dj-root>
 <button dj-click="nope">a</button>
 <button dj-click="helper">b</button>
@@ -152,7 +152,7 @@ class Names(Handlers, LiveView):
 
 
 class Legacy(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = """<div dj-root>
 <input name="q" dj-input="search">
 <input name="q" dj-input="search_open">
@@ -167,25 +167,25 @@ class Legacy(LiveView):
 <button dj-click="delete" {% if a %}data-item-id="1"{% endif %}>conditional</button>
 </div>"""
 
-    @event_handler
+    @event_handler(parameter_policy="legacy")  # legacy parameter policy is the subject (T020-T022, T028): #4205
     def search(self, value: str = ""):
         pass
 
-    @event_handler
+    @event_handler(parameter_policy="legacy")  # legacy parameter policy is the subject (T020-T022, T028): #4205
     def search_open(self, value: str = "", **form_data: Any):
         pass
 
-    @event_handler
+    @event_handler(parameter_policy="legacy")  # legacy parameter policy is the subject (T020-T022, T028): #4205
     def delete(self, item_id: int):
         pass
 
-    @event_handler
+    @event_handler(parameter_policy="legacy")  # legacy parameter policy is the subject (T020-T022, T028): #4205
     def count_to(self, count: int):
         pass
 
 
 class Strict(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = """<div dj-root>
 <button dj-click="pick" data-item-id="4">data only</button>
 <button dj-click="pick" dj-value-item-id:int="4">ok</button>
@@ -209,7 +209,7 @@ class Strict(LiveView):
 
 
 class Dynamic(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = """<div dj-root>
 <button dj-click="{{ handler }}">computed</button>
 <div data-component-id="c1"><button dj-click="inside">component</button></div>
@@ -220,7 +220,7 @@ class Dynamic(LiveView):
 
 
 class Suppressed(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = """<div dj-root>
 {# noqa: T019 -- rendered by a third-party widget that adds the handler #}
 <button dj-click="reasoned">a</button>
@@ -229,7 +229,7 @@ class Suppressed(LiveView):
 
 
 class Files(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template_name = "fixture/page.html"
 
     @event_handler
@@ -238,7 +238,7 @@ class Files(LiveView):
 
 
 class OtherFiles(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template_name = "fixture/page.html"
 
 
@@ -247,7 +247,7 @@ class ContactForm(forms.Form):
 
 
 class FormView(FormMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     form_class = ContactForm
     template = """<div dj-root>
 <input name="email" dj-change="validate_field">
@@ -265,11 +265,11 @@ class Counter(LiveComponent):
 
 
 class Exploding(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     """Nothing here may run during a check."""
 
     template = """<div dj-root>{% for item in items %}
-<button dj-click="remove" data-item-id="{{ item.pk }}">x</button>{% endfor %}</div>"""
+<button dj-click="remove" dj-value-item-id:int="{{ item.pk }}">x</button>{% endfor %}</div>"""
 
     class Boom:
         def __iter__(self):
@@ -625,15 +625,14 @@ def test_managed_objects_and_authorized_querysets_are_not_flagged(discovery):
         ]
         # Only the fixture module's placement is reported: it is not in
         # LIVEVIEW_ALLOWED_MODULES (V005), and EditUser declares no login (S005).
-        # EditUser states exposure_policy = "legacy" (#4038's pin), which V028
-        # (#4066) reports; that is placement too, not a persistence finding.
-        # UserList's legacy handler gets T028 (#4190): a 2.0 upgrade finding.
+        # UserList's legacy-parameter handler gets T028 (#4190) and V036 (#4199):
+        # 2.0 upgrade findings.
         assert set(flagged) <= {
             "djust.V005",
             "djust.S005",
             "djust.V002",
-            "djust.V028",
             "djust.T028",
+            "djust.V036",
         }, (
             owner,
             flagged,

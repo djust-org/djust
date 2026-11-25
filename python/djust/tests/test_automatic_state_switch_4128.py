@@ -549,16 +549,21 @@ LAZY = '<div dj-view="' + MODULE + '.LazyChild" dj-lazy></div>'
 
 
 class LazyChild(LiveView):
-    """A legacy lazy child: over the fallback its state was written to the
-    session by its own code path (``_lazy_containers.save_http_lazy``)."""
+    """A lazy child: over the fallback it is mounted by ``dj-lazy`` and its
+    events run against the page's session; only ``count`` is kept there."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div><span class="n">{{ count }}</span><i>{{ note }}</i></div>'
+    count = state(0, persist="server")
 
     def mount(self, request, **kwargs):
-        self.count = 0
         self.note = "SWEEP_LAZY"
         self._hidden = "SWEEP_LAZY"
+
+    def get_context_data(self, **kwargs):
+        context = super().get_context_data(**kwargs)
+        context["note"] = self.note
+        return context
 
     @event_handler
     def inc(self, **kwargs):
@@ -566,33 +571,19 @@ class LazyChild(LiveView):
 
 
 class LazyPage(LiveView):
-    # Only a legacy page registers lazy children (``register_lazy_containers``).
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><section>" + LAZY + "</section></div>"
 
 
 class LazyPageOff(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     automatic_state = False
     template = "<div dj-root><section>" + LAZY + "</section></div>"
-
-
-class LazyChildOff(LazyChild):
-    automatic_state = False
-
-
-class LazyPageChildOff(LiveView):
-    exposure_policy = "legacy"
-    template = (
-        '<div dj-root><section><div dj-view="' + MODULE + '.LazyChildOff" dj-lazy></div>'
-        "</section></div>"
-    )
 
 
 urlpatterns += [
     path("lazy-on/", LazyPage.as_view()),
     path("lazy-page-off/", LazyPageOff.as_view()),
-    path("lazy-child-off/", LazyPageChildOff.as_view()),
 ]
 
 
@@ -616,7 +607,7 @@ def _lazy_flow(url: str) -> List[int]:
             HTTP_X_DJUST_EVENT=event,
             HTTP_X_CSRFTOKEN=client.cookies[settings.CSRF_COOKIE_NAME].value,
         )
-        assert response.status_code == 200, response.content
+        assert response.status_code == 200, (event, response.content)
         found = re.search(r'class="n"[^>]*>(\d+)</span>', json.loads(response.content)["html"])
         counts.append(int(found.group(1)))
     return counts
@@ -628,42 +619,19 @@ def _lazy_flow(url: str) -> List[int]:
     [
         pytest.param("/lazy-on/", False, id="project-off"),
         pytest.param("/lazy-page-off/", True, id="page-off"),
-        pytest.param("/lazy-child-off/", True, id="child-off"),
     ],
 )
-def test_sweep_a_lazy_legacy_child_leaves_nothing(url, project, settings):
+def test_sweep_a_lazy_child_keeps_only_its_declared_field(url, project, settings):
+    """A lazy child's undeclared state is never saved; the field it declared
+    ``persist="server"`` is, which is what makes this a sweep with a control."""
     settings.ROOT_URLCONF = MODULE
     settings.DJUST_AUTOMATIC_STATE = project
-    assert _lazy_flow(url) == [0, 1, 1]  # each request starts from mount()
+    assert _lazy_flow(url) == [0, 1, 2]  # the declared field carries over
     assert sweep() == []
-
-
-@pytest.mark.django_db
-def test_control_a_lazy_legacy_child_is_saved_with_saving_on(settings):
-    settings.ROOT_URLCONF = MODULE
-    settings.DJUST_AUTOMATIC_STATE = True
-    assert _lazy_flow("/lazy-on/") == [0, 1, 2]
-    wrong = sweep()
-    assert "value SWEEP_LAZY" in wrong and any(item.startswith("key liveview_") for item in wrong)
-
-
-@pytest.mark.django_db
-def test_a_lazy_childs_state_saved_earlier_is_removed_on_first_contact(settings):
-    settings.ROOT_URLCONF = MODULE
-    assert _lazy_flow("/lazy-on/") == [0, 1, 2]
-    assert sweep()
-    settings.DJUST_AUTOMATIC_STATE = False
-    # The same browser would be needed to reach the same entry: do it in place.
-    from djust._lazy_containers import LazyContainer, mount_http_lazy
-
     (row,) = Session.objects.all()
-    session = SessionStore(row.session_key)
-    (state_key,) = [key for key in session.keys() if key.startswith("liveview_")]
-    parent = LazyPage()
-    parent._http_lazy_containers = {"lazy_x": LazyContainer(LazyChild, state_key, "")}
-    request = _request("GET", row.session_key, "/lazy-on/")
-    child = mount_http_lazy(parent, request, "lazy_x")
-    assert child.count == 0 and state_key not in request.session
+    assert any(
+        str(key).startswith("_djust_explicit_") for key in SessionStore(row.session_key).keys()
+    )
 
 
 # --- an embedded child ----------------------------------------------------------

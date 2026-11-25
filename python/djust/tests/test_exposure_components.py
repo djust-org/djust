@@ -10,8 +10,7 @@ Persistence (v1): components are transient under the explicit policy. Their
 state is not persisted and a reconnect remounts them from their declarations;
 declared ``state(persist="server")`` view fields still restore.
 
-Every explicit case has a legacy control that proves the same path ran. Only
-the staged construction guard is bypassed; views are explicit from mount.
+Only the staged construction guard is bypassed; views are explicit from mount.
 """
 
 import json
@@ -90,12 +89,12 @@ class Counter(LiveComponent):
 
 
 # ------------------------------------------------------------------ #
-# Views (the policy is set per test, before mount)
+# Views
 # ------------------------------------------------------------------ #
 
 
 class ComponentPage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>{{ nav }}{{ counter }}<span>{{ count }}</span></div>"
     count = state(0, persist="server")
     nav = Tabs()
@@ -119,7 +118,7 @@ class OverridePage(ComponentPage):
 
 
 class MenuPage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>{{ menu }}<p>{{ result }}</p></div>"
     result = state("initial")
     menu = DropdownMenu(label="Actions", items=[{"label": "Edit", "value": "edit"}])
@@ -133,7 +132,7 @@ class MenuPage(LiveView):
 
 
 class InstanceAssignedPage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>{{ sidebar }}<span>{{ count }}</span></div>"
     count = state(0, persist="server")
 
@@ -145,7 +144,7 @@ class InstanceAssignedPage(LiveView):
 
 
 class ScopedPage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><h1>{{ title }}</h1>{{ nav }}</div>"
     title = state("Page")
     nav = Tabs()
@@ -205,16 +204,12 @@ def rendered(runtime):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("policy", ["legacy", "explicit"])
-async def test_interactive_binding_renders_and_dispatches_under_explicit(
-    staged, monkeypatch, policy
-):
-    monkeypatch.setattr(MenuPage, "exposure_policy", policy)
+async def test_interactive_binding_renders_and_dispatches_under_explicit(staged):
     runtime, transport, _ = await mount(MenuPage)
     assert not transport.errors, transport.errors
     html = mount_html(transport)
     view = runtime.view_instance
-    # Both policies render the binding; explicit through the registered provider.
+    # The binding renders through the registered provider.
     assert "dj-dropdown-menu" in html and "Actions" in html, html
     binding = view.menu
     assert binding is not MenuPage.__dict__["menu"]
@@ -302,23 +297,13 @@ async def test_two_explicit_views_do_not_share_stateless_component_state(staged,
     assert declaration.clicks == 0 and declaration.seen == [] and declaration._parent is None
 
 
-def test_legacy_stateless_declaration_is_unchanged():
-    """Legacy control: a State-less declaration is still the class-level object."""
-    view = object.__new__(ComponentPage)
-    view._components = {}
-    assert view.counter is ComponentPage.__dict__["counter"]
-    assert "_component_counter" not in view.__dict__
-
-
 # ------------------------------------------------------------------ #
 # Nested components and subclass override
 # ------------------------------------------------------------------ #
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("policy", ["legacy", "explicit"])
-async def test_nested_components_and_subclass_override_render(staged, monkeypatch, policy):
-    monkeypatch.setattr(ComponentPage, "exposure_policy", policy)
+async def test_nested_components_and_subclass_override_render(staged):
     base, base_transport, _ = await mount(ComponentPage)
     sub, sub_transport, _ = await mount(OverridePage)
     assert not base_transport.errors and not sub_transport.errors
@@ -337,12 +322,7 @@ async def test_nested_components_and_subclass_override_render(staged, monkeypatc
     assert not sub_transport.errors, sub_transport.errors
     assert '<p class="tabs">chosen</p>' in rendered(sub)
     assert '<p class="tabs">chosen</p>' not in rendered(base)
-    if policy == "legacy":
-        # A legacy State-less declaration is shared by every view; unchanged.
-        assert sub.view_instance.counter is base.view_instance.counter
-        return
-
-    # Explicit: the inherited State-less component and its nested child are
+    # The inherited State-less component and its nested child are
     # this view's own; mutating them leaves the base-class view untouched.
     assert sub.view_instance.counter is not base.view_instance.counter
     await event(sub, "bump", component_id="counter", value="SUB_ONLY")
@@ -371,18 +351,8 @@ def _get(view_class, rf):
     return view_class.as_view()(request)
 
 
-@pytest.mark.parametrize("policy", ["legacy", "explicit"])
-def test_instance_assigned_component_raises_a_diagnostic_naming_it(
-    staged, monkeypatch, rf, settings, policy
-):
-    monkeypatch.setattr(InstanceAssignedPage, "exposure_policy", policy)
+def test_instance_assigned_component_raises_a_diagnostic_naming_it(staged, rf, settings):
     settings.DEBUG = True
-    if policy == "legacy":
-        # Control: legacy discovers the attribute and renders it.
-        response = _get(InstanceAssignedPage, rf)
-        assert response.status_code == 200
-        assert "INSTANCE_VALUE_SENTINEL" in response.content.decode()
-        return
     with pytest.raises(ExposureConfigurationError) as raised:
         _get(InstanceAssignedPage, rf)
     message = str(raised.value)
@@ -456,11 +426,11 @@ async def test_component_state_is_transient_under_explicit(staged, monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("policy", ["legacy", "explicit"])
+@pytest.mark.parametrize("debug", [False, True])
 async def test_component_event_scoped_render_failure_is_value_free(
-    staged, monkeypatch, caplog, policy
+    staged, monkeypatch, caplog, settings, debug
 ):
-    monkeypatch.setattr(ScopedPage, "exposure_policy", policy)
+    settings.DEBUG = debug
     from djust.components.base import BoundComponent
 
     runtime, transport, _ = await mount(ScopedPage)
@@ -488,7 +458,7 @@ async def test_component_event_scoped_render_failure_is_value_free(
     frames = json.dumps(transport.sent, default=str)
     assert "billing" in frames
     assert "SCOPED_COMPONENT_SENTINEL" not in frames
-    if policy == "legacy":
+    if debug:
         assert "Scoped render of component 'nav' failed; full render" in caplog.text
         assert "SCOPED_COMPONENT_SENTINEL" in caplog.text
     else:

@@ -59,7 +59,7 @@ def _make_view_cls(name="V", slug="dispatch.v", body=None):
     body = body or {}
     attrs = {"api_name": slug}
     attrs.update(body)
-    return type(name, (LiveView,), {"exposure_policy": "legacy", **attrs})
+    return type(name, (LiveView,), {"exposure_policy": "explicit", **attrs})
 
 
 def test_404_when_view_slug_unknown(authenticated_request_factory):

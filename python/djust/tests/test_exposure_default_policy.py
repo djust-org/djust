@@ -2,16 +2,14 @@
 
 Three places hold the default: the ``LiveView.exposure_policy`` class attribute,
 the fallback in ``djust._exposure`` for an owner that has no policy at all, and
-the inventory command's reading of a class without one. ``"legacy"`` stays a
-working value for a class that states it, and stating it is deprecated.
+the inventory command's reading of a class without one. ``"legacy"`` is a
+removed value: the tests of the legacy mechanism itself are gone (#4198).
 
 This file's views leave the policy unset on purpose (``UNPINNED_ON_PURPOSE`` in
 ``tests/exposure_policy_pin_guard.py``).
 """
 
 import logging
-import os
-import warnings
 
 import pytest
 from django.test import RequestFactory, override_settings
@@ -24,10 +22,6 @@ from djust._exposure_diagnostics import (
     exception_details_allowed_for,
     log_failure_for,
 )
-from djust.live_view import EXPLICIT_EXPOSURE_GUIDE_URL
-
-LEGACY_WARNING = r'exposure_policy = "legacy" \(stated on '
-
 
 # ------------------------------------------------------------------ #
 # The three defaults
@@ -58,18 +52,13 @@ def test_an_unstated_view_renders_only_what_it_supplies():
         def get_context_data(self, **kwargs):
             return {**super().get_context_data(**kwargs), "supplied": self.supplied}
 
-    class Stated(Unstated):
-        exposure_policy = "legacy"
-
     request = RequestFactory().get("/")
-    explicit, legacy = Unstated(), Stated()
-    for view in (explicit, legacy):
-        view.request = request
-        view.mount(request)
-    assert "UNDECLARED_SENTINEL" not in explicit.render()
-    assert "SUPPLIED_SENTINEL" in explicit.render()
-    # The control: the same view under the stated legacy policy exports it.
-    assert "UNDECLARED_SENTINEL" in legacy.render()
+    view = Unstated()
+    view.request = request
+    view.mount(request)
+    assert "UNDECLARED_SENTINEL" not in view.render()
+    # The control: what the view does supply is rendered.
+    assert "SUPPLIED_SENTINEL" in view.render()
 
 
 @pytest.mark.parametrize("owner", [None, object(), type("Stub", (), {})()])
@@ -91,141 +80,12 @@ def test_the_inventory_reads_a_class_without_a_policy_as_explicit():
 
 
 # ------------------------------------------------------------------ #
-# Stating "legacy" still works, and warns once per stating class
-# ------------------------------------------------------------------ #
-
-
-def _legacy_warnings(record):
-    return [w for w in record if "exposure_policy" in str(w.message)]
-
-
-def test_stating_legacy_warns_at_the_class_statement():
-    with pytest.warns(DeprecationWarning, match=LEGACY_WARNING) as record:
-
-        class Stated(LiveView):
-            exposure_policy = "legacy"
-
-    (warning,) = _legacy_warnings(record)
-    message = str(warning.message)
-    assert "%s.%s" % (Stated.__module__, Stated.__qualname__) in message
-    assert "deprecated since djust 2.0" in message
-    assert "removed no earlier than 2.0.0" in message
-    assert 'Use exposure_policy = "explicit"' in message
-    assert EXPLICIT_EXPOSURE_GUIDE_URL in message
-    # It points at the class statement, the line to change.
-    assert os.path.basename(warning.filename) == os.path.basename(__file__)
-    assert uses_legacy_exposure(Stated())
-
-
-def test_the_warning_is_once_per_stating_class_not_per_instance_or_subclass():
-    with warnings.catch_warnings(record=True) as record:
-        warnings.simplefilter("always")
-
-        class Stated(LiveView):
-            exposure_policy = "legacy"
-
-        class Inherits(Stated):
-            pass
-
-        for _ in range(3):
-            Stated()
-            Inherits()
-    assert len(_legacy_warnings(record)) == 1
-
-    with pytest.warns(DeprecationWarning, match=LEGACY_WARNING) as record:
-
-        class Restates(Inherits):
-            exposure_policy = "legacy"
-
-    assert len(_legacy_warnings(record)) == 1
-
-
-def test_a_policy_assigned_after_the_class_statement_warns_on_first_construction():
-    with warnings.catch_warnings(record=True) as record:
-        warnings.simplefilter("always")
-        late = type("Late", (LiveView,), {"exposure_policy": "explicit"})
-        late.exposure_policy = "legacy"
-        assert _legacy_warnings(record) == []
-        late()
-        late()
-    (warning,) = _legacy_warnings(record)
-    assert "Late" in str(warning.message)
-
-
-def test_explicit_and_unstated_views_do_not_warn():
-    with warnings.catch_warnings(record=True) as record:
-        warnings.simplefilter("always")
-
-        class Unstated(LiveView):
-            pass
-
-        class Stated(LiveView):
-            exposure_policy = "explicit"
-
-        Unstated()
-        Stated()
-    assert _legacy_warnings(record) == []
-
-
-def test_a_legacy_statement_shipped_in_djust_does_not_warn_through_a_subclass():
-    """A class shipped in djust that states legacy is not the application's to
-    change (none does any more: #4185 and #4183 moved them). A stand-in shipped class, so the test does not
-    depend on which djust class is still pinned."""
-    with warnings.catch_warnings(record=True) as record:
-        warnings.simplefilter("always")
-        shipped = type(
-            "ShippedBase",
-            (LiveView,),
-            {"__module__": "djust.components.shipped_example", "exposure_policy": "legacy"},
-        )
-
-        class Subclass(shipped):
-            pass
-
-        Subclass()
-    assert _legacy_warnings(record) == []
-    assert uses_legacy_exposure(Subclass())
-
-
-def test_the_suite_filter_hides_exactly_this_warning():
-    """pyproject's filterwarnings entry: the 1,850 pinned test views stay quiet,
-    and nothing else is hidden by it."""
-    import re
-    import tomllib
-    from pathlib import Path
-
-    root = Path(__file__).resolve().parents[3]
-    filters = tomllib.loads((root / "pyproject.toml").read_text())["tool"]["pytest"]["ini_options"][
-        "filterwarnings"
-    ]
-    (entry,) = [f for f in filters if "exposure_policy" in f]
-    action, pattern, category = entry.split(":")
-    assert (action, category) == ("ignore", "DeprecationWarning")
-
-    with pytest.warns(DeprecationWarning) as record:
-
-        class Stated(LiveView):
-            exposure_policy = "legacy"
-
-    (warning,) = _legacy_warnings(record)
-    assert re.match(pattern, str(warning.message))
-    assert not re.match(pattern, "@event is deprecated since djust 1.0")
-
-
-# ------------------------------------------------------------------ #
 # Diagnostics: an owner that states no policy neither grants nor restricts
 # ------------------------------------------------------------------ #
 
 
 class _Explicit(LiveView):
     exposure_policy = "explicit"
-
-
-with warnings.catch_warnings():
-    warnings.simplefilter("ignore", DeprecationWarning)
-
-    class _Legacy(LiveView):
-        exposure_policy = "legacy"
 
 
 class _PolicyThatRaises:
@@ -243,7 +103,6 @@ def test_states_exposure_policy():
     assert not states_exposure_policy(_Component())
     assert not states_exposure_policy(_Component)
     assert states_exposure_policy(_Explicit)
-    assert states_exposure_policy(_Legacy())
     assert states_exposure_policy(_PolicyThatRaises())  # stated, only unreadable
     assert states_exposure_policy(type("NonePolicy", (), {"exposure_policy": None})())
 
@@ -252,23 +111,10 @@ def test_states_exposure_policy():
 def test_in_production_only_a_stated_nonlegacy_policy_restricts():
     assert diagnostics_policy_allows(None)
     assert diagnostics_policy_allows(_Component())
-    assert diagnostics_policy_allows(_Legacy())
     assert not diagnostics_policy_allows(_Explicit())
     assert not diagnostics_policy_allows(_Explicit)
     assert not diagnostics_policy_allows(_PolicyThatRaises())
     assert not diagnostics_policy_allows(type("Bad", (), {"exposure_policy": "invalid"})())
-
-
-@override_settings(DEBUG=False)
-@pytest.mark.parametrize("bystander", [None, _Component()], ids=["no-view", "non-view"])
-def test_a_policyless_owner_does_not_hide_a_legacy_views_failure(bystander, caplog):
-    """A legacy view's failure handled while the view slot is empty (a failed
-    constructor, a failed mount) or beside a component keeps its detail."""
-    log = logging.getLogger("djust.tests.default_policy")
-    with caplog.at_level(logging.ERROR, logger=log.name):
-        log_failure_for(log, (_Legacy, bystander), ValueError("x"), "failed: %s", "DETAIL_SENTINEL")
-    assert "DETAIL_SENTINEL" in caplog.text
-    assert exception_details_allowed_for((_Legacy, bystander))
 
 
 @override_settings(DEBUG=False)
@@ -284,39 +130,6 @@ def test_a_policyless_owner_does_not_grant_an_explicit_views_failure(bystander, 
     assert PROTECTED_FAILURE in caplog.text
     assert not exception_details_allowed_for((bystander, _Explicit))
     assert not exception_details_allowed_for((_Explicit, bystander))
-
-
-def test_warnings_as_errors_fails_every_construction_not_only_the_first():
-    """Review of #4049: the class was recorded before the warning was raised,
-    so under ``-W error`` the first construction raised and later ones passed."""
-
-    class StatesItOnAMixin:  # a plain mixin: no class-statement warning of ours
-        exposure_policy = "legacy"
-
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        view_class = type("LateLegacy", (StatesItOnAMixin, LiveView), {})
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
-        for _ in range(2):
-            with pytest.raises(DeprecationWarning, match=LEGACY_WARNING):
-                view_class()
-    # Once it has been raised as a warning, it is not raised again.
-    with warnings.catch_warnings(record=True) as record:
-        warnings.simplefilter("always")
-        view_class()
-        view_class()
-    (warning,) = _legacy_warnings(record)
-    # It points at the code that constructed the view, not at djust.
-    assert os.path.basename(warning.filename) == os.path.basename(__file__)
-
-
-def test_warnings_as_errors_at_the_class_statement_fails_each_definition():
-    for _ in range(2):
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
-            with pytest.raises(DeprecationWarning, match=LEGACY_WARNING):
-                type("Stated", (LiveView,), {"exposure_policy": "legacy"})
 
 
 # ------------------------------------------------------------------ #
@@ -344,13 +157,6 @@ class _Supplies(_OneXStyle):
 
     def get_context_data(self, **kwargs):
         return {**super().get_context_data(**kwargs), "count": self.count, "flag": self.flag}
-
-
-with warnings.catch_warnings():
-    warnings.simplefilter("ignore", DeprecationWarning)
-
-    class _OneXStyleLegacy(_OneXStyle):
-        exposure_policy = "legacy"
 
 
 def _get(view_class):
@@ -405,12 +211,10 @@ def test_debug_names_what_a_1x_style_view_renders_empty_once(caplog, fresh_repor
 
 @pytest.mark.django_db
 @override_settings(DEBUG=True)
-def test_debug_is_quiet_for_a_view_that_supplies_and_for_a_legacy_view(caplog, fresh_reports):
+def test_debug_is_quiet_for_a_view_that_supplies(caplog, fresh_reports):
     with caplog.at_level(logging.WARNING, logger=UNSUPPLIED_LOGGER):
         assert "[7][on][]" in _get(_Supplies)
-        assert "[7][on][]" in _get(_OneXStyleLegacy)
     assert _unsupplied_records(caplog, _Supplies) == []
-    assert _unsupplied_records(caplog, _OneXStyleLegacy) == []
 
 
 @pytest.mark.django_db
@@ -462,9 +266,8 @@ def test_t027_reports_the_names_a_1x_style_view_holds_but_does_not_supply():
         assert "SENTINEL" not in message.msg + message.hint
 
 
-def test_t027_is_quiet_for_a_supplying_view_a_legacy_view_and_when_suppressed(settings):
+def test_t027_is_quiet_for_a_supplying_view_and_when_suppressed(settings):
     assert _t027(_Supplies) == []
-    assert _t027(_OneXStyleLegacy) == []
     settings.DJUST_CONFIG = {"suppress_checks": ["T027"]}
     assert _t027(_OneXStyle) == []
 

@@ -27,11 +27,13 @@ import logging
 import re
 
 import pytest
+from django.test import override_settings
 
 from djust import LiveView
 from djust.components import descriptors as D
 from djust.components.tag_events import TAG_EVENTS
 from djust.testing import LiveViewTestClient
+from djust.tests._live_session import amount_on_runtime
 from djust.tests.test_component_dj_attr_parity_3669 import _django, _rust
 from djust.tests.test_component_tag_events_4126 import DRAW_ALL, _events, _findings, _view
 
@@ -141,12 +143,12 @@ APP_EVENTS = {
 }
 
 
-def _page(descriptor, state, policy="legacy", **more):
+def _page(descriptor, state, **more):
     return type(
         "Page_%s" % descriptor.__name__,
         (LiveView,),
         {
-            "exposure_policy": policy,
+            "exposure_policy": "explicit",
             "template": "<div dj-root>x</div>",
             "widget": descriptor(**state),
             "mount": lambda self, request, **kwargs: None,
@@ -155,21 +157,18 @@ def _page(descriptor, state, policy="legacy", **more):
     )
 
 
-@pytest.mark.parametrize("policy", ["explicit", "legacy"])
 @pytest.mark.parametrize("engine", ["django", "rust"])
 @pytest.mark.parametrize(
     "descriptor, state, src, ctx, steps", CASES, ids=[c[2][3:22] for c in CASES]
 )
-def test_descriptor_answers_every_event_the_tag_draws(
-    policy, engine, descriptor, state, src, ctx, steps
-):
+def test_descriptor_answers_every_event_the_tag_draws(engine, descriptor, state, src, ctx, steps):
     drawn = set(_events(_ENGINES[engine](src, ctx)))
     framework = drawn - APP_EVENTS
     assert framework, drawn
     assert framework <= set(descriptor.Meta.events), (drawn, descriptor.Meta.events)
     assert {s[0] for s in steps} >= framework
 
-    client = LiveViewTestClient(_page(descriptor, state, policy)).mount()
+    client = LiveViewTestClient(_page(descriptor, state)).mount()
     for event, params, attr, expected in steps:
         assert client.send_event(event, **params)["success"], event
         assert getattr(client.view_instance.widget, attr) == expected, (event, params)
@@ -449,7 +448,7 @@ def test_two_of_a_type_each_answer_only_their_own_tag(tag):
         "Two_%s" % tag,
         (LiveView,),
         {
-            "exposure_policy": "legacy",
+            "exposure_policy": "explicit",
             "template": "<div dj-root>x</div>",
             "first": descriptor(**_state(descriptor, attr, before)),
             "second": descriptor(**_state(descriptor, attr, before)),
@@ -465,7 +464,7 @@ def test_two_of_a_type_each_answer_only_their_own_tag(tag):
 
 
 class _RuntimeTwoSidebars(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-id="0"><p>{{ left.collapsed }}{{ right.collapsed }}</p></div>'
     left = D.Sidebar()
     right = D.Sidebar()
@@ -474,7 +473,7 @@ class _RuntimeTwoSidebars(LiveView):
         pass
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 async def test_the_runtime_routes_component_id_to_the_named_component():
     """Through ``ViewRuntime.dispatch_event``, the path the socket and SSE take: the
@@ -483,11 +482,10 @@ async def test_the_runtime_routes_component_id_to_the_named_component():
     from djust.tests.test_bound_component_skip_gate_2900 import MockTransport
 
     view = _RuntimeTwoSidebars()
-    view.mount(None)
-    view.render_with_diff()
     transport = MockTransport()
     runtime = ViewRuntime(transport)
-    runtime.view_instance = view
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
+        await amount_on_runtime(runtime, view)
     await runtime.dispatch_event(
         {
             "type": "event",
@@ -718,7 +716,7 @@ def test_a_nested_accordion_without_component_id_is_not_stamped_by_the_outer_one
 # --- a component_id that cannot be one (#4134 review) --------------------------
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("bad", [["right"], {"a": 1}, 7, True, "x" * 257])
 async def test_the_runtime_refuses_a_component_id_that_is_not_a_short_string(bad):
@@ -728,11 +726,10 @@ async def test_the_runtime_refuses_a_component_id_that_is_not_a_short_string(bad
     from djust.tests.test_bound_component_skip_gate_2900 import MockTransport
 
     view = _RuntimeTwoSidebars()
-    view.mount(None)
-    view.render_with_diff()
     transport = MockTransport()
     runtime = ViewRuntime(transport)
-    runtime.view_instance = view
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
+        await amount_on_runtime(runtime, view)
     await runtime.dispatch_event(
         {"type": "event", "event": "toggle_sidebar", "params": {"component_id": bad}, "ref": 1}
     )

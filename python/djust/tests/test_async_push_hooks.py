@@ -23,7 +23,8 @@ from django.test import override_settings
 
 from djust import LiveView
 from djust.config import config as djust_config
-from djust.decorators import event_handler
+from djust.decorators import event_handler, state
+from djust.testing import with_live_session
 from djust.push import apush_to_view
 
 pytest.importorskip("channels")
@@ -34,14 +35,15 @@ _BUSY: dict = {}
 
 
 class _PushView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         '<div dj-root dj-view="djust.tests.test_async_push_hooks._PushView">'
         "<i>{{ label }}</i></div>"
     )
 
+    label = state("start")
+
     def mount(self, request, **kwargs):
-        self.label = "start"
         _BUSY["view"] = self
 
     async def handle_async_push(self, label: str = "", **kwargs):
@@ -92,7 +94,13 @@ async def _connect():
 
     from djust.websocket import LiveViewConsumer
 
-    communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+    communicator = with_live_session(
+        WebsocketCommunicator(
+            LiveViewConsumer.as_asgi(),
+            "/ws/",
+            headers=[(b"host", b"testserver"), (b"origin", b"http://testserver")],
+        )
+    )
     connected, _ = await communicator.connect()
     assert connected
     await communicator.receive_json_from()

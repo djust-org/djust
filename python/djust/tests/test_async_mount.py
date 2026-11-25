@@ -255,7 +255,7 @@ def test_live_render_runs_an_async_child_mount(rf):
         "AsyncMountPage",
         (LiveView,),
         {
-            "exposure_policy": "legacy",
+            "exposure_policy": "explicit",
             "template_name": "async_mount_page.html",
             "mount": lambda self, request, **kw: None,
         },

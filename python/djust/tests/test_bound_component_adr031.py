@@ -46,7 +46,7 @@ if not settings.configured:
 
 from django.contrib.sessions.backends.cache import SessionStore  # noqa: E402
 from django.template import Context, Engine  # noqa: E402
-from django.test import RequestFactory  # noqa: E402
+from django.test import RequestFactory, override_settings  # noqa: E402
 from django.utils.html import escape  # noqa: E402
 
 from djust import LiveView  # noqa: E402
@@ -67,6 +67,7 @@ from djust.components.descriptors.base import LiveComponent, TypedState  # noqa:
 from djust.decorators import event_handler  # noqa: E402
 from djust.runtime import ViewRuntime  # noqa: E402
 from djust.security.attribute_guard import safe_setattr  # noqa: E402
+from djust.tests._live_session import amount_on_runtime  # noqa: E402
 
 REPO = pathlib.Path(__file__).resolve().parents[3]
 
@@ -153,15 +154,14 @@ class Toggle(LiveComponent):
 
 
 class Page(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-id="0"><p>{{ nav.active }}</p></div>'
 
     nav = Toggle(active="a")
     aux = Toggle(active="x")
 
     def mount(self, request: Any, **kwargs: Any) -> None:
-        # Touching the component in mount puts its slot in the view's private
-        # state (``_get_private_state``, still used by the legacy lazy child).
+        # Touching the component in mount registers its slot on the view.
         self.nav.active = self.nav.active
 
 
@@ -178,15 +178,17 @@ class LegacyNoState(BaseLiveComponent):
 
 
 class LegacyPage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-id="0">x</div>'
     widget = LegacyNoState()
 
 
-def _runtime(view: LiveView) -> tuple[ViewRuntime, MockTransport]:
+async def _runtime(view: LiveView) -> tuple[ViewRuntime, MockTransport]:
+    """Mount ``view`` on a runtime through the real ``dispatch_mount``."""
     transport = MockTransport()
     runtime = ViewRuntime(transport)
-    runtime.view_instance = view
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__]):
+        await amount_on_runtime(runtime, view, url="/page/")
     return runtime, transport
 
 
@@ -291,7 +293,7 @@ class TestBoundComponentBinding:
         nor write into the State (a ``_x`` write would reach the session)."""
 
         class TabsPage(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             tabs = Tabs(active="one")
 
         bound = TabsPage().tabs
@@ -314,7 +316,7 @@ class TestBoundComponentBinding:
 
     def test_descriptor_without_state_class_is_unchanged(self):
         view = LegacyPage()
-        assert view.widget is LegacyPage.__dict__["widget"]
+        assert isinstance(view.widget, LegacyNoState)
         assert not isinstance(view.widget, BoundComponent)
 
 
@@ -323,14 +325,13 @@ class TestBoundComponentBinding:
 # ------------------------------------------------------------------ #
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 class TestBoundComponentEvents:
     @pytest.mark.asyncio
     async def test_component_id_event_runs_handler_with_self_state(self):
         view = Page()
-        view.mount(None)
+        runtime, transport = await _runtime(view)
         view.nav  # noqa: B018 — first access registers the component
-        runtime, transport = _runtime(view)
 
         await runtime.dispatch_event(
             {
@@ -352,9 +353,8 @@ class TestBoundComponentEvents:
     @pytest.mark.asyncio
     async def test_undecorated_method_is_refused(self):
         view = Page()
-        view.mount(None)
+        runtime, transport = await _runtime(view)
         view.nav  # noqa: B018
-        runtime, transport = _runtime(view)
 
         for name in ("not_a_handler", "shout"):
             await runtime.dispatch_event(
@@ -370,7 +370,7 @@ class TestBoundComponentEvents:
         ``_handle_event``; an event carrying their ``component_id`` reaches it."""
 
         class TabsPage(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = '<div dj-root dj-id="0">{{ tabs.active }}</div>'
             tabs = Tabs(active="one")
 
@@ -378,9 +378,8 @@ class TestBoundComponentEvents:
                 pass
 
         view = TabsPage()
-        view.mount(None)
+        runtime, transport = await _runtime(view)
         view.tabs  # noqa: B018
-        runtime, transport = _runtime(view)
         await runtime.dispatch_event(
             {
                 "type": "event",
@@ -404,7 +403,7 @@ class TestBoundComponentEvents:
         monkeypatch.setattr(Tabs, "_handle_event", spy)
 
         class TabsPage(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             tabs = Tabs(active="one")
 
         view = TabsPage()
@@ -431,7 +430,7 @@ class TestBoundComponentEvents:
         monkeypatch.setattr(descriptor_cls, "_handle_event", spy)
         event = descriptor_cls.Meta.event
 
-        View = type("View", (LiveView,), {"exposure_policy": "legacy", "comp": descriptor_cls()})
+        View = type("View", (LiveView,), {"exposure_policy": "explicit", "comp": descriptor_cls()})
         view = View()
         bound = view.comp
         assert isinstance(bound, BoundComponent)
@@ -505,21 +504,6 @@ class TestBoundComponentPersistence:
         view.nav.active = "t"
         assert safe_setattr(view.nav, "active", "back", allow_private=False) is True
         assert view.nav.state["active"] == "back"
-
-    def test_private_state_round_trip_persists_a_component_touched_in_mount(self):
-        view = Page()
-        view.mount(None)
-        view._snapshot_user_private_attrs()
-        view.nav.active = "p"
-        private = view._get_private_state()
-        assert private["_component_nav"] == {"active": "p", "count": 0, "component_id": "nav"}
-        json.dumps(private)
-
-        fresh = Page()
-        fresh._restore_private_state(private)
-        assert isinstance(fresh.nav, BoundComponent)
-        assert fresh.nav.active == "p"
-        assert fresh._components["nav"] is fresh.nav
 
     def test_normalize_carries_the_state_on_both_modes_without_warning(self, caplog):
         """``normalize_django_value`` must hand the State (a dict) to the render
