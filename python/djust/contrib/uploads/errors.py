@@ -30,8 +30,12 @@ class UploadError(Exception):
     this taxonomy only narrows the shape so callers can ``except
     UploadCredentialError`` without importing ``botocore``.
 
+    Raised from a writer's ``open()`` / ``write_chunk()`` / ``close()``, it is
+    a refusal (#4118): logged at WARNING without a traceback, and ``message``
+    (only that) is sent to the browser as the upload's error.
+
     Attributes:
-        message: Human-readable, safe-to-log summary. Never contains
+        message: Human-readable, safe-to-log summary, shown to the user. Never contains
             secrets — backends strip credentials / signed URLs before
             populating this. See ``from_sdk_exc`` in each backend.
         sdk_exc: The underlying vendor exception, for debugging. Do not

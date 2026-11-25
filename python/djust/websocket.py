@@ -23,6 +23,7 @@ from typing import (
     List,
     NamedTuple,
     Optional,
+    Set,
     Tuple,
 )
 from asgiref.sync import sync_to_async
@@ -251,6 +252,10 @@ async def _acquire_render_lock(lock: asyncio.Lock, timeout: float) -> None:
             await lock.acquire()
             return
     await asyncio.wait_for(lock.acquire(), timeout=timeout)
+
+
+#: Running upload-timeout tasks (#4118), held so none is collected mid-run.
+_UPLOAD_EXPIRY_TASKS: Set["asyncio.Task[None]"] = set()
 
 
 def _real_consumer(consumer: Any) -> Any:
@@ -3631,6 +3636,8 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             return
 
         mgr = self.view_instance._upload_manager
+        # Uploads past their ``timeout=`` free their places first (#4118).
+        await self._expire_overdue_uploads(mgr)
         entry = mgr.register_entry(
             upload_name=data.get("upload_name", ""),
             ref=data.get("ref", ""),
@@ -3642,6 +3649,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         )
 
         if entry:
+            self._arm_upload_deadline(mgr, entry.ref)
             await self.send_json(
                 {
                     "type": "upload_registered",
@@ -3743,7 +3751,9 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                     )
             except Exception:  # noqa: BLE001 — resume must never crash the consumer
                 logger.exception("upload_resume: re-attaching the upload failed")
-            if resumed is None:
+            if resumed is not None:
+                self._arm_upload_deadline(mgr, upload_id)
+            else:
                 payload = {
                     "type": "upload_resumed",
                     "ref": upload_id,
@@ -3854,6 +3864,12 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         # Every frame is checked against the upload's owner (#4175).
         owner = self._upload_owner()
 
+        if mgr.is_overdue(ref):
+            # Past its ``timeout=`` (#4118): the timer has not run yet, or
+            # could not. The frame is not applied.
+            await self._expire_overdue_uploads(mgr)
+            return
+
         if frame["type"] == "chunk":
             # add_chunk() internally dispatches to either the disk-buffer
             # path or (when the upload slot was configured with writer=)
@@ -3896,6 +3912,41 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             _real_consumer(self)._forget_upload(ref)
             mgr.cancel_upload(ref, owner=owner)
             await self.send_json(build_progress_message(ref, 0, "cancelled"))
+
+    def _arm_upload_deadline(self, mgr: Any, ref: str) -> None:
+        """Start the timer that enforces the upload slot's ``timeout=`` (#4118).
+
+        When it fires, an upload still unfinished is cancelled and the browser
+        told (:meth:`_expire_overdue_uploads`). The manager keeps the timer and
+        cancels it when the upload ends or the session closes.
+        """
+        entry = mgr._entries.get(ref)
+        config = mgr.get_config(entry.upload_name) if entry is not None else None
+        timeout = getattr(config, "timeout", None)
+        if timeout is None:
+            return
+        loop = asyncio.get_running_loop()
+
+        def _fire() -> None:
+            task = loop.create_task(self._expire_overdue_uploads(mgr))
+            _UPLOAD_EXPIRY_TASKS.add(task)
+            task.add_done_callback(_UPLOAD_EXPIRY_TASKS.discard)
+
+        mgr.set_deadline_handle(ref, loop.call_later(timeout, _fire))
+
+    async def _expire_overdue_uploads(self, mgr: Any) -> None:
+        """Cancel the uploads of ``mgr`` past their ``timeout=`` and tell the
+        browser: an ``upload_progress`` with status ``cancelled`` and the
+        reason in ``error`` (#4118)."""
+        from .uploads import build_progress_message
+
+        if getattr(self.view_instance, "_upload_manager", None) is not mgr:
+            return  # the view was replaced or its uploads cleaned up
+        for ref, reason in mgr.expire_overdue():
+            _real_consumer(self)._forget_upload(ref)
+            message = build_progress_message(ref, 0, "cancelled")
+            message["error"] = reason
+            await self.send_json(message)
 
     async def close(self, code: Optional[int] = None, reason: Optional[str] = None) -> None:
         """Close the socket and remember it, so later sends are dropped.
