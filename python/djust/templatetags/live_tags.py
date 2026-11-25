@@ -2724,7 +2724,13 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
         # Capture state for the thunk closure now (before kwargs may
         # be mutated by the eager branch path).
         captured_kwargs = dict(kwargs)
-        view_id = parent._assign_view_id(preferred_view_id)
+        from ..mixins.sticky import _child_identity as _lazy_child_identity
+
+        # Over HTTP the id is named for the child (as for an eager one), so the
+        # page POST that routes the child's event finds its slot again (#4173).
+        view_id = parent._assign_view_id(
+            preferred_view_id, lambda: _lazy_child_identity(view_path, kwargs)
+        )
         lazy_identity = None
         lazy_inputs: Dict[str, Any] = {}
         if explicit_target:
@@ -3097,6 +3103,12 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
     child = child_cls()
     mark_embedded(child)
     child.request = request
+    if parent.__dict__.get("_render_child_ids") is not None:
+        # An HTTP render (#4173): the child's own children are named for what
+        # they are too, so a nested child's id repeats between GET and POST.
+        import itertools
+
+        child.__dict__["_render_child_ids"] = itertools.count(1)
 
     # 4a. Enforce child's auth posture against the parent's request BEFORE
     #     running mount(). Consumers apply the same check at top-level
@@ -3121,9 +3133,18 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
     # a transient (non-sticky) explicit child (ADR-038 D-m) the view_id it is
     # about to be registered under.
     explicit_slot: Optional[str] = None
+    from ..mixins.sticky import _child_identity as child_identity
+
     if explicit_child:
+        # Over HTTP the id is named for the child, as for a legacy child, so a
+        # page POST finds the child its GET rendered (#4173). Over a socket the
+        # counter assigns it and the callable never runs.
         explicit_slot = (
-            sticky_id_value if sticky_kwarg else parent._assign_view_id(preferred_view_id)
+            sticky_id_value
+            if sticky_kwarg
+            else parent._assign_view_id(
+                preferred_view_id, lambda: child_identity(view_path, kwargs)
+            )
         )
     if explicit_child:
         from .._exposure import clone_json_state
@@ -3230,8 +3251,6 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
             child_reuse_identity(type(child), parent, request, explicit_slot, explicit_mount_inputs)
         ):
             raise ExposureError("Child reuse identity changed during authorization")
-
-    from ..mixins.sticky import _child_identity as child_identity
 
     # 5. Assign the view_id and register on the parent. _register_child
     #    wires parent/view_id back-references on the child. An explicit child

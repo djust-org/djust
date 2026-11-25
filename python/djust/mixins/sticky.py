@@ -174,11 +174,12 @@ class StickyChildRegistry:
         event carrying a child's ``view_id`` can be routed to that child (#3104).
 
         Called by the HTTP request methods immediately before each render of a
-        legacy parent, never over a socket: there children live across renders
-        and the process-wide counter keeps their ids unique. A child of a
-        previous render of this request (an auto-numbered, non-sticky, legacy
-        one: a throwaway) is dropped from the registry so the next render
-        reuses its id; pinned, sticky and explicit children are left alone.
+        parent (either exposure policy, #4173), never over a socket: there
+        children live across renders and the process-wide counter keeps their
+        ids unique. A child of a previous render of this request (an
+        auto-numbered, non-sticky one: a throwaway) is dropped from the
+        registry so the next render reuses its id; an explicit one is also
+        disposed with its subtree. Pinned and sticky children are left alone.
         """
         from .._exposure import uses_legacy_exposure
 
@@ -189,11 +190,13 @@ class StickyChildRegistry:
         for view_id in [
             vid
             for vid, child in registry.items()
-            if _AUTO_VIEW_ID.fullmatch(vid)
-            and uses_legacy_exposure(child)
-            and getattr(child, "sticky", False) is not True
+            if _AUTO_VIEW_ID.fullmatch(vid) and getattr(child, "sticky", False) is not True
         ]:
-            registry.pop(view_id, None)
+            child = registry.pop(view_id, None)
+            if child is not None and not uses_legacy_exposure(child):
+                from .._child_lifecycle import dispose_child_subtree
+
+                dispose_child_subtree(child)
 
     # ------------------------------------------------------------------
     # Registration
