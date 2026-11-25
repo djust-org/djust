@@ -821,18 +821,6 @@
       "version": "1.1.4"
     },
     {
-      "bom-ref": "rust:pkg:cargo/android_system_properties@0.1.5",
-      "licenses": [
-        {
-          "expression": "MIT OR Apache-2.0"
-        }
-      ],
-      "name": "android_system_properties",
-      "purl": "pkg:cargo/android_system_properties@0.1.5",
-      "type": "library",
-      "version": "0.1.5"
-    },
-    {
       "bom-ref": "rust:pkg:cargo/bitflags@2.11.1",
       "licenses": [
         {
@@ -845,18 +833,6 @@
       "version": "2.11.1"
     },
     {
-      "bom-ref": "rust:pkg:cargo/bumpalo@3.20.2",
-      "licenses": [
-        {
-          "expression": "MIT OR Apache-2.0"
-        }
-      ],
-      "name": "bumpalo",
-      "purl": "pkg:cargo/bumpalo@3.20.2",
-      "type": "library",
-      "version": "3.20.2"
-    },
-    {
       "bom-ref": "rust:pkg:cargo/cfg-if@1.0.4",
       "licenses": [
         {
@@ -867,42 +843,6 @@
       "purl": "pkg:cargo/cfg-if@1.0.4",
       "type": "library",
       "version": "1.0.4"
-    },
-    {
-      "bom-ref": "rust:pkg:cargo/chrono-tz@0.10.4",
-      "licenses": [
-        {
-          "expression": "MIT OR Apache-2.0"
-        }
-      ],
-      "name": "chrono-tz",
-      "purl": "pkg:cargo/chrono-tz@0.10.4",
-      "type": "library",
-      "version": "0.10.4"
-    },
-    {
-      "bom-ref": "rust:pkg:cargo/chrono@0.4.45",
-      "licenses": [
-        {
-          "expression": "MIT OR Apache-2.0"
-        }
-      ],
-      "name": "chrono",
-      "purl": "pkg:cargo/chrono@0.4.45",
-      "type": "library",
-      "version": "0.4.45"
-    },
-    {
-      "bom-ref": "rust:pkg:cargo/core-foundation-sys@0.8.7",
-      "licenses": [
-        {
-          "expression": "MIT OR Apache-2.0"
-        }
-      ],
-      "name": "core-foundation-sys",
-      "purl": "pkg:cargo/core-foundation-sys@0.8.7",
-      "type": "library",
-      "version": "0.8.7"
     },
     {
       "bom-ref": "rust:pkg:cargo/crossbeam-utils@0.8.21",
@@ -1001,30 +941,6 @@
       "version": "0.40.1"
     },
     {
-      "bom-ref": "rust:pkg:cargo/iana-time-zone-haiku@0.1.2",
-      "licenses": [
-        {
-          "expression": "MIT OR Apache-2.0"
-        }
-      ],
-      "name": "iana-time-zone-haiku",
-      "purl": "pkg:cargo/iana-time-zone-haiku@0.1.2",
-      "type": "library",
-      "version": "0.1.2"
-    },
-    {
-      "bom-ref": "rust:pkg:cargo/iana-time-zone@0.1.65",
-      "licenses": [
-        {
-          "expression": "MIT OR Apache-2.0"
-        }
-      ],
-      "name": "iana-time-zone",
-      "purl": "pkg:cargo/iana-time-zone@0.1.65",
-      "type": "library",
-      "version": "0.1.65"
-    },
-    {
       "bom-ref": "rust:pkg:cargo/indexmap@2.14.2",
       "licenses": [
         {
@@ -1049,16 +965,52 @@
       "version": "1.0.18"
     },
     {
-      "bom-ref": "rust:pkg:cargo/js-sys@0.3.95",
+      "bom-ref": "rust:pkg:cargo/jiff-core@0.1.4",
       "licenses": [
         {
-          "expression": "MIT OR Apache-2.0"
+          "expression": "Unlicense OR MIT"
         }
       ],
-      "name": "js-sys",
-      "purl": "pkg:cargo/js-sys@0.3.95",
+      "name": "jiff-core",
+      "purl": "pkg:cargo/jiff-core@0.1.4",
       "type": "library",
-      "version": "0.3.95"
+      "version": "0.1.4"
+    },
+    {
+      "bom-ref": "rust:pkg:cargo/jiff-static@0.2.42",
+      "licenses": [
+        {
+          "expression": "Unlicense OR MIT"
+        }
+      ],
+      "name": "jiff-static",
+      "purl": "pkg:cargo/jiff-static@0.2.42",
+      "type": "library",
+      "version": "0.2.42"
+    },
+    {
+      "bom-ref": "rust:pkg:cargo/jiff-tzdb@0.1.9",
+      "licenses": [
+        {
+          "expression": "Unlicense OR MIT"
+        }
+      ],
+      "name": "jiff-tzdb",
+      "purl": "pkg:cargo/jiff-tzdb@0.1.9",
+      "type": "library",
+      "version": "0.1.9"
+    },
+    {
+      "bom-ref": "rust:pkg:cargo/jiff@0.2.42",
+      "licenses": [
+        {
+          "expression": "Unlicense OR MIT"
+        }
+      ],
+      "name": "jiff",
+      "purl": "pkg:cargo/jiff@0.2.42",
+      "type": "library",
+      "version": "0.2.42"
     },
     {
       "bom-ref": "rust:pkg:cargo/libc@0.2.191",
@@ -1211,18 +1163,6 @@
       "version": "0.9.12"
     },
     {
-      "bom-ref": "rust:pkg:cargo/phf@0.12.1",
-      "licenses": [
-        {
-          "expression": "MIT"
-        }
-      ],
-      "name": "phf",
-      "purl": "pkg:cargo/phf@0.12.1",
-      "type": "library",
-      "version": "0.12.1"
-    },
-    {
       "bom-ref": "rust:pkg:cargo/phf@0.14.0",
       "licenses": [
         {
@@ -1233,18 +1173,6 @@
       "purl": "pkg:cargo/phf@0.14.0",
       "type": "library",
       "version": "0.14.0"
-    },
-    {
-      "bom-ref": "rust:pkg:cargo/phf_shared@0.12.1",
-      "licenses": [
-        {
-          "expression": "MIT"
-        }
-      ],
-      "name": "phf_shared",
-      "purl": "pkg:cargo/phf_shared@0.12.1",
-      "type": "library",
-      "version": "0.12.1"
     },
     {
       "bom-ref": "rust:pkg:cargo/phf_shared@0.14.0",
@@ -1269,6 +1197,18 @@
       "purl": "pkg:cargo/pin-project-lite@0.2.17",
       "type": "library",
       "version": "0.2.17"
+    },
+    {
+      "bom-ref": "rust:pkg:cargo/portable-atomic-util@0.2.8",
+      "licenses": [
+        {
+          "expression": "Apache-2.0 OR MIT"
+        }
+      ],
+      "name": "portable-atomic-util",
+      "purl": "pkg:cargo/portable-atomic-util@0.2.8",
+      "type": "library",
+      "version": "0.2.8"
     },
     {
       "bom-ref": "rust:pkg:cargo/portable-atomic@1.13.1",
@@ -1775,54 +1715,6 @@
       "version": "1.0.3+wasi-0.2.9"
     },
     {
-      "bom-ref": "rust:pkg:cargo/wasm-bindgen-macro-support@0.2.118",
-      "licenses": [
-        {
-          "expression": "MIT OR Apache-2.0"
-        }
-      ],
-      "name": "wasm-bindgen-macro-support",
-      "purl": "pkg:cargo/wasm-bindgen-macro-support@0.2.118",
-      "type": "library",
-      "version": "0.2.118"
-    },
-    {
-      "bom-ref": "rust:pkg:cargo/wasm-bindgen-macro@0.2.118",
-      "licenses": [
-        {
-          "expression": "MIT OR Apache-2.0"
-        }
-      ],
-      "name": "wasm-bindgen-macro",
-      "purl": "pkg:cargo/wasm-bindgen-macro@0.2.118",
-      "type": "library",
-      "version": "0.2.118"
-    },
-    {
-      "bom-ref": "rust:pkg:cargo/wasm-bindgen-shared@0.2.118",
-      "licenses": [
-        {
-          "expression": "MIT OR Apache-2.0"
-        }
-      ],
-      "name": "wasm-bindgen-shared",
-      "purl": "pkg:cargo/wasm-bindgen-shared@0.2.118",
-      "type": "library",
-      "version": "0.2.118"
-    },
-    {
-      "bom-ref": "rust:pkg:cargo/wasm-bindgen@0.2.118",
-      "licenses": [
-        {
-          "expression": "MIT OR Apache-2.0"
-        }
-      ],
-      "name": "wasm-bindgen",
-      "purl": "pkg:cargo/wasm-bindgen@0.2.118",
-      "type": "library",
-      "version": "0.2.118"
-    },
-    {
       "bom-ref": "rust:pkg:cargo/web_atoms@0.3.0",
       "licenses": [
         {
@@ -1835,42 +1727,6 @@
       "version": "0.3.0"
     },
     {
-      "bom-ref": "rust:pkg:cargo/windows-core@0.62.2",
-      "licenses": [
-        {
-          "expression": "MIT OR Apache-2.0"
-        }
-      ],
-      "name": "windows-core",
-      "purl": "pkg:cargo/windows-core@0.62.2",
-      "type": "library",
-      "version": "0.62.2"
-    },
-    {
-      "bom-ref": "rust:pkg:cargo/windows-implement@0.60.2",
-      "licenses": [
-        {
-          "expression": "MIT OR Apache-2.0"
-        }
-      ],
-      "name": "windows-implement",
-      "purl": "pkg:cargo/windows-implement@0.60.2",
-      "type": "library",
-      "version": "0.60.2"
-    },
-    {
-      "bom-ref": "rust:pkg:cargo/windows-interface@0.59.3",
-      "licenses": [
-        {
-          "expression": "MIT OR Apache-2.0"
-        }
-      ],
-      "name": "windows-interface",
-      "purl": "pkg:cargo/windows-interface@0.59.3",
-      "type": "library",
-      "version": "0.59.3"
-    },
-    {
       "bom-ref": "rust:pkg:cargo/windows-link@0.2.1",
       "licenses": [
         {
@@ -1881,30 +1737,6 @@
       "purl": "pkg:cargo/windows-link@0.2.1",
       "type": "library",
       "version": "0.2.1"
-    },
-    {
-      "bom-ref": "rust:pkg:cargo/windows-result@0.4.1",
-      "licenses": [
-        {
-          "expression": "MIT OR Apache-2.0"
-        }
-      ],
-      "name": "windows-result",
-      "purl": "pkg:cargo/windows-result@0.4.1",
-      "type": "library",
-      "version": "0.4.1"
-    },
-    {
-      "bom-ref": "rust:pkg:cargo/windows-strings@0.5.1",
-      "licenses": [
-        {
-          "expression": "MIT OR Apache-2.0"
-        }
-      ],
-      "name": "windows-strings",
-      "purl": "pkg:cargo/windows-strings@0.5.1",
-      "type": "library",
-      "version": "0.5.1"
     },
     {
       "bom-ref": "rust:pkg:cargo/windows-sys@0.59.0",
