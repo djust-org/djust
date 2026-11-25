@@ -303,6 +303,8 @@ pub fn iter_values(value: &Value) -> Result<Option<Vec<Value>>> {
         Value::List(items) | Value::Tuple(items) | Value::NamedTuple { items, .. } => {
             Some(items.clone())
         }
+        // The tuple of its names (#4267).
+        Value::CalledKeys(names) => Some(names.iter().cloned().map(Value::String).collect()),
         // A serialized Django model is not iterable: `list(model)` raises, so it is "not
         // iterable" here exactly as a live model handle is, and the keys of the map it was
         // serialized to are not a sequence to walk.
@@ -4924,6 +4926,8 @@ fn json_key_body(key: &djust_core::ObjectKey) -> std::borrow::Cow<'_, str> {
 
 fn value_to_json(value: &Value) -> String {
     match value {
+        // The tuple of its names, as it reads in Python (#4267).
+        Value::CalledKeys(names) => value_to_json(&djust_core::called_keys_tuple(names)),
         // Both are JSON `null`: JSON cannot distinguish absent from None.
         Value::Missing | Value::None => "null".to_string(),
         // A dict view is NOT JSON-serializable: `json.dumps(d.keys())` raises
@@ -6123,6 +6127,7 @@ fn pluralize(value: &Value, arg: &str) -> String {
         | Value::Tuple(l)
         | Value::NamedTuple { items: l, .. }
         | Value::DictView { items: l, .. } => return pick(l.len() == 1),
+        Value::CalledKeys(names) => return pick(names.len() == 1),
         // A serialized model has no `len()`, so Django's `TypeError` arm falls through to its
         // final `return ""`.
         Value::Object(_) if value.model_str().is_some() => {}
@@ -6355,7 +6360,7 @@ pub(crate) fn python_type_name(value: &Value) -> &str {
         // Django's `string_if_invalid`, which is a `str`. See the doc above.
         Value::String(_) | Value::SafeString(_) | Value::ModelName(_) | Value::Missing => "str",
         Value::List(_) => "list",
-        Value::Tuple(_) => "tuple",
+        Value::Tuple(_) | Value::CalledKeys(_) => "tuple",
         Value::NamedTuple { name, .. } => name,
         Value::Object(map) => {
             if value.object_str().is_some() {
@@ -7427,6 +7432,7 @@ mod tests {
             Value::String(_) => "String",
             Value::SafeString(_) => "SafeString",
             Value::ModelName(_) => "ModelName",
+            Value::CalledKeys(_) => "CalledKeys",
             Value::List(_) => "List",
             Value::Tuple(_) => "Tuple",
             Value::NamedTuple { .. } => "NamedTuple",
@@ -7454,6 +7460,8 @@ mod tests {
             Value::ModelName("<b>".to_string()),
             Value::List(vec![Value::String("<b>".to_string())]),
             Value::Tuple(vec![Value::String("<b>".to_string())]),
+            // On the ITERATING side (#4267): it iterates as the tuple of its names.
+            Value::CalledKeys(vec!["<b>".to_string()]),
             Value::Object(Default::default()),
             // On the ITERATING side (#2340): a view is iterable in Python, so
             // `|join` / `|safeseq` / `|unordered_list` see its elements — which
@@ -7564,9 +7572,10 @@ mod tests {
             }
         }
         assert_eq!(
-            iterating, 9,
+            iterating, 10,
             "the iterating set is exactly String / SafeString / ModelName (#3947) / List / \
-             Tuple / Object / Missing / DictView, plus an iterating Encoded (#2466) — a \
+             Tuple / CalledKeys (#4267) / Object / Missing / DictView, plus an iterating \
+             Encoded (#2466) — a \
              change here is a change to what #2283 and #2466 fixed",
         );
         // The half that makes "exhaustive" true rather than aspirational: every
@@ -7576,7 +7585,7 @@ mod tests {
         let seen: std::collections::BTreeSet<&str> = variants.iter().map(variant_name).collect();
         assert_eq!(
             seen.len(),
-            15,
+            16,
             "every `Value` variant needs a sample above; saw {seen:?}",
         );
     }

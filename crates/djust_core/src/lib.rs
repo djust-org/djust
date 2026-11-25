@@ -178,6 +178,15 @@ pub(crate) const MODEL_NAME_TAG: &str = "__djust_model_name__";
 /// itself read for a tag on the way back.
 pub(crate) const ESCAPED_MAP_TAG: &str = "__djust_escaped_map__";
 
+/// The binary-format tag for a [`Value::CalledKeys`] (#4267): a one-key map with a list-of-strings
+/// payload. Data cannot mint it, as for [`MODEL_NAME_TAG`]: a user map whose only key is this
+/// tag is written under [`ESCAPED_MAP_TAG`]. JSON writes the plain list.
+pub(crate) const CALLED_KEYS_TAG: &str = "__djust_called_keys__";
+
+/// The row key a path serializer files a [`Value::CalledKeys`] under
+/// (`djust.serialization.CALLED_KEYS_KEY`, #4267).
+pub const CALLED_KEYS_KEY: &str = "__djust_called__";
+
 /// The [`MISSING_TAG`] value, for tests outside the crate. `#[doc(hidden)]`,
 /// not API — same rationale as [`decimal_tag`].
 #[doc(hidden)]
@@ -271,6 +280,14 @@ pub enum Value {
     /// dict. JSON writes the plain string (client wire unchanged); a binary encoding tags it under
     /// `MODEL_NAME_TAG`.
     ModelName(String),
+    /// The names of a serialized ROW whose values are a called method's result (#4267), filed
+    /// under [`CALLED_KEYS_KEY`] by the path serializers (`serialize_queryset`, the generated
+    /// code) as `djust.serialization.CalledKeys` (a `tuple` subclass). Django's `dictsort` does
+    /// not call a method key, so it orders bound methods and renders `""`; the engine's
+    /// `dictsort` reads this to do the same ([`value_into_sort_row_pyobject`]). Everywhere else
+    /// it reads as the tuple of its names. A plain tuple from user data under that key stays a
+    /// tuple. A binary encoding tags it under `CALLED_KEYS_TAG`.
+    CalledKeys(Vec<String>),
     List(Vec<Value>),
     /// A Python tuple. Separate from `List` only so it can render with
     /// parentheses, which `str()` distinguishes (#2203).
@@ -1725,6 +1742,12 @@ impl Serialize for Value {
                 m.end()
             }
             Value::String(st) | Value::SafeString(st) | Value::ModelName(st) => serializer.serialize_str(st),
+            Value::CalledKeys(names) if !serializer.is_human_readable() => {
+                let mut m = serializer.serialize_map(Some(1))?;
+                m.serialize_entry(CALLED_KEYS_TAG, names)?;
+                m.end()
+            }
+            Value::CalledKeys(names) => names.serialize(serializer),
             // A tuple keeps its identity in binary formats only (#2276) — see
             // `TUPLE_TAG` for why JSON deliberately stays an array.
             Value::NamedTuple {
@@ -1749,7 +1772,7 @@ impl Serialize for Value {
                 if !serializer.is_human_readable()
                     && o.len() == 1
                     && o.keys().next().is_some_and(|k| {
-                        matches!(k, ObjectKey::Str(s) if s == MODEL_NAME_TAG || s == ESCAPED_MAP_TAG)
+                        matches!(k, ObjectKey::Str(s) if s == MODEL_NAME_TAG || s == ESCAPED_MAP_TAG || s == CALLED_KEYS_TAG)
                     }) =>
             {
                 let (key, value) = o.iter().next().expect("len checked");
@@ -2006,6 +2029,21 @@ impl<'de> Deserialize<'de> for Value {
                     // Binary formats only: that is the only place the writer puts it.
                     if let (true, Some(Value::String(d))) = (self.binary, obj.get(MODEL_NAME_TAG)) {
                         return Ok(Value::ModelName(d.clone()));
+                    }
+                    // The called-method marker (#4267): a list of strings, binary formats only.
+                    if let (true, Some(Value::List(names))) =
+                        (self.binary, obj.get(CALLED_KEYS_TAG))
+                    {
+                        let names: Option<Vec<String>> = names
+                            .iter()
+                            .map(|n| match n {
+                                Value::String(n) => Some(n.clone()),
+                                _ => None,
+                            })
+                            .collect();
+                        if let Some(names) = names {
+                            return Ok(Value::CalledKeys(names));
+                        }
                     }
                     // A user map the writer escaped: `[key, value]`, read back as that one-key
                     // map with no tag interpretation of the key.
@@ -3315,6 +3353,7 @@ impl Value {
             // gives `inf` for a 400-digit value.
             Value::BigInt(d) => d.bytes().any(|b| b.is_ascii_digit() && b != b'0'),
             Value::String(s) | Value::SafeString(s) | Value::ModelName(s) => !s.is_empty(),
+            Value::CalledKeys(names) => !names.is_empty(),
             // Python's own `bool(o)`, asked at the conversion and carried
             // (#2458). #2448 read `!e.display.is_empty()` here — always true
             // for this family — which kept `bool(timedelta(0))` at `True`
@@ -3755,6 +3794,8 @@ impl fmt::Display for Value {
             // either rule, and its non-grouping path is `str(number)` (#2260).
             Value::BigInt(d) => write!(f, "{d}"),
             Value::String(s) | Value::SafeString(s) | Value::ModelName(s) => write!(f, "{s}"),
+            // Spelled as the tuple of its names it is in Python.
+            Value::CalledKeys(names) => write!(f, "{}", called_keys_tuple(names)),
             // The display spelling is `str(o)`; only `json_script` reads the
             // other one.
             //
@@ -4491,6 +4532,9 @@ impl<'py> FromPyObject<'_, 'py> for Value {
                 Value::String(s)
             })
         } else if let Ok(tuple) = ob.cast::<pyo3::types::PyTuple>() {
+            if let Some(names) = called_keys_names(&ob.to_owned()) {
+                return Ok(Value::CalledKeys(names));
+            }
             // BEFORE the sequence arm: a tuple extracts as `Vec<Value>` too, so
             // checking after it would render every tuple as a list (#2203).
             let items: Vec<Value> = tuple.extract()?;
@@ -4783,6 +4827,38 @@ fn is_model_name(ob: &Bound<'_, PyAny>) -> bool {
         Some(class) => ob.get_type().is(class.bind(ob.py())),
         None => false,
     }
+}
+
+/// The cached `djust.serialization.CalledKeys` class (#4267), or `None` when it cannot be
+/// imported.
+fn called_keys_class(py: Python<'_>) -> Option<&'static Py<PyAny>> {
+    static CLASS: pyo3::sync::PyOnceLock<Py<PyAny>> = pyo3::sync::PyOnceLock::new();
+    CLASS
+        .get_or_try_init(py, || -> PyResult<Py<PyAny>> {
+            Ok(py
+                .import("djust.serialization")?
+                .getattr("CalledKeys")?
+                .unbind())
+        })
+        .ok()
+}
+
+/// The names of a `CalledKeys` tuple (#4267), or `None` for any other tuple. Asked only of a
+/// `tuple` SUBCLASS instance, so a plain tuple never pays for the lookup.
+fn called_keys_names(ob: &Bound<'_, PyAny>) -> Option<Vec<String>> {
+    if ob.is_exact_instance_of::<pyo3::types::PyTuple>() {
+        return None;
+    }
+    let class = called_keys_class(ob.py())?;
+    if !ob.get_type().is(class.bind(ob.py())) {
+        return None;
+    }
+    ob.extract::<Vec<String>>().ok()
+}
+
+/// A [`Value::CalledKeys`] as the tuple of its names: what it reads as outside `dictsort`.
+pub fn called_keys_tuple(names: &[String]) -> Value {
+    Value::Tuple(names.iter().cloned().map(Value::String).collect())
 }
 
 fn is_model_floor_proxy(ob: &Bound<'_, PyAny>) -> bool {
@@ -6143,6 +6219,14 @@ impl<'py> IntoPyObject<'py> for Value {
                 Some(class) => class.bind(py).call1((s,)),
                 None => Ok(s.into_pyobject(py)?.to_owned().into_any()),
             },
+            // Back to a `CalledKeys`, so a row that crosses to Python and back keeps it (#4267).
+            Value::CalledKeys(names) => {
+                let tuple = pyo3::types::PyTuple::new(py, names)?.into_any();
+                match called_keys_class(py) {
+                    Some(class) => class.bind(py).call1((tuple,)),
+                    None => Ok(tuple),
+                }
+            }
             // Temporal values retain their Python type for arithmetic and
             // custom filters. Only validated temporal handles cross here;
             // opaque objects and carried collections keep their display-string
@@ -6803,6 +6887,64 @@ pub fn value_into_handler_pyobject(py: Python<'_>, value: Value) -> PyResult<Bou
         }
         other => other.into_pyobject(py),
     }
+}
+
+/// One element of `dictsort`'s input as Django's `_property_resolver` must see it (#4267).
+///
+/// [`value_into_handler_pyobject`], except that a row's [`Value::CalledKeys`] entry is honoured:
+/// each name it files crosses as an object Python cannot order and that has no attribute or item
+/// to read (a bare `object()`), which is what a bound method is to `dictsort`. Django never calls
+/// a method key, so it compares bound methods, raises `TypeError` and renders `""`; a path row
+/// holds the CALLED value there (the template also prints it) and sorted by it. A key read
+/// through it (`get_x.y`) fails as reading off a bound method does. The marker entry itself is
+/// left out. One row sorts as on Django (nothing is compared), and the answer maps back to the
+/// original rows by identity, so the printed value is the called one.
+pub fn value_into_sort_row_pyobject(py: Python<'_>, value: Value) -> PyResult<Bound<'_, PyAny>> {
+    match value {
+        Value::Object(map) => {
+            let called: Vec<String> = match map.get(CALLED_KEYS_KEY) {
+                Some(Value::CalledKeys(names)) => names.clone(),
+                _ => Vec::new(),
+            };
+            let py_dict = PyDict::new(py);
+            for (key, item) in map {
+                if !called.is_empty() {
+                    if let ObjectKey::Str(name) = &key {
+                        if name == CALLED_KEYS_KEY {
+                            continue;
+                        }
+                        if called.contains(name) {
+                            py_dict.set_item(name, uncalled_method(py)?)?;
+                            continue;
+                        }
+                    }
+                }
+                py_dict.set_item(
+                    Value::from(key).into_pyobject(py)?,
+                    value_into_sort_row_pyobject(py, item)?,
+                )?;
+            }
+            Ok(py_dict.into_any())
+        }
+        Value::List(items) => {
+            let py_list = PyList::empty(py);
+            for item in items {
+                py_list.append(value_into_sort_row_pyobject(py, item)?)?;
+            }
+            Ok(py_list.into_any())
+        }
+        other => value_into_handler_pyobject(py, other),
+    }
+}
+
+/// The stand-in for an uncalled method in a `dictsort` row (#4267): a fresh `object()`, which
+/// supports no ordering, no item and no public attribute.
+fn uncalled_method(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+    static OBJECT: pyo3::sync::PyOnceLock<Py<PyAny>> = pyo3::sync::PyOnceLock::new();
+    let class = OBJECT.get_or_try_init(py, || -> PyResult<Py<PyAny>> {
+        Ok(py.import("builtins")?.getattr("object")?.unbind())
+    })?;
+    class.bind(py).call0()
 }
 
 #[cfg(test)]

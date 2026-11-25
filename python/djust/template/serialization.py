@@ -18,7 +18,7 @@ from django.db.models import Model
 from django.db.models.fields.files import FieldFile
 
 from djust._mapping import mapping_items
-from djust.serialization import django_json_datetime
+from djust.serialization import CalledKeys, django_json_datetime
 
 logger = logging.getLogger(__name__)
 
@@ -265,6 +265,10 @@ def serialize_value(
     # Handle dict - recursively serialize
     if isinstance(value, dict):
         return {k: serialize_value(v, for_render=for_render) for k, v in mapping_items(value)}
+
+    # A row's called-method names (#4267): kept as the marker for a render.
+    if type(value) is CalledKeys:
+        return value if for_render else list(value)
 
     # Handle list/tuple - recursively serialize
     if isinstance(value, (list, tuple)):

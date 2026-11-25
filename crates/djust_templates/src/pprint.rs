@@ -116,6 +116,7 @@ fn flat_repr(value: &Value) -> String {
         // came into reach. Not a format string: see the `Encoded::repr` doc.
         Value::Encoded(e) => e.repr.clone(),
         Value::NamedTuple { .. } => value.py_repr(),
+        Value::CalledKeys(names) => flat_repr(&djust_core::called_keys_tuple(names)),
         Value::List(items) => {
             let parts: Vec<String> = items.iter().map(flat_repr).collect();
             format!("[{}]", parts.join(", "))

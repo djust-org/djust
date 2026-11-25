@@ -32,7 +32,7 @@ row serializers (``serialize_queryset``, ``optimization/codegen.py``), the Pytho
 
 The LiveView entry is the explicit default (#4264).
 
-Refs #3911, #3910, #3912, #3918, #3919, #3920, #3862, #4264.
+Refs #3911, #3910, #3912, #3918, #3919, #3920, #3862, #4264, #4267.
 """
 
 # ruff: noqa: F811
@@ -813,3 +813,152 @@ class TestRegroupBesideDictsort4264:
         got, want = _agrees(render, self.SEPARATE, {"users": _users(shape)})
         assert want == "|cara:cara;abe:abe;bob:bob;"
         assert got == "|None:caraabebob;"
+
+
+# ---------------------------------------------------------------------------------------------
+# A method sort key the body also prints (#4267)
+# ---------------------------------------------------------------------------------------------
+#: The body prints the method, so the row carries its CALLED value where a column would be;
+#: Django's ``dictsort`` never calls a method key, compares bound methods and renders ``""``.
+PRINTED_METHOD_KEY_CASES = [
+    (
+        "method-key",
+        "{% for u in users|dictsort:'get_username' %}{{ u.get_username }},{% endfor %}",
+    ),
+    (
+        "method-key-reversed",
+        "{% for u in users|dictsortreversed:'get_username' %}{{ u.get_username }},{% endfor %}",
+    ),
+    (
+        "attribute-key-beside-a-printed-method",
+        "{% for u in users|dictsort:'email' %}{{ u.get_username }},{% endfor %}",
+    ),
+    (
+        "attribute-key-reversed-beside-a-printed-method",
+        "{% for u in users|dictsortreversed:'first_name' %}{{ u.get_username }},{% endfor %}",
+    ),
+    (
+        "missing-key-beside-a-printed-method",
+        "{% for u in users|dictsort:'nope' %}{{ u.get_username }},{% endfor %}",
+    ),
+    (
+        "variable-key-naming-a-printed-method",
+        "{% for u in users|dictsort:key %}{{ u.get_username }},{% endfor %}",
+    ),
+    (
+        "a-path-through-a-printed-method",
+        "{% for u in users|dictsort:'get_username.upper' %}{{ u.get_username }},{% endfor %}",
+    ),
+    (
+        "one-row-is-never-compared",
+        "{% for u in users|slice:':1'|dictsort:'get_username' %}{{ u.get_username }},{% endfor %}",
+    ),
+    (
+        "two-printed-methods-sorted-by-one",
+        "{% for u in users|dictsort:'get_full_name' %}{{ u.get_username }}"
+        "{{ u.get_full_name }},{% endfor %}",
+    ),
+]
+
+
+@pytest.mark.django_db
+class TestAPrintedMethodSortKey4267:
+    """``QuerySet`` rows come from the Rust ``serialize_queryset`` (``backend``, ``liveview``)
+    and ``list[Model]`` rows on a LiveView from the generated code (``optimization/codegen.py``),
+    so the two shapes are the two serializers; ``render_template`` takes live handles."""
+
+    @pytest.mark.parametrize("shape", SHAPES)
+    @pytest.mark.parametrize("render", ENTRIES)
+    @pytest.mark.parametrize(
+        "name,source", PRINTED_METHOD_KEY_CASES, ids=[c[0] for c in PRINTED_METHOD_KEY_CASES]
+    )
+    def test_renders_like_django(self, world, render, shape, name, source) -> None:
+        _pk_order_is_not_any_sort_order()
+        context = {"users": _users(shape), "key": "get_username"}
+        got, want = _agrees(render, source, context)
+        assert got == want, (name, shape)
+
+    @pytest.mark.parametrize("render", ENTRIES)
+    def test_the_controls_are_what_django_renders(self, world, render) -> None:
+        """Django really renders the method key empty, the attribute key sorted and one row."""
+        context = {"users": _users("QuerySet"), "key": "get_username"}
+        cases = dict(PRINTED_METHOD_KEY_CASES)
+        assert _django_render(cases["method-key"], context) == ""
+        assert _django_render(cases["method-key-reversed"], context) == ""
+        assert _django_render(cases["missing-key-beside-a-printed-method"], context) == ""
+        assert _django_render(cases["attribute-key-beside-a-printed-method"], context) == (
+            "bob,cara,abe,"
+        )
+        assert _django_render(cases["one-row-is-never-compared"], context) == "cara,"
+
+    @pytest.mark.parametrize("render", ENTRIES)
+    def test_a_nested_list_sorted_by_a_printed_method(self, world, render) -> None:
+        source = (
+            "{% for g in groups %}[{% for u in g.user_set.all|dictsort:'get_username' %}"
+            "{{ u.get_username }},{% endfor %}]{% endfor %}"
+        )
+        got, want = _agrees(render, source, {"groups": Group.objects.order_by("pk")})
+        assert got == want == "[][cara,]"
+
+    def test_both_serializers_file_the_called_names(self, world) -> None:
+        """The Rust serializer and its codegen twin (#1646) file the same marker, and only for
+        what they called: a column and a relation's ``all`` are not methods to ``dictsort``."""
+        from djust.optimization.codegen import compile_serializer, generate_serializer_code
+        from djust.serialization import CALLED_KEYS_KEY, CalledKeys
+
+        paths = ["email", "get_full_name", "get_username", "groups.all.name"]
+        users = list(_users("QuerySet"))
+        rust = _rust.serialize_queryset(users, paths)
+        code = generate_serializer_code("User", paths, "ser_4267")
+        codegen = [compile_serializer(code, "ser_4267")(u) for u in users]
+        assert rust == codegen
+        for row in rust + codegen:
+            assert type(row[CALLED_KEYS_KEY]) is CalledKeys
+            assert row[CALLED_KEYS_KEY] == ("get_full_name", "get_username")
+            assert CALLED_KEYS_KEY not in row["groups"]
+        plain = _rust.serialize_queryset(users, ["email"])
+        assert all(CALLED_KEYS_KEY not in row for row in plain)
+
+    @pytest.mark.parametrize("serializer", ["rust", "codegen"])
+    @pytest.mark.parametrize(
+        "name,source",
+        [c for c in PRINTED_METHOD_KEY_CASES if c[0] != "one-row-is-never-compared"],
+        ids=[c[0] for c in PRINTED_METHOD_KEY_CASES if c[0] != "one-row-is-never-compared"],
+    )
+    def test_each_serializers_rows_render_like_django(
+        self, world, serializer, name, source
+    ) -> None:
+        """The two paths taken apart from the entries: each one's own rows, rendered."""
+        from djust.optimization.codegen import compile_serializer, generate_serializer_code
+
+        paths = ["email", "first_name", "get_full_name", "get_username"]
+        users = list(_users("QuerySet"))
+        if serializer == "rust":
+            rows = _rust.serialize_queryset(users, paths)
+        else:
+            code = generate_serializer_code("User", paths, "ser_rows_4267")
+            rows = [compile_serializer(code, "ser_rows_4267")(u) for u in users]
+        context = {"key": "get_username"}
+        got = _clean(_rust.render_template(source, {**context, "users": rows}))
+        want = _django_render(source, {**context, "users": users})
+        assert got == want, name
+
+    def test_gate_off_rows_without_the_marker_sort_by_the_called_value(self, world) -> None:
+        """The marker is what does it: the same rows without it sort by the method's text."""
+        from djust.serialization import CALLED_KEYS_KEY
+
+        source = dict(PRINTED_METHOD_KEY_CASES)["method-key"]
+        rows = _rust.serialize_queryset(list(_users("QuerySet")), ["get_username"])
+        assert _rust.render_template(source, {"users": rows}) == ""
+        for row in rows:
+            del row[CALLED_KEYS_KEY]
+        assert _rust.render_template(source, {"users": rows}) == "abe,bob,cara,"
+
+    def test_data_cannot_mint_the_marker(self) -> None:
+        """A plain tuple under the key is data: only the ``CalledKeys`` type is the marker."""
+        from djust.serialization import CALLED_KEYS_KEY
+
+        rows = [{"k": "b", CALLED_KEYS_KEY: ("k",)}, {"k": "a", CALLED_KEYS_KEY: ("k",)}]
+        source = "{% for r in rows|dictsort:'k' %}{{ r.k }},{% endfor %}"
+        got, want = _agrees(_raw_render, source, {"rows": rows})
+        assert got == want == "a,b,"

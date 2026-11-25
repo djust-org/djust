@@ -23,7 +23,7 @@ from ..optimization.codegen import (
     generate_serializer_code,
 )
 from ..optimization.query_optimizer import analyze_queryset_optimization, optimize_queryset
-from ..serialization import model_identity, normalize_django_value
+from ..serialization import CALLED_KEYS_KEY, model_identity, normalize_django_value
 from ..session_utils import _jit_serializer_cache, _get_model_hash
 
 logger = logging.getLogger(__name__)
@@ -1484,7 +1484,9 @@ class JITMixin:
             # Check if Rust serializer captured all expected paths
             # (Rust can't access @property attributes, only model fields)
             expected_keys = expected_row_keys(paths_for_var)
-            if result and len(result[0]) < expected_keys:
+            # The called-method marker is not a path's key (#4267): counted, it would hide a
+            # missing one.
+            if result and len(result[0]) - (CALLED_KEYS_KEY in result[0]) < expected_keys:
                 # Heuristic: if the first item has fewer top-level keys than expected,
                 # Rust likely can't access some paths (e.g. @property). A nullable FK
                 # on item 0 could cause a false positive, but the codegen fallback is

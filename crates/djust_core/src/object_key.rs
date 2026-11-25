@@ -205,6 +205,9 @@ impl ObjectKey {
             crate::Value::String(s) | crate::Value::SafeString(s) | crate::Value::ModelName(s) => {
                 ObjectKey::Str(s.clone())
             }
+            crate::Value::CalledKeys(names) => {
+                ObjectKey::Tuple(names.iter().cloned().map(ObjectKey::Str).collect())
+            }
             crate::Value::Integer(n) => ObjectKey::Int(*n),
             crate::Value::Bool(b) => ObjectKey::Bool(*b),
             crate::Value::None => ObjectKey::None,

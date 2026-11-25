@@ -520,7 +520,10 @@ def take_by_tree(value: Any, tree: Dict[str, Any]) -> Any:
             except Exception:  # noqa: BLE001 — as the generated code does
                 logger.debug("Method %s() failed during serialization", name)
                 continue
-            if name == "all":
+            if name != "all":
+                # A relation's ``all`` is its rows, not a sort key (#4267).
+                mark_called(taken, name)
+            else:
                 chain = all_methods_value(found, tree[name])
                 if chain is not None:
                     taken[name] = chain
@@ -530,6 +533,16 @@ def take_by_tree(value: Any, tree: Dict[str, Any]) -> Any:
     if ROW_TEXT_KEY in tree:
         add_row_text(value, taken)
     return taken
+
+
+def mark_called(row: Dict[str, Any], name: str) -> None:
+    """``serialization.mark_called``: *row*'s *name* holds a called method's result (#4267).
+
+    Imported per call because ``serialization`` imports this module.
+    """
+    from ..serialization import mark_called as _mark
+
+    _mark(row, name)
 
 
 def _gate_line(indent: int, gate_var: str, obj_expr: str, names: List[str]) -> str:
@@ -849,6 +862,7 @@ def _generate_nested_access(
                 )
                 lines.append(f"{ind}        try:")
                 lines.append(f"{ind}            {result_var}['{root_attr}'] = _m()")
+                lines.append(f"{ind}            _djust_called({result_var}, '{root_attr}')")
                 lines.append(f"{ind}        except Exception:")
                 lines.append(
                     f"{ind}            _logger.debug('Method %s() failed during serialization', '{root_attr}')"
@@ -1051,6 +1065,9 @@ def _generate_nested_access(
                 )
                 lines.append(f"{ind}        try:")
                 lines.append(f"{ind}            {dict_path_full}['{attr_name}'] = _m()")
+                if attr_name != "all":
+                    # A relation's ``all`` is its rows, not a sort key (#4267).
+                    lines.append(f"{ind}            _djust_called({dict_path_full}, '{attr_name}')")
                 lines.append(f"{ind}        except Exception:")
                 lines.append(
                     f"{ind}            _logger.debug('Method %s() failed during serialization', '{attr_name}')"
@@ -1117,6 +1134,8 @@ def compile_serializer(code: str, func_name: str) -> Callable:
         "_djust_all_rows": capped_all_rows,
         "_djust_row_text": add_row_text,
         "_djust_leaf": leaf_value,
+        # A called method's name, filed beside its result for ``dictsort`` (#4267).
+        "_djust_called": mark_called,
     }
 
     try:

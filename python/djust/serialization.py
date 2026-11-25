@@ -253,6 +253,36 @@ class ModelName(str):
     __slots__ = ()
 
 
+#: The row key a path serializer files :class:`CalledKeys` under (#4267). It starts with
+#: ``_``, so no template variable can read it (Django refuses a private name).
+CALLED_KEYS_KEY = "__djust_called__"
+
+
+class CalledKeys(tuple):
+    """The names of a serialized row whose values are a CALLED method's result (#4267).
+
+    A path serializer (the Rust ``serialize_queryset`` and the generated code) calls a
+    method the template reads (``{{ u.get_username }}``) and files the result under the
+    method's name, where a column would be. Django's ``dictsort`` does not call: it orders
+    the bound methods, raises, and renders ``""``. The row files the names it called under
+    :data:`CALLED_KEYS_KEY`, so the engine's ``dictsort`` sees a method there too.
+
+    A ``tuple`` subclass, sorted and without duplicates. Its TYPE is the marker, as for
+    :class:`ModelName`: the Rust engine reads it as ``Value::CalledKeys``, and a plain tuple
+    under the same key in user data stays data. Nothing but :func:`mark_called` builds it.
+    """
+
+    __slots__ = ()
+
+
+def mark_called(row: Dict[str, Any], name: str) -> None:
+    """File *name* in *row*'s :class:`CalledKeys`: its value there is a called method's (#4267)."""
+    present = row.get(CALLED_KEYS_KEY)
+    names = set(present) if isinstance(present, CalledKeys) else set()
+    names.add(name)
+    row[CALLED_KEYS_KEY] = CalledKeys(sorted(names))
+
+
 def value_text(value: Any) -> str:
     """The text Django prints for a non-model value read whole (#4269 review).
 
@@ -1487,7 +1517,9 @@ def encode_state_value(
                 "dict",
                 [[walk(key, depth + 1), walk(child, depth + 1)] for key, child in item.items()],
             )
-        if kind is tuple:
+        if kind is tuple or kind is CalledKeys:
+            # The #4267 marker saves as the plain tuple of its names; the next sync's
+            # serializer files it again.
             return _tag("tuple", [walk(child, depth + 1) for child in item])
         if kind is set or kind is frozenset:
             members = [walk(child, depth + 1) for child in item]
@@ -4713,6 +4745,10 @@ def normalize_django_value(value: Any, _depth: int = 0, *, state_roundtrip: bool
             k: normalize_django_value(v, _depth, state_roundtrip=state_roundtrip)
             for k, v in mapping_items(value)
         }
+
+    if type(value) is CalledKeys:
+        # A row's called-method names (#4267): text only, kept as the marker for the render.
+        return list(value) if state_roundtrip else value
 
     if isinstance(value, (list, tuple)):
         items = [

@@ -75,6 +75,7 @@ fn variant(v: &Value) -> &'static str {
         Value::String(_) => "String",
         Value::SafeString(_) => "SafeString",
         Value::ModelName(_) => "ModelName",
+        Value::CalledKeys(_) => "CalledKeys",
         Value::List(_) => "List",
         Value::Tuple(_) => "Tuple",
         Value::NamedTuple { .. } => "NamedTuple",
@@ -313,4 +314,25 @@ fn no_field_in_this_crate_is_conditionally_skipped() {
         "a conditional skip appeared in djust_core — re-read #1541 before \
          keeping it",
     );
+}
+
+/// #4267: a row's called-method names survive a binary round trip as the marker, a JSON one as
+/// a plain list, and a user map spelled like the tag stays that map.
+#[test]
+fn called_keys_round_trip_as_the_marker_and_data_cannot_mint_it() {
+    let names = Value::CalledKeys(vec!["get_full_name".into(), "get_username".into()]);
+    let back = round_trip(&names);
+    assert_eq!(variant(&back), "CalledKeys");
+    assert_eq!(back.to_string(), "('get_full_name', 'get_username')");
+
+    let json = serde_json::to_string(&names).expect("json encode");
+    assert_eq!(json, r#"["get_full_name","get_username"]"#);
+
+    let mut forged = indexmap::IndexMap::new();
+    forged.insert(
+        djust_core::object_key::ObjectKey::Str("__djust_called_keys__".into()),
+        Value::List(vec![Value::String("pk".into())]),
+    );
+    let back = round_trip(&Value::Object(forged));
+    assert_eq!(variant(&back), "Object", "data minted the marker: {back:?}");
 }

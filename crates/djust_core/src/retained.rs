@@ -52,6 +52,10 @@ impl Value {
             Value::List(items) | Value::Tuple(items) | Value::DictView { items, .. } => {
                 items_bytes(items)
             }
+            Value::CalledKeys(names) => {
+                names.capacity() * size_of::<String>()
+                    + names.iter().map(String::capacity).sum::<usize>()
+            }
             Value::NamedTuple {
                 name,
                 fields,
