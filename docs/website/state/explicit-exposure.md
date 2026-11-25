@@ -349,7 +349,14 @@ token = state("", persist="server", render=False)  # handlers only, never templa
   object permission, a `mount()` raising `Http404` or `PermissionDenied`)
   shows `child '<view path>' denied access` as on the page GET; any other
   failure shows `Lazy child <id> failed.` (`Lazy child failed.` when the tag
-  has no `view_id=`). Either way it receives no events.
+  has no `view_id=`). Either way it receives no events. On the page-POST
+  fallback an event from the child mounts that one slot's child again under
+  the POST's request, with the same checks, and runs on it (#4173). The
+  attribute form (`<div dj-view="..." dj-lazy>`) on an explicit page
+  hydrates over the page POST too (#4174): it is mounted with the checks of
+  an eager child under its lazy address, and keeps exactly its
+  `persist="server"` fields between POSTs; its other state starts again
+  from `mount()`.
 - **Tenancy.** The configured tenant resolver is applied to every request,
   including WebSocket mounts, whether or not `TenantMiddleware` is installed.
 - **Invalidation.** Change detection is unchanged. After mutating an object in

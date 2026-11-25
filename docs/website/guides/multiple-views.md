@@ -102,8 +102,8 @@ The contract above holds on every connection the page can have; what differs is 
 | | WebSocket | SSE stream | Page POST (no `EventSource`) |
 |---|---|---|---|
 | Page view | yes | yes | yes |
-| Lazy views (`dj-lazy`) | one `mount` frame each, or one `mount_batch` | one `mount` POST each (no `mount_batch`) | not hydrated: `djust:error` with `code: "view_unavailable"` |
-| Events, routed by view | yes | yes | the page view's, and its `{% live_render %}` children's when page and child share an exposure policy; a mixed-policy child's and a lazy view's are refused |
+| Lazy views (`dj-lazy`) | one `mount` frame each, or one `mount_batch` | one `mount` POST each (no `mount_batch`) | hydrated with a page POST when its exposure policy matches the page's (an explicit one keeps only its `persist="server"` fields); otherwise not hydrated: `djust:error` with `code: "view_unavailable"` |
+| Events, routed by view | yes | yes | the page view's, and its `{% live_render %}` children's and `dj-lazy` views' when they share the page's exposure policy; a mixed-policy one's is refused |
 | Hooks (`pushEvent`) | to the view they sit in | to the view they sit in | no |
 | Uploads | yes | no | no |
 | `push_to_view` groups and scopes, presence, `db_notify` | per view | none, for any view | none |

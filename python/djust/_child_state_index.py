@@ -154,6 +154,12 @@ def prepare_child_batch(
         retained_shell = {path for path in previous_shell - paths if path[0] not in registry}
         paths |= retained_shell
         shell_paths |= retained_shell
+    lazy = getattr(root, "__dict__", {}).get("_http_lazy_containers")
+    if type(lazy) is dict and lazy:
+        # An attribute-form lazy view on the page POST (#4174) is mounted only
+        # by its own requests: a request for one container keeps the others'.
+        registry = getattr(root, "_child_views", {})
+        paths |= {path for path in previous - paths if path[0] in lazy and path[0] not in registry}
     if not paths and not previous:
         return None
     removed = {child_state_key(route, path) for path in previous - paths}

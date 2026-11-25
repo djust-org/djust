@@ -1,7 +1,15 @@
-"""Authored attribute-form lazy children on the page-POST fallback (#3252).
+"""Authored attribute-form lazy children on the page-POST fallback (#3252, #4174).
 
 Resolution is possible only through a fresh render's server-owned registry.
 The client sends a keyed address, never a class or a state payload.
+
+Both exposure policies are registered, for same-policy pairs only (a legacy
+page's legacy child, an explicit page's explicit child). An explicit child is
+mounted through the eager ``{% live_render %}`` explicit sequence
+(``_mount_explicit``) and keeps exactly its ``persist="server"`` fields, saved
+under its lazy address by ``save_child_states``. The legacy branches
+(``mount_http_lazy``'s legacy body, ``_lazy_state_saved`` and
+``save_http_lazy``) go with the legacy exposure policy's removal.
 """
 
 from __future__ import annotations
@@ -40,8 +48,9 @@ def _log_unregistered(html: str, registered: int) -> None:
 @dataclass(frozen=True)
 class LazyContainer:
     child_class: type
-    state_key: str
+    state_key: str  # legacy only: unused for an explicit entry
     child_tenant: str
+    explicit: bool = False
 
 
 def register_lazy_containers(parent: Any, request: Any, html: str) -> str:
@@ -52,7 +61,6 @@ def register_lazy_containers(parent: Any, request: Any, html: str) -> str:
         or getattr(parent, "wrapper_template", None)
         or not isinstance(html, RenderedHTML)
         or request is None
-        or not uses_legacy_exposure(parent)
     ):
         if not getattr(parent, "_defer_lazy_registration", False):
             _log_unregistered(html, 0)
@@ -102,8 +110,8 @@ def register_lazy_containers(parent: Any, request: Any, html: str) -> str:
                 continue
         try:
             cls = resolve_live_view_class(view_path)
-            if not uses_legacy_exposure(cls):
-                continue  # Explicit views require a transport mount binding.
+            if uses_legacy_exposure(cls) != uses_legacy_exposure(parent):
+                continue  # same-policy pairs only
             child = cls()
             mark_embedded(child)
             child.request = request
@@ -136,7 +144,7 @@ def register_lazy_containers(parent: Any, request: Any, html: str) -> str:
         view_id = "lazy_" + identity
         state_key = "liveview_" + path + "__lazy__" + view_id
         parent.__dict__["_http_lazy_containers"][view_id] = LazyContainer(
-            cls, state_key, child_tenant
+            cls, state_key, child_tenant, explicit=not uses_legacy_exposure(cls)
         )
         # Insert reserved routing attributes first: HTML selects the first
         # duplicate, so neither interpolation nor author-provided DOM IDs can
@@ -179,6 +187,8 @@ def mount_http_lazy(parent: Any, request: Any, view_id: str) -> Any:
     entry = getattr(parent, "_http_lazy_containers", {}).get(view_id)
     if entry is None:
         return None
+    if entry.explicit:
+        return _mount_explicit(parent, request, view_id, entry)
     from .hooks import run_on_mount_hooks
     from .serialization import decode_state_roundtrip
     from ._state_restore import restore_public_state
@@ -218,6 +228,67 @@ def mount_http_lazy(parent: Any, request: Any, view_id: str) -> Any:
     return child
 
 
+def _mount_explicit(parent: Any, request: Any, view_id: str, entry: LazyContainer) -> Any:
+    """Mount an explicit lazy child as ``{% live_render %}`` mounts an explicit one (#4174).
+
+    The eager explicit sequence, with no inputs (the attribute form has none)
+    and the lazy address as the slot: view auth and mount hooks before
+    ``mount()``, the reuse identity compiled before it and matched after the
+    object permission, and the child's ``persist="server"`` fields restored
+    from the child-state scope bound to that address (session, user, tenant,
+    route and slot). Its other state starts again from ``mount()``. Any
+    exposure failure is a refusal.
+    """
+    from ._component_state import apply_declared_state
+    from ._exposure import ExposureError
+    from ._exposure_child_identity import child_reuse_identity
+    from ._exposure_children import child_state_adapter, record_child_mount_inputs
+    from ._params_form import _refuse_removed_configuration
+    from ._view_hooks import call_hook_sync
+    from .hooks import run_on_mount_hooks
+
+    inputs: dict = {}
+    child = entry.child_class()
+    mark_embedded(child)
+    child.request = request
+    if run_pre_mount_auth(child, request) is not None or run_on_mount_hooks(child, request):
+        raise PermissionDenied("Lazy view refused")
+    if session_view_key(child, request.path) is None:
+        raise PermissionDenied("Lazy view has no resolved tenant")
+    try:
+        record_child_mount_inputs(child, inputs)
+        identity = child_reuse_identity(type(child), parent, request, view_id, inputs)
+        adapter = child_state_adapter(child, parent, request, view_id, inputs, create=True)
+        call_hook_sync(child.mount, request)
+        _refuse_removed_configuration(child)
+        restored = None
+        if adapter is not None:
+            try:
+                restored = adapter.load()
+            except ExposureError:
+                restored = None  # bad schema/identity/expiry is a cache miss
+            if restored is not None:
+                apply_declared_state(child, restored)
+        enforce_object_permission(child, request)
+        if restored is not None and callable(getattr(child, "handle_restore", None)):
+            call_hook_sync(child.handle_restore, request)
+        if not identity.matches(
+            child_reuse_identity(type(child), parent, request, view_id, inputs)
+        ):
+            raise ExposureError("Lazy child identity changed")
+    except ExposureError:
+        raise PermissionDenied("Lazy view refused") from None
+    if snapshot_tenant_scope(child) != entry.child_tenant:
+        raise PermissionDenied("Lazy view changed tenant")
+    child._djust_slot_target = view_id
+    child._explicit_child_reuse_identity = identity
+    parent._register_child(view_id, child)
+    if adapter is not None:
+        adapter.save(adapter.contract.project_view(child, "server"))
+        child._explicit_child_mount_binding = adapter.binding
+    return child
+
+
 def _lazy_state_saved(parent: Any, child: Any) -> bool:
     """Whether a lazy child's state is kept in the session (#4128).
 
@@ -251,9 +322,13 @@ def _lazy_state_saved(parent: Any, child: Any) -> bool:
 
 
 def save_http_lazy(parent: Any, request: Any, view_id: str, child: Any) -> None:
-    """Persist only this child's legacy state under its user/session/tenant binding."""
+    """Persist only this child's legacy state under its user/session/tenant binding.
+
+    Legacy only: an explicit child's ``persist="server"`` fields are saved by
+    ``save_child_states`` with the rest of the explicit tree (#4174).
+    """
     entry = getattr(parent, "_http_lazy_containers", {}).get(view_id)
-    if entry is None:
+    if entry is None or entry.explicit:
         return
     if not _lazy_state_saved(parent, child):
         request.session.pop(entry.state_key, None)

@@ -147,6 +147,9 @@ OTHER_LEGACY_FILES: frozenset[str] = frozenset(
         "python/djust/tests/test_sse_reauth_mount_request_4255.py",
         # #4167: a legacy lazy child routes over the socket like an explicit one.
         "python/djust/tests/test_lazy_child_live_transport_4167.py",
+        # #4174 mixed-policy refusal: a dj-lazy container whose policy differs
+        # from its page's is not registered on the page POST.
+        "python/djust/tests/test_lazy_attribute_explicit_http_4174.py",
         # #3936: state models as handles run on both exposure policies (the policy is a
         # parametrised axis of the cases), so legacy is a subject here.
         "python/tests/test_state_models_as_handles_3936.py",
