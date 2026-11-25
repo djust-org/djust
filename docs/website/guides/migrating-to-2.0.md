@@ -506,6 +506,11 @@ object for every event, rebuilt from its saved state as in 1.3.
 
 ### Other things explicit exposure refuses
 
+- **`_on_sticky_update` on an explicit sticky child.** As a sticky child it is
+  remounted whenever a `{% live_render %}` input changes, so djust never calls
+  the hook (it ran only for legacy children, `djust.V035`). Name the inputs the
+  hook takes with `sticky_update_inputs = ("title",)`, or delete the hook and
+  read the inputs in `mount()`.
 - **Service-worker caching of page HTML.** 1.3 let the worker cache every
   (legacy) page; an explicit page is cached only when its view sets
   `sw_cacheable = True`:
@@ -684,6 +689,19 @@ behaviour until you get to it. `manage.py check` reports what strict dispatch
 would reject: `djust.V016` for a parameter without a usable annotation or with
 a reserved name, and `djust.T020` for a template binding that sends something
 its handler does not take.
+
+`manage.py check` also reports what strict would change while a handler is
+still legacy:
+
+- `djust.V033`: a legacy handler whose signature strict would refuse.
+- `djust.T028`: a template binding a legacy handler accepts that strict would
+  refuse (a `data-*` argument, for one), in `{% extends %}` and `{% include %}`
+  templates too.
+- `djust.V034`: a handler that declares or reads `_target`, which a strict
+  client never sends (`dj-input` and its siblings send `field` instead).
+- `djust.T029`: Python code that emits a `data-*` argument in the markup it
+  builds with `format_html()` or an f-string; emit the `dj-value-*` attribute
+  instead.
 
 **`check` does not catch every dropped argument.** `djust.T020` reports a
 `data-*` attribute only when the parameter it fed is required. When the
@@ -1072,6 +1090,12 @@ the only behaviour, before 2.0.0 is released, so finish with them on 1.3.x:
 | --- | --- |
 | `exposure_policy = "legacy"`. It is no longer the default: a view has to state it, stating it warns, and system check `djust.V028` lists each class that does | Migrate every view that states it, or that you have not checked yet ([section 1](#1-move-each-view-to-explicit-exposure)) |
 | `event_parameter_policy = "legacy"`, the default, and `parameter_policy="legacy"` | Make every handler strict ([section 2](#2-make-event-handlers-strict)) |
+| `reauth_on_event`, `reauth_server_turn_interval` | Delete: an explicit view re-authorizes every turn |
+| `cancel_async_on_disconnect` | Delete: an explicit view's work is cancelled on disconnect |
+
+`manage.py check` lists each of these still in use: `djust.C045` (settings),
+`djust.V036` (`parameter_policy="legacy"`, `cancel_async_on_disconnect`) and
+`djust.V028` (`exposure_policy`).
 
 ## 5. What does not survive
 
@@ -1123,4 +1147,4 @@ of looking for a replacement.
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: 9248b5a29e62 -->
+<!-- generated-doc prose-sha256: dbd4917a707a -->

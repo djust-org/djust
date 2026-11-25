@@ -8,6 +8,8 @@ Each LiveView and LiveComponent template is scanned by
 - ``T020``: a known argument is missing, unexpected or supplied twice.
 - ``T021``: a literal value or wire-type hint the handler cannot accept.
 - ``T022``: markup supplies routing context (``view_id`` / ``component_id``).
+- ``T028``: a binding a legacy handler accepts that the strict policy would
+  refuse (#4190).
 
 Handlers are resolved through ``_parameter_metadata.declared_handlers`` and
 arguments through the runtime's own policy, coercion and strict contract, so
@@ -31,6 +33,7 @@ from typing import Any, Optional
 
 from django.core.checks import CheckMessage, Info, register
 
+from djust._framework_code import is_djust_module
 from djust.checks.utils import DjustWarning, LineCounter, _is_check_suppressed
 
 BINDING_IDS = ("T019", "T020", "T021", "T022")
@@ -363,6 +366,18 @@ class _OwnerContext:
             findings += _strict_findings(binding, method)
         else:
             findings += _legacy_findings(binding, method)
+            if not is_djust_module(getattr(self.cls, "__module__", "") or ""):
+                findings += [
+                    Finding(
+                        "T028",
+                        "%s() runs under the legacy parameter policy; under strict, the only "
+                        "policy in djust 2.0.0: %s" % (binding.name, f.message),
+                        f.hint,
+                        expected=f.expected,
+                        supplied=f.supplied,
+                    )
+                    for f in _strict_findings(binding, method)
+                ]
         findings += _form_field_findings(self.cls, binding, handler)
         return findings
 
@@ -932,7 +947,7 @@ def _messages(reports: list[OwnerReport]) -> list[CheckMessage]:
 def _emit(
     check_id: str, message: str, finding: Finding, report: OwnerReport, binding: Any
 ) -> CheckMessage:
-    """The one constructor of ``djust.T019``-``T022`` (one ID, one emitter)."""
+    """The one constructor of ``djust.T019``-``T022`` and ``T028`` (one ID, one emitter)."""
     details: dict[str, Any] = {
         "hint": finding.hint,
         "fix_hint": finding.hint,
@@ -949,6 +964,8 @@ def _emit(
         return BindingWarning(message, id="djust.T020", **details)
     if check_id == "djust.T021":
         return BindingWarning(message, id="djust.T021", **details)
+    if check_id == "djust.T028":
+        return BindingWarning(message, id="djust.T028", **details)
     return BindingWarning(message, id="djust.T022", **details)
 
 
@@ -956,7 +973,9 @@ def _emit(
 def check_event_bindings(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     """``djust.T019``-``T022``: template event bindings against their owners;
     ``djust.T024``: floor-excluded user fields in those templates."""
-    if all(_is_check_suppressed("djust.%s" % check_id) for check_id in (*BINDING_IDS, "T024")):
+    if all(
+        _is_check_suppressed("djust.%s" % check_id) for check_id in (*BINDING_IDS, "T024", "T028")
+    ):
         return []
     try:
         from djust.live_view import LiveView  # noqa: F401

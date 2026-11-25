@@ -93,6 +93,35 @@ REMOVED_CONFIG_VALUES: dict[str, tuple[str, frozenset[str], str]] = {
 }
 
 
+#: 1.3 settings djust 2.0.0 removes (#4171). Reported by djust.C045 until #4199 moves each
+#: entry into REMOVED_CONFIG_KEYS with the same text and startup refuses it.
+PENDING_CONFIG_KEYS: dict[str, str] = {
+    "event_parameter_policy": (
+        "strict event parameters are the only policy. Annotate every handler parameter "
+        "(manage.py check reports what strict refuses as djust.V016 and djust.V033), then delete the key"
+    ),
+    "reauth_on_event": (
+        "an explicit-exposure view authorizes every event and server turn against a freshly "
+        "loaded session, so the switch does nothing. Delete the key"
+    ),
+    "reauth_server_turn_interval": (
+        "an explicit-exposure view authorizes every server turn, with no interval. Delete the key"
+    ),
+}
+#: View attributes djust 2.0.0 removes; djust.V036 until #4199 moves them to REMOVED_VIEW_ATTRIBUTES.
+PENDING_VIEW_ATTRIBUTES: dict[str, str] = {
+    "cancel_async_on_disconnect": (
+        "an explicit-exposure view's background work is always cancelled when its connection "
+        "closes, so the attribute does nothing. Delete it; work that must finish belongs in a task queue"
+    ),
+}
+#: @event_handler(parameter_policy="legacy"); djust.V036 until #4199 refuses it.
+PENDING_HANDLER_POLICY = (
+    "annotate the handler's parameters (djust.V033 lists what the strict policy would refuse) "
+    'and delete parameter_policy="legacy"'
+)
+
+
 def _removed_value_problem(setting: str, key: str, value: Any) -> Optional[str]:
     """The problem with ``setting[key] = value``, or None when it is accepted."""
     accepted, removed, replacement = REMOVED_CONFIG_VALUES[key]

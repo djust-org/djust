@@ -325,6 +325,10 @@ def _messages(module: types.ModuleType) -> dict[str, list[tuple[str, str]]]:
     """This module's messages, keyed by the owner-qualified handler label."""
     found: dict[str, list[tuple[str, str]]] = {}
     for message in check_event_parameter_contracts(None):
+        # V033 (a legacy handler strict would refuse) has its own tests, in
+        # test_upgrade_checks_4190.py.
+        if message.id == "djust.V033":
+            continue
         if message.msg.startswith(MODULE + "."):
             label, _, tail = message.msg.partition(": ")
             found.setdefault(label, []).append((message.id, tail))
