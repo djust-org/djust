@@ -5,8 +5,7 @@ the fallback in ``djust._exposure`` for an owner that has no policy at all, and
 the inventory command's reading of a class without one. ``"legacy"`` is a
 removed value: the tests of the legacy mechanism itself are gone (#4198).
 
-This file's views leave the policy unset on purpose (``UNPINNED_ON_PURPOSE`` in
-``tests/exposure_policy_pin_guard.py``).
+This file's views leave the policy unset on purpose.
 """
 
 import logging
@@ -15,7 +14,7 @@ import pytest
 from django.test import RequestFactory, override_settings
 
 from djust import LiveView
-from djust._exposure import states_exposure_policy, uses_legacy_exposure
+from djust._exposure import _read_exposure_policy, states_exposure_policy
 from djust._exposure_diagnostics import (
     PROTECTED_FAILURE,
     diagnostics_policy_allows,
@@ -36,7 +35,7 @@ def test_the_liveview_default_is_explicit():
 
     assert "exposure_policy" not in Unstated.__dict__
     assert Unstated.exposure_policy == "explicit"
-    assert not uses_legacy_exposure(Unstated())
+    assert _read_exposure_policy(Unstated()) == "explicit"
 
 
 def test_an_unstated_view_renders_only_what_it_supplies():
@@ -62,8 +61,8 @@ def test_an_unstated_view_renders_only_what_it_supplies():
 
 
 @pytest.mark.parametrize("owner", [None, object(), type("Stub", (), {})()])
-def test_an_owner_without_a_policy_is_not_legacy(owner):
-    assert not uses_legacy_exposure(owner)
+def test_an_owner_without_a_policy_reads_as_explicit(owner):
+    assert _read_exposure_policy(owner) == "explicit"
 
 
 def test_the_inventory_reads_a_class_without_a_policy_as_explicit():

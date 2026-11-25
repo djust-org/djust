@@ -7,8 +7,8 @@ The legacy ``exposure_policy`` value, ``@event_handler(parameter_policy="legacy"
 ``djust_exposure_inventory`` may import 1.3 code, inside
 ``djust._removed_settings.upgrade_inspection()``, to read and rewrite it.
 
-The legacy statement is built from a name, never written out: the legacy
-ledger (``tests/legacy_exposure_ledger.py``) scans the test files for it.
+The legacy statement is built from a name, never written out, so no test file
+states it literally.
 """
 
 from __future__ import annotations

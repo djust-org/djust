@@ -31,7 +31,7 @@ from djust._removed_settings import upgrade_inspection
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "upgrade13_4209"
 REPO = Path(__file__).resolve().parents[3]
 VIEWS = ("CartView", "SearchView", "ReportView", "ChipView", "ModernView")
-#: The 1.3 statement, built so this file does not state it (the legacy ledger scans tests).
+#: The 1.3 statement, built so this file does not state it literally.
 POLICY = "exposure_policy = " + '"' + "legacy" + '"'
 LEGACY_LINE = re.compile(re.escape(POLICY))
 

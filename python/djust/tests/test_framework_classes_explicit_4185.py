@@ -96,8 +96,7 @@ def test_the_package_states_no_legacy_mode():
 def test_the_scan_finds_both_statement_forms(tmp_path):
     """Not vacuous: with nothing left in the package, a stand-in package that
     states both forms is reported."""
-    # Built from parts: this module states no legacy policy itself (the
-    # ledger in tests/legacy_exposure_ledger.py lists files that do).
+    # Built from parts: this module states no legacy policy itself.
     statement = "exposure_policy = %r" % "legacy"
     (tmp_path / "views.py").write_text("class V:\n    %s\n" % statement)
     (tmp_path / "handlers.py").write_text('x = event_handler(parameter_policy="legacy")\n')

@@ -22,8 +22,6 @@ finds there.
 * **One restore** (:func:`restore_component_state`) and **one lookup**
   (:func:`resolve_component_target`) for every transport.
 
-Legacy-exposure views keep random ids and no record: nothing here changes them.
-
 **Tabs, pages and ids.** The record is per session and route; ids are minted
 per tab. So an id's validity must depend only on what the tab that minted it
 can see: a row's id is its key and that key's *generation*, and a generation

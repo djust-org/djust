@@ -281,14 +281,14 @@ class CartView(LiveView):
 it prints:
 
 ```text
-ADR-038 exposure inventory (legacy destinations; values redacted)
+Names a djust 1.3 view exposes implicitly (values redacted)
 
-shop.views.CartView  [policy: legacy; reconnect: fresh mount]
-  coupon  str  instance  -> template_context, client_state, snapshot
+shop.views.CartView  [policy: legacy]
+  coupon  str  instance  -> template_context, client_state
       suggest: coupon: str = state(...)  # not restored on a reconnect today, so no persistence grant is needed; a declared field renders in the template without get_context_data()
-  items  list  instance  -> template_context, client_state, snapshot
+  items  list  instance  -> template_context, client_state
       suggest: items: list = state(...)  # not restored on a reconnect today, so no persistence grant is needed; a declared field renders in the template without get_context_data()
-  page  int  instance  -> template_context, client_state, snapshot
+  page  int  instance  -> template_context, client_state
       suggest: page: int = state(...)  # not restored on a reconnect today, so no persistence grant is needed; a declared field renders in the template without get_context_data()
   _audit_note  str  private  -> -
       suggest: explicit mode never persists underscore attributes, and this view does not restore them on a reconnect today; leave it instance-only
@@ -296,14 +296,11 @@ shop.views.CartView  [policy: legacy; reconnect: fresh mount]
 
 Read it this way:
 
-- **The arrow list** is where the name goes today. Those are the places it
-  stops going once the view is explicit. `session_state` and
-  `private_session` are gone on 2.0: the legacy `lazy=True` child's session
-  entry was the last thing that wrote them, and nothing writes them now.
-- **`reconnect: fresh mount`** means the view runs `mount()` again when the
-  socket reconnects, so nothing needs a persistence grant to behave as it does
-  now. On 2.0 every view reads `fresh mount`, because nothing restores a
-  legacy view's state on a reconnect any more. The 1.3.x command reads
+- **The arrow list** is where 1.3 sent the name. Those are the places it
+  stops going once the view is explicit.
+- **No persistence grant is suggested**, because on 2.0 a view runs
+  `mount()` again when the socket reconnects and nothing restores undeclared
+  state. The 1.3.x command reads
   `reconnect: restored (enable_state_snapshot)` for a view that sets
   `enable_state_snapshot = True` or subclasses `PersistentLiveView`, and
   suggests `state(persist="server")` for its names: run it there first if you
@@ -1473,6 +1470,4 @@ never in production settings. The helpers are described in the
 Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
-<!-- generated-doc prose-sha256: 3010d0c189bc -->
-<!-- generated-doc prose-sha256: ebc0727383bb -->
-<!-- generated-doc prose-sha256: 7a168a61e24b -->
+<!-- generated-doc prose-sha256: 0b65a2bf3a3b -->

@@ -287,14 +287,11 @@ def _refuse_reserved_state_names(cls: type) -> None:
 def _warn_ignored_sticky_update_inputs(cls: type) -> None:
     """Warn when a class states ``sticky_update_inputs`` where it is ignored (#4181).
 
-    Only an explicit sticky child uses it: on a non-sticky child or a legacy
-    one (whose inputs are not part of an identity) it does nothing.
+    Only a sticky child uses it: on a non-sticky child it does nothing.
     """
     if not cls.__dict__.get("sticky_update_inputs"):
         return
-    from ._exposure import uses_legacy_exposure
-
-    if getattr(cls, "sticky", False) is True and not uses_legacy_exposure(cls):
+    if getattr(cls, "sticky", False) is True:
         return
     import warnings
 

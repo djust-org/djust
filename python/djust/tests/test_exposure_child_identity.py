@@ -487,12 +487,14 @@ def test_nested_identity_includes_registered_ancestor_scope(rf, change, monkeypa
     assert not before.matches(after)
 
 
+# "legacy" too: an ancestor is no longer accepted under it (#4206).
+@pytest.mark.parametrize("policy", ["unknown", "legacy"])
 @pytest.mark.parametrize("target", [IdentityChild, IdentityParent])
-def test_unknown_policy_cannot_reuse_explicit_identity(rf, monkeypatch, target):
+def test_unknown_policy_cannot_reuse_explicit_identity(rf, monkeypatch, target, policy):
     parent = IdentityParent()
     render(parent, request_for(rf))
     child = parent._get_child_view("identity")
-    monkeypatch.setattr(target, "exposure_policy", "unknown")
+    monkeypatch.setattr(target, "exposure_policy", policy)
     with pytest.raises(ExposureError, match="identity unavailable"):
         render(parent, request_for(rf))
     assert child._unmounts == 0  # invalid configuration, not a valid remount

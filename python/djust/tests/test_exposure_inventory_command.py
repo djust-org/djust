@@ -138,8 +138,6 @@ def test_destinations_types_and_suggestions(no_construction):
 
     public = {"template_context", "client_state"}
     assert set(names["count"]["destinations"]) == public
-    # 2.0 writes nothing a legacy view holds to the session (#4087, #4200).
-    assert names["count"]["conditional"] == []
     assert names["count"]["type"] == "int"
     assert names["count"]["suggestion"].startswith("count: int = state(...)")
     assert set(names["secret_key"]["destinations"]) == public
@@ -150,13 +148,10 @@ def test_destinations_types_and_suggestions(no_construction):
 
     # Underscore attributes reach no destination.
     assert names["_token"]["destinations"] == []
-    assert names["_token"]["conditional"] == []
     assert names["_later"]["destinations"] == []
-    assert names["_later"]["conditional"] == []
 
     # Class values reach render context only.
     assert names["api_token"]["destinations"] == ["template_context"]
-    assert names["api_token"]["conditional"] == []
     assert names["api_token"]["type"] == "str"
     assert names["label"]["destinations"] == ["template_context"]
     assert names["label"]["kind"] == "property"
@@ -165,24 +160,22 @@ def test_destinations_types_and_suggestions(no_construction):
     # Public state() fields: context only.
     assert names["total"]["destinations"] == ["template_context"]
     assert names["rows"]["destinations"] == ["template_context"]
-    assert names["rows"]["conditional"] == []
     assert names["rows"]["type"] == "list"
     assert names["lazy"]["type"] is None
     assert "get_context_data" in names["label"]["suggestion"]
 
 
-def test_no_destination_describes_the_removed_1x_stores():
-    """The render cache and the page's session copies are gone in 2.0 (#4087)."""
+def test_the_report_describes_only_what_1_3_exported():
+    """Two destinations, both 1.3's; no 2.0 legacy runtime is described (#4206)."""
     from djust.management._exposure_inventory import DESTINATIONS
 
-    assert "render_cache" not in DESTINATIONS
+    assert set(DESTINATIONS) == {"template_context", "client_state"}
+    assert all(meaning.startswith("1.3: ") for meaning in DESTINATIONS.values())
     report = json.loads(run("--view", VIEW, "--json"))
+    assert "persists_today" not in report["views"][0]
     for item in names_of(report, VIEW).values():
-        assert "render_cache" not in item["destinations"] + item["conditional"], item
-        assert "session_state" not in item["destinations"], item
-        assert "private_session" not in item["destinations"], item
-    assert "session_state" not in DESTINATIONS
-    assert "private_session" not in DESTINATIONS
+        assert set(item["destinations"]) <= set(DESTINATIONS), item
+        assert "conditional" not in item, item
 
 
 def test_explicit_views_are_reported_with_their_policy(no_construction):
@@ -215,8 +208,7 @@ def test_no_persistence_grant_for_a_view_that_does_not_persist_today(
     no_construction, view_name, kind
 ):
     """#4023: such a view remounts fresh, so persist="server" would add behaviour."""
-    entry, names = _shape_report(view_name)
-    assert entry["persists_today"] is False
+    _, names = _shape_report(view_name)
     item = names[SHAPES[kind]]
     assert item["kind"] == kind
     assert "persist=" not in item["suggestion"], item["suggestion"]
@@ -233,7 +225,8 @@ def test_plain_declaration_shapes_without_snapshot_persistence(no_construction):
 
 def test_text_output_has_no_persist_suggestion_without_snapshot_persistence(no_construction):
     output = run("--view", f"{__name__}.ExplicitShapesView")
-    assert "reconnect: fresh mount" in output
+    assert output.startswith("Names a djust 1.3 view exposes implicitly (values redacted)")
+    assert "reconnect:" not in output
     assert "persist=" not in output
 
 

@@ -1,8 +1,8 @@
 """Structural pin: every exception-carrying log call in the WebSocket consumer
 and the view runtime is classified (ADR-038 E1).
 
-``handle_exception`` refuses to stringify an exception for a nonlegacy owner,
-because undeclared state can occur in its message and traceback. A raw
+``handle_exception`` refuses to stringify an exception for an owner that does
+not allow diagnostics, because undeclared state can occur in its message and traceback. A raw
 ``logger`` call does not consult that policy — a runtime turn's diagnostic
 scope does not change that — so each one in ``websocket.py`` and
 ``runtime.py`` that carries exception data — the exception in its arguments,
@@ -10,7 +10,7 @@ scope does not change that — so each one in ``websocket.py`` and
 
 - ``HELPER``: a raw call that is itself the policy gate (none today: the
   consumer helper now delegates to ``_exposure_diagnostics.log_failure``);
-- ``LEGACY_GATED``: reachable only for a legacy owner, by a guard that was read;
+- ``GATED``: reachable only where diagnostics are allowed, by a guard that was read;
 - ``FRAMEWORK_ONLY``: the logged exception cannot derive from application values;
 - ``KNOWN_OPEN``: application code, not yet fixed. This list may only shrink.
 
@@ -18,7 +18,7 @@ A new site fails this test until it is classified. The usual fix is to log
 through ``_exposure_diagnostics.log_failure(logger, exc, msg, *args, level=...,
 traceback=...)`` inside a runtime turn, or the consumer's
 ``self._log_view_hook_failure(view, exc, ...)`` outside one; both keep the
-legacy message, level and traceback unchanged. Sites are keyed by enclosing function and
+message, level and traceback unchanged where details are allowed. Sites are keyed by enclosing function and
 the first 48 characters of the message literal, so line drift does not matter.
 The per-site evidence is in docs/adr/notes/038-exposure-sink-inventory.md.
 
@@ -38,9 +38,10 @@ PACKAGE = pathlib.Path(__file__).resolve().parents[1]
 
 HELPER: dict = {}
 
-LEGACY_GATED = {
+GATED = {
     ("_mount_one", "mount_batch: _mount_one raised for view %s"): (
-        "legacy branch only; the owner is the resolved class, fail-closed if unresolvable"
+        "inside `if details_allowed`: diagnostics_policy_allows for the resolved class and "
+        "the page view, fail-closed if unresolvable"
     ),
 }
 
@@ -61,7 +62,8 @@ FRAMEWORK_ONLY = {
     ("_hotreload_view", "Template not found for hot reload: %s"): "dev-only, file-derived",
     ("_hotreload_view", "Failed to parse patches JSON: %s"): "dev-only, file-derived",
     ("handle_live_redirect_mount", "sticky children staging failed; proceeding witho"): (
-        "outer catch of the staging block; hooks inside it are legacy-gated"
+        "outer catch of the staging block; the auth predicates and presence hooks inside it "
+        "catch their own failures (fail closed, logged under the view's policy)"
     ),
     ("_leave_view_groups", "Error leaving db_notify group for %s: %s"): (
         "channel-layer group_discard; the channel name is an identifier, not state"
@@ -71,7 +73,7 @@ FRAMEWORK_ONLY = {
 KNOWN_OPEN = {}
 
 
-RUNTIME_LEGACY_GATED = {
+RUNTIME_GATED = {
     ("_flush_deferred_activity_events", "dj_activity: runtime deferred-event flush raised"): (
         "inside `if diagnostics_allowed()` after restricting to both owners"
     ),
@@ -146,12 +148,15 @@ MIXIN_TABLES = {
         },
     ),
     "mixins/jit.py": (
+        {},
         {
+            # Reached by explicit renders since #4069; the exception comes from
+            # Django's template loader or a file read, never from view state.
             ("_get_template_content", "Could not load template for JIT: %s"): (
-                "JIT serialization is reached only from get_context_data's legacy continuation"
+                "template loader / template file read; the message carries a template path"
             ),
             ("replacer", "Failed to read included template %s: %s"): (
-                "JIT serialization is reached only from get_context_data's legacy continuation"
+                "included template file read; the message carries a template path"
             ),
         },
     ),
@@ -323,15 +328,16 @@ MIXIN_TABLES = {
         },
     ),
     "state_backends/redis.py": (
+        {},
         {
             ("get", "Failed to deserialize from Redis %s: %s"): (
-                "legacy view-cache (de)serialization; explicit initialization bypasses the backend"
+                "RustLiveView msgpack (de)serialization; no framework path stores a view "
+                "in the backend (explicit initialization bypasses it)"
             ),
             ("set", "Failed to serialize to Redis %s: %s"): (
-                "legacy view-cache (de)serialization; explicit initialization bypasses the backend"
+                "RustLiveView msgpack (de)serialization; no framework path stores a view "
+                "in the backend (explicit initialization bypasses it)"
             ),
-        },
-        {
             ("__init__", "Failed to connect to Redis: %s"): (
                 "Redis connection, compression and stats"
             ),
@@ -382,12 +388,12 @@ MIXIN_TABLES = {
         {},
     ),
     "state_backends/memory.py": (
+        {},
         {
             ("get", "InMemoryStateBackend.get: serialize/deserialize "): (
-                "legacy view cache; explicit initialization bypasses the backend"
+                "RustLiveView msgpack (de)serialization; no framework path stores a view "
+                "in the backend (explicit initialization bypasses it)"
             ),
-        },
-        {
             ("health_check", "InMemory health check failed: %s"): ("backend health check"),
         },
     ),
@@ -911,8 +917,8 @@ MIXIN_TABLES = {
     "mixins/request.py": (
         {
             ("_post_turn_body", "<Name>"): (
-                "legacy or DEBUG only (D-a revised): in production a nonlegacy view "
-                "returns the generic response first"
+                "reached only when diagnostics_policy_allows(self) (DEBUG, D-a revised): "
+                "otherwise the view returns the generic response first"
             ),
         },
         {
@@ -982,8 +988,8 @@ MIXIN_TABLES = {
 }
 
 PINNED = {
-    "websocket.py": (HELPER, LEGACY_GATED, FRAMEWORK_ONLY, KNOWN_OPEN),
-    "runtime.py": (RUNTIME_LEGACY_GATED, RUNTIME_FRAMEWORK_ONLY, RUNTIME_KNOWN_OPEN),
+    "websocket.py": (HELPER, GATED, FRAMEWORK_ONLY, KNOWN_OPEN),
+    "runtime.py": (RUNTIME_GATED, RUNTIME_FRAMEWORK_ONLY, RUNTIME_KNOWN_OPEN),
     **MIXIN_TABLES,
 }
 

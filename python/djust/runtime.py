@@ -756,7 +756,7 @@ async def apply_restored_state(
 
 
 def _diagnostics_policy_allows(owner: Any) -> bool:
-    """Legacy owner or DEBUG: see ``_exposure_diagnostics.diagnostics_policy_allows``."""
+    """See ``_exposure_diagnostics.diagnostics_policy_allows``."""
     from ._exposure_diagnostics import diagnostics_policy_allows
 
     return diagnostics_policy_allows(owner)

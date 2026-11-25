@@ -61,8 +61,8 @@ def test_policy_descriptor_is_refused_without_evaluating_it(error_type):
     assert "SENTINEL" not in str(error.value)
 
 
-def test_broken_policy_descriptor_cannot_enable_legacy_debug_fallback():
-    from djust._exposure import explicit_debug_projection, uses_legacy_exposure
+def test_broken_policy_descriptor_has_no_debug_fallback():
+    from djust._exposure import _read_exposure_policy, explicit_debug_projection
 
     class BrokenPolicy:
         @property
@@ -71,9 +71,20 @@ def test_broken_policy_descriptor_cannot_enable_legacy_debug_fallback():
 
     view = BrokenPolicy()
     view.public_note = "UNDECLARED_SECRET_SENTINEL"
-    assert not uses_legacy_exposure(view)
     assert explicit_debug_projection(view) == {"_djust_projection_error": "State unavailable"}
-    # Genuinely undeclared: reads as the default policy, which is explicit, so
-    # an object that never asked for the legacy export is not given it.
-    assert not uses_legacy_exposure(object())
-    assert not uses_legacy_exposure(None)
+    # Genuinely undeclared: reads as the default policy, which is explicit.
+    assert _read_exposure_policy(object()) == "explicit"
+    assert _read_exposure_policy(None) == "explicit"
+
+
+@pytest.mark.parametrize("policy", ["legacy", "", None, 1])
+def test_a_policy_other_than_explicit_is_refused_value_free(policy):
+    from djust._exposure import ExposureError, _read_exposure_policy, explicit_debug_projection
+
+    class Stated:
+        exposure_policy = policy
+
+    with pytest.raises(ExposureError) as error:
+        _read_exposure_policy(Stated())
+    assert str(error.value) == "Explicit state policy required"
+    assert explicit_debug_projection(Stated()) == {"_djust_projection_error": "State unavailable"}

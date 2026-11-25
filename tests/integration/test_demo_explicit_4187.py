@@ -73,7 +73,7 @@ def _demo_python_files():
 
 
 def test_the_scan_finds_what_it_claims_to_find():
-    # Built, not written: tests/legacy_exposure_ledger.py counts a literal one.
+    # Built, not written, so this file states no literal legacy policy.
     legacy = '"' + "legacy" + '"'
     assert LEGACY_STATEMENT.search("    exposure_policy = " + legacy)
     assert LEGACY_STATEMENT.search("@event_handler(parameter_policy=%s)" % legacy.replace('"', "'"))
@@ -121,14 +121,12 @@ def _demo_views():
 
 
 def test_every_demo_view_runs_under_explicit_exposure():
-    from djust._exposure import uses_legacy_exposure
-
     views = _demo_views()
     assert len(views) > 100, len(views)
     legacy = sorted(
         "%s.%s" % (cls.__module__, cls.__qualname__)
         for cls in views
-        if uses_legacy_exposure(cls) or cls.exposure_policy != "explicit"
+        if cls.exposure_policy != "explicit"
     )
     assert legacy == []
 

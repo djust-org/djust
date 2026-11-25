@@ -11,9 +11,8 @@ A framework mixin that renders context declares a ``ProviderContract`` (see
   ``super().get_context_data()`` is a collision;
 * a provider can write only the keys its contract declares.
 
-Legacy views keep their exact behaviour: :func:`provide_context` is a plain
-item assignment for them. Provider values are render-only; no persistence,
-client, snapshot or debug projection reads the render context.
+Provider values are render-only; no persistence, client, snapshot or debug
+projection reads the render context.
 """
 
 from types import FunctionType

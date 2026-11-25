@@ -1,10 +1,10 @@
-"""List the names legacy exposure infers per LiveView, with values redacted.
+"""List the names djust 1.3's legacy exposure exported per LiveView, values redacted.
 
 ADR-038 *Compatibility and rollout*: "Provide a values-redacted inventory of
-inferred names and their destinations before migration." For each LiveView
-class this reports the names legacy mode would put into template context,
-``get_state``/snapshots and private session persistence, where each would go,
-and a suggested explicit declaration. Views are never instantiated and
+inferred names and their destinations before migration." This is the 2.0
+upgrade checker for 1.3 code: for each LiveView class it reports the names
+1.3's legacy policy put into template context and ``get_state()``, and a
+suggested explicit declaration. Views are never instantiated and
 properties or ``state()`` factories are never evaluated; the output contains
 names, builtin type names and destinations only, never values.
 
@@ -44,8 +44,8 @@ from django.utils.module_loading import import_string
 
 class Command(BaseCommand):
     help = (
-        "Values-redacted inventory of the names legacy exposure infers per LiveView "
-        "and where each goes (ADR-038 migration aid). With --fix, make the mechanical "
+        "Values-redacted inventory of the names djust 1.3's legacy exposure exported per "
+        "LiveView and where each went (ADR-038 upgrade aid). With --fix, make the mechanical "
         "2.0 upgrade changes and list what needs a person (#4209)"
     )
     # A read-only report; system-check output would interleave with --json.

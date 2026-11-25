@@ -49,7 +49,6 @@ from ..security import safe_setattr, sanitize_for_log
 from ..security.event_guard import is_safe_event_name
 from ..decorators import is_push_only
 from ..hooks import run_on_mount_hooks
-from .._exposure import uses_legacy_exposure
 from .._view_hooks import call_async_result_sync, call_hook_sync
 
 if TYPE_CHECKING:
@@ -2482,8 +2481,6 @@ class RequestMixin:
             import traceback
             from django.conf import settings
 
-            # uses_legacy_exposure is the module-level import; a local import
-            # here would make the name local to all of post().
             from .._exposure import ExposureConfigurationError
             from .._exposure_diagnostics import diagnostics_policy_allows
 
