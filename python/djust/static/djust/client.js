@@ -5141,8 +5141,10 @@ function _installParameterContracts(transport, manifest, viewPath, resetPrimary 
         if (!table || typeof table !== 'object' || Array.isArray(table)) reject();
         const handlers = new Map();
         for (const [name, index] of Object.entries(table)) {
-            if (++count > 10000 || !/^[a-zA-Z][a-zA-Z0-9_]*$/.test(name) || !n(index) || !contracts[index]) reject();
-            handlers.set(name, contracts[index]);
+            // An integer index into the frozen contracts array; any index out of range is undefined and rejected.
+            const contract = n(index) ? contracts[index] : undefined; // eslint-disable-line security/detect-object-injection
+            if (++count > 10000 || !/^[a-zA-Z][a-zA-Z0-9_]*$/.test(name) || !contract) reject();
+            handlers.set(name, contract);
         }
         return handlers;
     });
