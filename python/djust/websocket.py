@@ -1642,7 +1642,10 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             # Error path: let handle_async_result (if defined) record the error,
             # then re-render. The frame is sent even without a handler: the turn
             # announced ``async_pending`` (#2963), and this frame is what ends
-            # the client's loading state.
+            # the client's loading state. Only when a handler ran may a result
+            # that changed nothing skip its render and frame (#4123): the
+            # handler had its chance to record the failure, and a work-less
+            # page then has nothing new to show.
             try:
                 # Re-render to show error state
                 # Same lock as the success arm, the event path and the tick
@@ -1687,7 +1690,11 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                         # with old-view HTML.
                         if self.view_instance is not view:
                             return
-                        await self._send_async_render(view, event_name)
+                        await self._send_async_render(
+                            view,
+                            event_name,
+                            skip_unchanged=hasattr(view, "handle_async_result"),
+                        )
 
                     await self._async_result_turn(view, task_name, complete_error)
 
@@ -1700,17 +1707,22 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                     traceback=True,
                 )
 
-    async def _send_async_render(self, view: Any, event_name: Optional[str]) -> None:
+    async def _send_async_render(
+        self, view: Any, event_name: Optional[str], *, skip_unchanged: bool = False
+    ) -> None:
         """Render ``view`` and send it as a ``source="async"`` frame.
 
         The caller holds ``_render_lock``. Shared by the error arm of
         :meth:`_run_async_work` and :meth:`_settle_cancelled_async`. Arms
         recovery so ``_recovery_version`` tracks this frame (#1817).
+
+        ``skip_unchanged`` (#4123): render and send nothing when nothing
+        changed since the last render. The error arm passes it only when a
+        ``handle_async_result`` ran; the cancelled settle never does, since
+        its frame is what ends the event's loading state.
         """
-        rendered = await self._render_background(view, skip_unchanged=True)
+        rendered = await self._render_background(view, skip_unchanged=skip_unchanged)
         if rendered is None or rendered.unchanged:
-            # Nothing changed: no render, no frame (#4123). The caller still
-            # flushes the turn's pending work.
             return
         html, patches = rendered.html, rendered.patches
         if patches is not None:

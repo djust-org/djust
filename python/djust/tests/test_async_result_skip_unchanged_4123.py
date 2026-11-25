@@ -121,6 +121,49 @@ class ResultView(_Counted):
         self.count = self.count
 
 
+class NoHandlerView(_Counted):
+    """ResultView's template and state, without a ``handle_async_result``."""
+
+    exposure_policy = "explicit"
+    template = ResultView.template
+    count = state(0)
+    error = state("")
+    entries = state()
+
+    def mount(self, request, **kwargs):
+        self.count = 0
+        self.error = ""
+        self.entries = []
+
+    def _nothing(self):
+        return None
+
+    def _fail(self):
+        raise RuntimeError("background failure")
+
+
+class Label:
+    """A plain object: the change detector can compare it only by ``id()``."""
+
+    def __init__(self, label):
+        self.label = label
+
+
+class PlainObjectView(_Counted):
+    exposure_policy = "explicit"
+    template = "<div dj-root><b>{{ obj.label }}</b></div>"
+    obj = state()
+
+    def mount(self, request, **kwargs):
+        self.obj = Label("before")
+
+    def _relabel(self):
+        self.obj.label = "after"
+
+    def _nothing(self):
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Socket harness (the runtime's result turn)
 # ---------------------------------------------------------------------------
@@ -274,7 +317,7 @@ async def test_unchanged_result_does_not_leave_the_next_event_unsynced():
 # ---------------------------------------------------------------------------
 
 
-async def _consumer_with_view():
+async def _consumer_with_view(view_name="ResultView"):
     from djust.tests._live_session import amount_on_consumer
 
     consumer = LiveViewConsumer()
@@ -284,7 +327,7 @@ async def _consumer_with_view():
         consumer.sent.append(payload)
 
     consumer.send_json = _capture
-    view = await amount_on_consumer(consumer, f"{__name__}.ResultView")
+    view = await amount_on_consumer(consumer, f"{__name__}.{view_name}")
     # The first committed turn after this harness's mount saves the view's
     # state for the first time: its frame carries a new turn serial the page
     # must learn, so it is sent (with ``patches: []``) even though nothing
@@ -349,24 +392,58 @@ async def test_consumer_error_arm(recorded):
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
+async def test_consumer_error_arm_without_a_handler_still_sends_its_frame():
+    """No handler ran, so nothing recorded the failure: the frame is sent as
+    before (#2963), even though nothing changed (the conservative arm)."""
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], **SETTINGS):
+        consumer, view = await _consumer_with_view("NoHandlerView")
+        await consumer._run_async_work("fail", view._fail, (), {}, event_name=None)
+        (frame,) = _async_frames(consumer)
+        assert frame["type"] in ("patch", "html_update"), frame
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
 @pytest.mark.parametrize("changed_before", [False, True], ids=["unchanged", "changed"])
-async def test_cancelled_task_settles_without_a_render_unless_state_changed(changed_before):
+async def test_cancelled_task_settle_frame_is_never_skipped(changed_before):
+    """The settle frame names the event and ends its loading state on a path
+    with no batch: it is sent whether or not anything changed."""
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], **SETTINGS):
         consumer, view = await _consumer_with_view()
-        before = RENDERS.get("ResultView", 0)
         if changed_before:
             view.count = 7  # changed since the last render, never sent
         view._async_cancelled = {"job"}
         await consumer._run_async_work("job", view._bump, (), {}, event_name="work")
-        frames = _async_frames(consumer)
         assert view.count == (7 if changed_before else 0)  # the callback never ran
+        (frame,) = _async_frames(consumer)
+        assert frame["event_name"] == "work"
         if changed_before:
-            (frame,) = frames
             assert _sets(frame, "7"), frame
-            assert frame["event_name"] == "work"
-        else:
-            assert frames == [], consumer.sent
-            assert RENDERS.get("ResultView", 0) - before == 0
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_in_place_write_on_a_plain_object_still_delivers():
+    """A plain object is compared only by ``id()``, so an in-place attribute
+    write is invisible to the detector. The skip must never drop what the
+    unconditional render delivered: such a value always renders."""
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], **SETTINGS):
+        consumer, view = await _consumer_with_view("PlainObjectView")
+        await consumer._run_async_work("relabel", view._relabel, (), {}, event_name=None)
+        (frame,) = _async_frames(consumer)
+        assert "after" in str(frame), frame
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+async def test_sync_reports_a_render_for_an_opaque_value_and_none_without_one():
+    with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], **SETTINGS):
+        _consumer, plain = await _consumer_with_view("PlainObjectView")
+        assert await sync_to_async(plain._sync_state_to_rust)() is True
+        _consumer, rows = await _consumer_with_view("ResultView")
+        assert await sync_to_async(rows._sync_state_to_rust)() is False
+        rows.entries.append({"name": "x"})
+        assert await sync_to_async(rows._sync_state_to_rust)() is True
 
 
 # ---------------------------------------------------------------------------

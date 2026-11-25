@@ -1300,8 +1300,10 @@ class RustBridgeMixin:
         Returns:
             Whether the next ``render_with_diff()`` has anything to render
             (#4123). ``False`` only when the sync found no changed and no
-            removed key since the previous sync, and no render was requested
-            (``_force_full_html`` / ``set_changed_keys()``): Rust then has no
+            removed key since the previous sync, no render was requested
+            (``_force_full_html`` / ``set_changed_keys()``) and no context
+            value is an object compared only by ``id()`` (one an in-place
+            write can change unseen; it always renders): Rust then has no
             changed keys and would render the whole template to send an empty
             patch list. ``True`` on a first render and without a Rust view.
             A server-originated render (an async result) may skip its render
@@ -1732,6 +1734,12 @@ class RustBridgeMixin:
                     elif rs_converted is not None:
                         converted_by_fp[key] = rs_converted
 
+            # A value compared only by ``id()`` (an object the detector cannot
+            # fingerprint) may have changed in place without the sync seeing
+            # it. Such a value makes this sync report a render as needed, so
+            # a skippable render never drops it (#4123).
+            opaque_seen = False
+
             # Determine which context to send to Rust
             if prev_refs:
                 if changed_keys:
@@ -1841,8 +1849,10 @@ class RustBridgeMixin:
                             # that as "changed" since the type flipped).
                             if prev_immutables.get(key, _MISSING) != value:
                                 context[key] = value
-                        elif id(value) != prev_refs.get(key):
-                            context[key] = value  # derived value with new id()
+                        else:
+                            opaque_seen = True
+                            if id(value) != prev_refs.get(key):
+                                context[key] = value  # derived value with new id()
                 else:
                     # No explicit changed_keys — use id() comparison as fallback.
                     # This path runs on the internal sync from render_with_diff
@@ -1862,8 +1872,10 @@ class RustBridgeMixin:
                         elif isinstance(value, _IMMUTABLE_TYPES_FOR_SYNC):
                             if prev_immutables.get(key, _MISSING) != value:
                                 context[key] = value
-                        elif id(value) != prev_refs.get(key):
-                            context[key] = value  # different object reference
+                        else:
+                            opaque_seen = True
+                            if id(value) != prev_refs.get(key):
+                                context[key] = value  # different object reference
             else:
                 # First render: send everything
                 context = full_context
@@ -2276,8 +2288,9 @@ class RustBridgeMixin:
             if user_changed is not None:
                 self._rust_view.set_changed_keys(user_changed)
             # #4123: nothing to render when this was not a first (or forced)
-            # sync and no key changed, was removed or was named.
-            render_needed = not prev_refs or user_changed is not None
+            # sync, no key changed, was removed or was named, and every value
+            # was compared by content (none only by ``id()``).
+            render_needed = not prev_refs or user_changed is not None or opaque_seen
 
             # The ``dj-update="append"|"prepend"`` containers whose rows come from
             # a ``temporary_assigns`` key must ACCUMULATE in the differ, as the

@@ -8523,7 +8523,8 @@ class ViewRuntime(RuntimeTurnPort):
             async with self.transport.event_context(view):
                 if self.view_instance is not view:
                     return
-                await self._render_async_result(event_name, skip_unchanged=True)
+                # Never skipped (#4123): this frame is what ends the loading state.
+                await self._render_async_result(event_name)
         except Exception:  # noqa: BLE001 — a settle frame must never raise out of a task
             logger.warning("Explicit cancelled background settle failed")
 
