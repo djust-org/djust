@@ -70,6 +70,7 @@ from .websocket_utils import (
 from .signals import full_html_update, liveview_server_error
 from ._view_lanes import ViewLane
 from ._view_slots import ViewSlot, valid_target_id
+from ._outbound_buffer import OutboundBuffer, outbound_buffer_limit
 from ._turn_ports import ConsumerTurnPort
 from .turns import Turn, run_turn
 
@@ -284,6 +285,24 @@ def _live_upload_entry(manager: Any, ref: Any) -> Any:
 
 #: Running upload-timeout tasks (#4118), held so none is collected mid-run.
 _UPLOAD_EXPIRY_TASKS: Set["asyncio.Task[None]"] = set()
+
+
+#: Close code for a client that cannot keep up with its outbound frames
+#: (RFC 6455 "Try Again Later"; #3658, decision D12). The client reconnects
+#: and resynchronises through the ordinary recovery path.
+WS_CLOSE_SLOW_CONSUMER = 1013
+
+#: How long ``close()`` waits for frames still queued in the outbound buffer
+#: to reach the ASGI server before it closes anyway (#3658).
+_CLOSE_FLUSH_TIMEOUT_S = 5.0
+
+
+def _frame_size(frame: Tuple[Optional[str], Optional[bytes]]) -> int:
+    """Bytes of an outbound ``(text, bytes)`` frame (#3658)."""
+    text_data, bytes_data = frame
+    if text_data is not None:
+        return len(text_data.encode("utf-8"))
+    return len(bytes_data or b"")
 
 
 def _real_consumer(consumer: Any) -> Any:
@@ -2674,6 +2693,8 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         # The socket is gone — any frame a handler still tries to send from
         # here on would be rejected by the ASGI server (_send_frame drops it).
         self._ws_close_sent = True
+        # Frames still waiting in the outbound buffer have nobody to reach.
+        self._abandon_outbound()
         # Pushes deferred while the session was busy have nobody to reach
         # (#3001). First, so a later cleanup step that raises can't leave the
         # drain running.
@@ -4264,6 +4285,11 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         transport, which uvicorn would reject with a RuntimeError.
         """
         self._ws_close_sent = True
+        buffer = getattr(self, "_outbound", None)
+        if buffer is not None:
+            # Frames sent before the close still go first (#3658); a client
+            # too slow to take them within the grace period loses them.
+            await buffer.flush(_CLOSE_FLUSH_TIMEOUT_S)
         try:
             if reason is None:
                 # channels<4.1 close() has no reason parameter.
@@ -4275,6 +4301,54 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             # There is nothing left to close (#3000).
             logger.debug("WebSocket close skipped: peer already closed (%r)", exc)
 
+    def _outbound_buffer(self) -> OutboundBuffer[Tuple[Optional[str], Optional[bytes]]]:
+        """This socket's bounded outbound buffer (#3658), made on first use."""
+        owner = _real_consumer(self)
+        buffer = getattr(owner, "_outbound", None)
+        if buffer is None:
+            buffer = OutboundBuffer(
+                owner._transmit_frame,
+                _frame_size,
+                owner._on_outbound_overflow,
+                outbound_buffer_limit(),
+            )
+            owner._outbound = buffer
+        return buffer
+
+    def _abandon_outbound(self) -> None:
+        """Drop the frames still waiting for a socket that is gone (#3658)."""
+        buffer = getattr(_real_consumer(self), "_outbound", None)
+        if buffer is not None:
+            buffer.abandon()
+
+    def _on_outbound_overflow(self, pending: int, limit: int) -> None:
+        """The client cannot keep up: close with 1013 so it reconnects (#3658, D12).
+
+        Called by the buffer, which has already dropped its frames. Later sends
+        are dropped from here on; the close itself runs as its own task, so the
+        sender that hit the bound is not held up by a socket that is not
+        reading.
+        """
+        self._ws_close_sent = True
+        logger.warning(
+            "WebSocket client is not reading fast enough: %s bytes pending over the "
+            "%s-byte outbound limit; closing with %s so it reconnects and resyncs",
+            pending,
+            limit,
+            WS_CLOSE_SLOW_CONSUMER,
+        )
+        self._slow_consumer_close = asyncio.ensure_future(self._close_slow_consumer())
+
+    async def _close_slow_consumer(self) -> None:
+        try:
+            await self.close(code=WS_CLOSE_SLOW_CONSUMER)
+        except RuntimeError as exc:
+            if not _is_send_after_close_error(exc):
+                raise
+            logger.debug(
+                "WebSocket %s close skipped: socket already closed", WS_CLOSE_SLOW_CONSUMER
+            )
+
     async def _send_frame(
         self,
         text_data: Optional[str] = None,
@@ -4282,17 +4356,30 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
     ) -> None:
         """Single outbound chokepoint: drop frames once the socket is closed.
 
-        Short-circuits when the connection is known-closed and downgrades the
-        ASGI server's send-after-close rejections to a debug log — the client
-        is gone, there is nobody to answer. Two shapes: the ``RuntimeError``
-        after the close handshake (see :func:`_is_send_after_close_error`),
-        and the ``OSError`` a send raises once the peer has closed (ASGI 2.4;
-        uvicorn's ``ClientDisconnected``, #3000). Any other ``RuntimeError``
-        propagates.
+        Short-circuits when the connection is known-closed. Otherwise the
+        frame goes through the socket's bounded outbound buffer (#3658): with
+        no other send in flight it is sent at once, as before; while one is
+        in flight it waits its turn, and a backlog over
+        ``LIVEVIEW_CONFIG["max_outbound_buffer_bytes"]`` closes the socket with
+        1013. See :meth:`_transmit_frame` for the send-after-close handling.
         """
-        if getattr(self, "_ws_close_sent", False):
+        owner = _real_consumer(self)
+        if getattr(owner, "_ws_close_sent", False):
             logger.debug("Dropping outbound frame: WebSocket already closed")
             return
+        await owner._outbound_buffer().send((text_data, bytes_data))
+
+    async def _transmit_frame(self, frame: Tuple[Optional[str], Optional[bytes]]) -> bool:
+        """Hand one frame to the ASGI server; ``False`` once the peer is gone.
+
+        Downgrades the ASGI server's send-after-close rejections to a debug
+        log — the client is gone, there is nobody to answer. Two shapes: the
+        ``RuntimeError`` after the close handshake (see
+        :func:`_is_send_after_close_error`), and the ``OSError`` a send raises
+        once the peer has closed (ASGI 2.4; uvicorn's ``ClientDisconnected``,
+        #3000). Any other ``RuntimeError`` propagates.
+        """
+        text_data, bytes_data = frame
         try:
             await self.send(text_data=text_data, bytes_data=bytes_data)
         except RuntimeError as exc:
@@ -4300,6 +4387,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 raise
             self._ws_close_sent = True
             logger.debug("Dropping outbound frame: WebSocket closed during send (%s)", exc)
+            return False
         except OSError as exc:
             # ASGI 2.4: a send on a connection the peer has closed raises a
             # server-specific OSError subclass (uvicorn: ClientDisconnected).
@@ -4308,6 +4396,8 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             # that loop and the disconnect was never dispatched (#3000).
             self._ws_close_sent = True
             logger.debug("Dropping outbound frame: peer closed the WebSocket (%r)", exc)
+            return False
+        return True
 
     async def send_json(self, data: Dict[str, Any]) -> None:
         """Send JSON message to client with Django type support.

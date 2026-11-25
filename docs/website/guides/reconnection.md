@@ -207,6 +207,48 @@ signature cannot declare. `manage.py check` reports one that still does
 (`djust.V031`) and names the new signature; the before-and-after is in
 [Migrating to djust 2.0](migrating-to-2.0.md#2-make-event-handlers-strict).
 
+## Slow Clients and Outbound Limits
+
+A client that reads more slowly than the server produces frames (a phone on a
+bad network, a busy tab, a flood of broadcasts) does not make the server buffer
+without bound. Each connection has an outbound limit,
+`LIVEVIEW_CONFIG["max_outbound_buffer_bytes"]` (default `4194304`, 4 MiB; `0`
+turns it off). Past it the server ends the connection and the client reconnects
+through the recovery path above: a fresh mount, then form recovery and
+`dj-auto-recover`. Single frames are never dropped or merged, because the
+client would then show a state the server never had.
+
+```python
+# settings.py
+LIVEVIEW_CONFIG = {
+    "max_outbound_buffer_bytes": 8 * 1024 * 1024,  # 8 MiB per connection
+}
+```
+
+| Transport | What is bounded | Over the limit |
+|-----------|-----------------|----------------|
+| WebSocket | Frames waiting while another frame of the same socket is still being handed to the ASGI server, in bytes (UTF-8 for text frames) | The socket is closed with code **1013** ("try again later"); the client reconnects with the usual backoff and remounts |
+| HTTP page POST | Nothing to bound: each response carries the frames of its own event and nothing is held between requests | n/a |
+
+What the WebSocket limit covers, exactly:
+
+- **One frame always goes out.** With nothing waiting, a frame is sent at once,
+  whatever its size; the limit bounds the backlog behind it, not how large one
+  render may be.
+- **Order is kept.** Waiting frames go out in the order they were sent.
+- **The limit is per connection**, so the memory one browser can pin is the
+  limit times its open sockets.
+- **It measures what the ASGI server has not accepted yet.** uvicorn's
+  `websockets` implementations apply back-pressure, so a slow reader shows up
+  here. A server that accepts every frame into its own buffer without
+  back-pressure (Daphne) holds that backlog itself; bound it there.
+- **A close waits for the frames before it.** A `close()` sends the frames
+  queued before it first, for up to 5 seconds, then closes anyway and drops
+  them. A disconnect drops waiting frames at once.
+
+The server logs a warning naming the backlog and the limit each time it closes
+a socket with 1013.
+
 ## SSE Transport
 
 Over SSE (Server-Sent Events), the browser's `EventSource` handles reconnection itself. There is no backoff with jitter, no reconnection banner and no `data-dj-reconnect-attempt` attribute; only the `dj-connected` / `dj-disconnected` body classes and the post-remount form recovery apply.

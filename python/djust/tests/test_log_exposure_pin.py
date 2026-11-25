@@ -54,10 +54,10 @@ FRAMEWORK_ONLY = {
     ("_handle_upload_resume", "upload_resume: re-attaching the upload failed"): (
         "upload manager re-attach; writers hold upload bytes and metadata, never view state"
     ),
-    ("_send_frame", "Dropping outbound frame: peer closed the WebSock"): "socket closed",
+    ("_transmit_frame", "Dropping outbound frame: peer closed the WebSock"): "socket closed",
     ("close", "WebSocket close skipped: peer already closed (%r"): "socket closed",
     ("_handle_upload_resume", "upload_resume: active-ref check failed"): "upload ref check",
-    ("_send_frame", "Dropping outbound frame: WebSocket closed during"): "socket closed",
+    ("_transmit_frame", "Dropping outbound frame: WebSocket closed during"): "socket closed",
     ("_clear_template_caches", "Could not clear template cache for %s: %s"): "cache clear",
     ("_hotreload_view", "Template not found for hot reload: %s"): "dev-only, file-derived",
     ("_hotreload_view", "Failed to parse patches JSON: %s"): "dev-only, file-derived",
