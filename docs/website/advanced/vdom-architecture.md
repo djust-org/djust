@@ -237,6 +237,7 @@ With the opt-in, per element:
 3. The direct children of a `dj-update` container (any value) and of a `dj-virtual` container are never keyed by `id`: accumulating `dj-update` rows are already paired by `id` on their own, and the client finds `dj-virtual` rows by their `dj-key` attribute. Their descendants are keyed as usual.
 4. Two siblings with the same `id` (invalid HTML) get the same key; the differ treats a repeated key as ambiguous, logs DJE-051, and pairs those siblings by position, as without the opt-in.
 5. An `id` that encodes position (`id="row-{{ forloop.counter }}"`) pairs rows by position, which is what unkeyed diffing does anyway. Key such rows by a stable value with `dj-key` instead.
+6. Keys derived from `id` do not trigger the DJE-050 "mixed keyed/unkeyed siblings" warning: with the opt-in, most parents mix `id`-keyed and `id`-less children (a `<label>` beside an `<input id>`), which is expected. A parent that mixes an explicit `dj-key` / `data-key` with unkeyed siblings still warns.
 
 For the cheapest patches, give the conditional element an `id` as well as its siblings: showing it is then a single `InsertChild` and hiding it a single `RemoveChild`. A conditional without a key among `id`-keyed siblings still leaves the siblings intact, but each shifted sibling gets a `MoveChild`, because a list that mixes keyed and unkeyed children is reconciled without the longest-increasing-subsequence shortcut.
 

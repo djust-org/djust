@@ -948,6 +948,18 @@ pub fn key_by_id(root: &mut VNode) {
     key_by_id_inner(root, false);
 }
 
+/// True when `node`'s key was derived from its `id` by [`key_by_id`]: it
+/// starts with [`ID_KEY_PREFIX`] and the node has no explicit non-empty
+/// `dj-key` / `data-key` attribute.
+pub(crate) fn has_id_derived_key(node: &VNode) -> bool {
+    let explicit = |name: &str| node.attrs.get(name).is_some_and(|v| !v.is_empty());
+    node.key
+        .as_deref()
+        .is_some_and(|k| k.starts_with(ID_KEY_PREFIX))
+        && !explicit("dj-key")
+        && !explicit("data-key")
+}
+
 fn key_by_id_inner(node: &mut VNode, exempt: bool) {
     if node.tag.starts_with('#') {
         return;

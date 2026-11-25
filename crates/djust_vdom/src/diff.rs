@@ -777,10 +777,15 @@ fn reconcile_keyed(
                 .as_deref()
                 .is_some_and(djust_core::html_whitespace::is_html_whitespace_only)
     };
+    // Keys derived from `id` by the opt-in `key_by_id` (#4228) do not count:
+    // with that opt-in most parents mix id-keyed and id-less children (a
+    // `<label>` beside an `<input id>`), which is expected, not a mistake.
     if new_nb
         .iter()
         .any(|(_, n)| n.key.is_none() && !is_separator(n))
-        && new_nb.iter().any(|(_, n)| n.key.is_some())
+        && new_nb
+            .iter()
+            .any(|(_, n)| n.key.is_some() && !crate::has_id_derived_key(n))
     {
         vdom_trace!("DJE-050: Mixed keyed/unkeyed siblings during keyed diff");
         tracing::warn!(
