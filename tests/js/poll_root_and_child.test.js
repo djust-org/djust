@@ -10,11 +10,13 @@
  *    client applies it to the root, on the WebSocket and the SSE path.
  * 3. A poll inside a `{% live_render %}` child was sent without the child's
  *    view_id (the legacy binding attached no owner context), so it reached
- *    the parent view. A component's poll keeps reaching its host view.
+ *    the parent view. A component's poll carries its component_id (#4205:
+ *    the strict binding is the only one, and it attaches the owner).
  */
 
 import { afterEach, describe, expect, it } from 'vitest';
 import { JSDOM } from 'jsdom';
+import { withContracts } from './_open_contracts.js';
 import { readFileSync } from 'fs';
 import { setTimeout as nativeSleep } from 'node:timers/promises';
 
@@ -27,7 +29,7 @@ afterEach(() => {
 });
 
 function setup(bodyHtml) {
-    dom = new JSDOM(`<!DOCTYPE html><html><head></head><body>${bodyHtml}</body></html>`, {
+    dom = new JSDOM(`<!DOCTYPE html><html><head></head><body>${withContracts(bodyHtml)}</body></html>`, {
         url: 'http://localhost/',
         runScripts: 'dangerously',
     });
@@ -48,7 +50,7 @@ function setup(bodyHtml) {
             var body = {};
             try { body = JSON.parse((opts && opts.body) || "{}"); } catch (e) {}
             window._calls.push({ name: name, body: body });
-            return { ok: true, json: async function() { return { patches: [], version: 1 }; } };
+            return { ok: true, json: async function() { return { patches: [], version: 1, ...(() => { const s = document.querySelector('script[data-djust-parameter-contracts]'); if (!s) return {}; const m = JSON.parse(s.textContent); return {parameter_contracts: m.contracts, parameter_contract_view: m.view}; })() }; } };
         };
     `);
     dom.window.eval(clientCode);
@@ -168,7 +170,7 @@ describe('dj-poll inside an embedded child view', () => {
         const win = setup(`
 <div dj-view="app.ParentView" dj-root>
   <div dj-view data-djust-embedded="child-1">
-    <div dj-poll="child_tick" dj-poll-interval="30" data-room="7"></div>
+    <div dj-poll="child_tick" dj-poll-interval="30" dj-value-room="7"></div>
   </div>
 </div>`);
         await nativeSleep(150);
@@ -189,7 +191,7 @@ describe('dj-poll inside an embedded child view', () => {
         expect(calls[0].body.view_id).toBeUndefined();
     });
 
-    it('a component\'s poll still reaches its host view (no component_id)', async () => {
+    it('a component\'s poll carries its component_id (the owner that resolved the contract)', async () => {
         const win = setup(`
 <div dj-view="app.ParentView" dj-root>
   <div data-component-id="cmp-1">
@@ -199,7 +201,7 @@ describe('dj-poll inside an embedded child view', () => {
         await nativeSleep(150);
         const calls = sends(win, 'host_tick');
         expect(calls.length).toBeGreaterThan(0);
-        expect(calls[0].body.component_id).toBeUndefined();
+        expect(calls[0].body.component_id).toBe('cmp-1');
         expect(calls[0].body.view_id).toBeUndefined();
     });
 });

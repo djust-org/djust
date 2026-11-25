@@ -1,7 +1,7 @@
 /**
  * ADR-036 P2 (b): native binders collect strict handler arguments from the
- * owner-scoped public contract (decisions Q1/Q2/N1), and legacy bindings keep
- * their existing payloads. Drives real DOM events through the bundled client
+ * owner-scoped public contract (decisions Q1/Q2/N1); a handler the mount does
+ * not list declares nothing. Drives real DOM events through the bundled client
  * over the HTTP fallback, recording what would reach the server.
  */
 import { describe, expect, it, vi } from 'vitest';
@@ -26,9 +26,6 @@ const rootHandlers = {
     save: strict(param('title', 'str')),
     save_all: strict(param('form', 'Any', 'var_keyword', false)),
     on_key: strict(param('key', 'str')),
-    old_click: {policy: 'legacy'},
-    old_input: {policy: 'legacy'},
-    old_save: {policy: 'legacy'},
 };
 const manifest = {version: 1, owners: [
     {view_id: null, component_id: null, handlers: rootHandlers},
@@ -79,16 +76,6 @@ describe('strict dj-click', () => {
         } finally { dom.window.close(); }
     });
 
-    it('keeps legacy precedence and namespaces for a legacy handler on the same page', async () => {
-        const {dom, $, settle, sent} = setup(
-            '<button dj-click="old_click" dj-value-item-id="7" data-other="x">Go</button>');
-        try {
-            click(dom, $('button'));
-            await settle();
-            expect(sent()[0].params).toMatchObject({item_id: '7', other: 'x'});
-        } finally { dom.window.close(); }
-    });
-
     it.each([
         ['a partial typed literal', '<button dj-click="count" dj-value-n:int="12abc" dj-disable-with="Wait" dj-lock>Go</button>'],
         ['a wire hint that conflicts with the declared type', '<button dj-click="label" dj-value-name:int="3" dj-disable-with="Wait" dj-lock>Go</button>'],
@@ -133,7 +120,7 @@ describe('strict dj-click', () => {
 
     it('fails closed on an invalid page scope, for every handler', async () => {
         const {dom, $, settle, sent, errors} = setup(
-            '<button id="a" dj-click="pick">A</button><button id="b" dj-click="old_click">B</button>', false);
+            '<button id="a" dj-click="pick">A</button><button id="b" dj-click="count">B</button>', false);
         try {
             click(dom, $('#a'));
             click(dom, $('#b'));
@@ -143,12 +130,13 @@ describe('strict dj-click', () => {
         } finally { dom.window.close(); }
     });
 
-    it('uses legacy collection for a handler the mount does not list', async () => {
-        const {dom, $, settle, sent} = setup('<button dj-click="unlisted" data-other="x">Go</button>');
+    it('sends only dj-value-* and positional arguments for a handler the mount does not list', async () => {
+        const {dom, $, settle, sent} = setup(
+            '<button dj-click="unlisted(4)" dj-value-x="1" data-other="x">Go</button>');
         try {
             click(dom, $('button'));
             await settle();
-            expect(sent()[0].params).toMatchObject({other: 'x'});
+            expect(sent()).toEqual([{event: 'unlisted', params: {x: '1', _args: [4]}}]);
         } finally { dom.window.close(); }
     });
 });
@@ -164,15 +152,6 @@ describe('generated values follow the declared contract (Q1) and omit _target (Q
             input(dom, $('input'), 'abc');
             await settle(400);
             expect(sent()).toEqual([{event: handler, params: expected}]);
-        } finally { dom.window.close(); }
-    });
-
-    it('keeps field and _target for a legacy dj-input', async () => {
-        const {dom, $, settle, sent} = setup('<input name="q" dj-input="old_input">');
-        try {
-            input(dom, $('input'), 'abc');
-            await settle(400);
-            expect(sent()[0].params).toMatchObject({value: 'abc', field: 'q', _target: 'q'});
         } finally { dom.window.close(); }
     });
 
@@ -218,16 +197,6 @@ describe('generated values follow the declared contract (Q1) and omit _target (Q
             submit(dom, $);
             await settle();
             expect(sent()).toEqual([{event: handler, params: expected}]);
-        } finally { dom.window.close(); }
-    });
-
-    it('keeps every field and _target for a legacy dj-submit', async () => {
-        const {dom, $, settle, sent} = setup(form('old_save'));
-        try {
-            submit(dom, $);
-            await settle();
-            expect(sent()[0].params).toMatchObject({title: 'T', other: 'O'});
-            expect(Object.hasOwn(sent()[0].params, '_target')).toBe(true);
         } finally { dom.window.close(); }
     });
 });

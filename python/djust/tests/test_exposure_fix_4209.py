@@ -278,17 +278,11 @@ def _visible(html: str) -> str:
     return " ".join(re.sub(r"<[^>]+>", " ", html).split())
 
 
-def _render_all(module: types.ModuleType, parameter_policy: str) -> dict[str, str]:
+def _render_all(module: types.ModuleType) -> dict[str, str]:
     """Each fixed fixture view mounted and rendered under 2.0's strict default."""
-    from djust.config import config
     from djust.testing import LiveViewTestClient
 
-    previous = config.get("event_parameter_policy", "strict")
-    config.set("event_parameter_policy", parameter_policy)
-    try:
-        return _render_each(module, LiveViewTestClient)
-    finally:
-        config.set("event_parameter_policy", previous)
+    return _render_each(module, LiveViewTestClient)
 
 
 def _render_each(module: types.ModuleType, client_class: type) -> dict[str, str]:
@@ -315,7 +309,7 @@ def test_fixed_app_passes_the_checks_and_renders_what_1_3_rendered(tmp_path):
     _unload(after)
     fixed = _load(after_dir / "views.py", "fix4209_fixed")
     with override_settings(TEMPLATES=_templates(after_dir)):
-        rendered_after = _render_all(fixed, "strict")
+        rendered_after = _render_all(fixed)
         messages = [
             m
             for check in (
@@ -336,8 +330,6 @@ def test_fixed_app_passes_the_checks_and_renders_what_1_3_rendered(tmp_path):
         "djust.T027",
         "djust.V016",
         "djust.T020",
-        "djust.V033",
-        "djust.T028",
     }, [str(m) for m in messages]
 
 

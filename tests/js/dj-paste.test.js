@@ -8,6 +8,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { JSDOM } from 'jsdom';
+import { openContracts } from './_open_contracts.js';
 import fs from 'fs';
 
 const clientCode = fs.readFileSync('./python/djust/static/djust/client.js', 'utf-8');
@@ -18,6 +19,7 @@ function createEnv(bodyHtml = '') {
             <div dj-root dj-view="test.View">
                 ${bodyHtml}
             </div>
+            ${openContracts(bodyHtml, 'test.View')}
         </body></html>`,
         { url: 'http://localhost:8000/test/', runScripts: 'dangerously', pretendToBeVisual: true }
     );
@@ -39,7 +41,7 @@ function createEnv(bodyHtml = '') {
             params = opts && opts.body ? JSON.parse(opts.body) : {};
         } catch (_) {}
         fetchCalls.push({ url, eventName, params });
-        return { ok: true, json: async () => ({ patches: [], version: 1 }) };
+        return { ok: true, json: async () => ({ patches: [], version: 1, ...(() => { const s = window.document.querySelector('script[data-djust-parameter-contracts]'); if (!s) return {}; const m = JSON.parse(s.textContent); return {parameter_contracts: m.contracts, parameter_contract_view: m.view}; })() }) };
     });
 
     // Force HTTP-only so handleEvent uses fetch (deterministic).
@@ -50,6 +52,8 @@ function createEnv(bodyHtml = '') {
     } catch (_) {
         // client.js may throw on missing DOM APIs; tests still work
     }
+    // The page's contract block is read at init; this env does not fire it.
+    window.djust._installPageParameterContracts();
 
     return { window, document: dom.window.document, fetchCalls };
 }

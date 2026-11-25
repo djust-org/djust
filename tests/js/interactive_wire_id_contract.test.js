@@ -51,9 +51,9 @@ describe('interactive component wire id (#4046)', () => {
         try {
             const doc = dom.window.document;
             const item = dom.window.resolveContract(doc.getElementById('item'), 'select');
-            expect(item.policy).toBe('strict');
+            expect(item.contract.policy).toBe('strict');
             expect(item.componentId).toBe(WIRE);
-            expect(dom.window.resolveContract(doc.getElementById('toggle'), 'toggle').policy).toBe('strict');
+            expect(dom.window.resolveContract(doc.getElementById('toggle'), 'toggle').contract.policy).toBe('strict');
         } finally { dom.window.close(); }
     });
 

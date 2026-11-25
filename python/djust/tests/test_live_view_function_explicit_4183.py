@@ -553,10 +553,7 @@ def test_a_returned_exposure_policy_is_not_applied(fn_urls):
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("policy", ["legacy", "strict"])
-def test_the_documented_example_answers_its_dj_value_argument(fn_urls, settings, policy):
-    config = getattr(settings, "LIVEVIEW_CONFIG", {})
-    settings.LIVEVIEW_CONFIG = {**config, "event_parameter_policy": policy}
+def test_the_documented_example_answers_its_dj_value_argument(fn_urls):
     browser = Client()
     assert browser.get("/greeting/?name=ann").status_code == 200
     # What the button sends: dj-value-times="3" as the ``times`` argument.

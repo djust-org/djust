@@ -11,11 +11,14 @@ if (source.split(seam).length !== 2) throw new Error('Missing contract test seam
 const strict = {policy: 'strict', coerce_types: true, parameters: [
     {name: 'value', type: 'int', kind: 'positional_or_keyword', required: true, reduced_checking: false},
 ]};
+const other = {policy: 'strict', coerce_types: true, parameters: [
+    {name: 'other', type: 'str', kind: 'positional_or_keyword', required: true, reduced_checking: false},
+]};
 const manifest = () => ({version: 1, owners: [
     {view_id: null, component_id: null, handlers: {choose: strict}},
     {view_id: null, component_id: 'left', handlers: {choose: strict}},
-    {view_id: null, component_id: 'right', handlers: {choose: {policy: 'legacy'}}},
-    {view_id: 'left', component_id: null, handlers: {choose: {policy: 'legacy'}}},
+    {view_id: null, component_id: 'right', handlers: {choose: other}},
+    {view_id: 'left', component_id: null, handlers: {choose: other}},
 ]});
 
 function setup(name) {
@@ -37,14 +40,14 @@ describe.each(['LiveViewWebSocket', 'LiveViewSSE'])('%s public parameter contrac
             await mount({parameter_contracts: manifest()});
             expect(lookup(null, null).policy).toBe('strict');
             expect(lookup(null, 'left').policy).toBe('strict');
-            expect(lookup(null, 'right').policy).toBe('legacy');
-            expect(lookup('left', null).policy).toBe('legacy');
+            expect(lookup(null, 'right').parameters[0].name).toBe('other');
+            expect(lookup('left', null).parameters[0].name).toBe('other');
             expect(() => lookup(null, 'missing')).toThrow('Unknown parameter contract owner');
             expect(() => lookup(null, 'right', 'misspelled')).toThrow();
         } finally { dom.window.close(); }
     });
 
-    it('clears old contracts when remounting a legacy server', async () => {
+    it('clears old contracts when remounting a tree with no handlers', async () => {
         const {dom, lookup, mount} = setup(name);
         try {
             await mount({parameter_contracts: manifest()});

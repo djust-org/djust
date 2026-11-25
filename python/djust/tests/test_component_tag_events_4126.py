@@ -449,7 +449,6 @@ def test_t019_does_not_check_the_arguments_a_tag_writes_itself():
     findings, report = _findings(
         _view(
             "{% command_palette open=o %}{% endcommand_palette %}",
-            event_parameter_policy="strict",
             palette=D.CommandPalette(),
             palette_search=event_handler(palette_search),
         )

@@ -3,8 +3,8 @@
  *
  * `form_values` and `data_attrs` are generated values (ADR-036 Q1): a strict
  * handler receives the ones it declares, plus the container's dj-value-*
- * arguments, through the strict collector's limits. A legacy or unlisted
- * handler keeps the 1.x `_form_values` / `_data_attrs` envelope. Drives the
+ * arguments, through the strict collector's limits. An unlisted handler
+ * declares nothing, so only its dj-value-* arguments are sent. Drives the
  * bundled client over the HTTP fallback and records what would reach the server.
  */
 import { describe, expect, it, vi } from 'vitest';
@@ -22,7 +22,6 @@ const handlers = {
     data_only: strict(param('data_attrs', 'dict[str, str]')),
     open: strict(param('rest', 'Any', 'var_keyword', false)),
     with_page: strict(param('form_values', 'dict[str, Any]'), param('page', 'int')),
-    old: {policy: 'legacy'},
 };
 const manifest = {version: 1, owners: [{view_id: null, component_id: null, handlers}]};
 
@@ -124,10 +123,10 @@ describe('dj-auto-recover, strict handler', () => {
 describe('dj-auto-recover inside a component or an embedded child view', () => {
     // The event carries no owner context, so the server routes it to the page's
     // view: the client must use the page view's contract, not the nearest owner's
-    // (which does not list the handler and would fall back to the envelope).
+    // (which does not list the handler).
     const owned = {version: 1, owners: [
         {view_id: null, component_id: null, handlers},
-        {view_id: null, component_id: 'cmp1', handlers: {both: {policy: 'legacy'}}},
+        {view_id: null, component_id: 'cmp1', handlers: {}},
         {view_id: 'child1', component_id: null, handlers: {other: strict()}},
     ]};
 
@@ -153,22 +152,21 @@ describe('dj-auto-recover inside a component or an embedded child view', () => {
     });
 });
 
-describe('dj-auto-recover, legacy or unlisted handler', () => {
-    it('keeps the 1.x envelope for a legacy handler', async () => {
-        const {dom, recover, sent} = setup(`<form dj-auto-recover="old" data-step="2">${FORM}</form>`);
+describe('dj-auto-recover, unlisted handler', () => {
+    it('sends only dj-value-* arguments for a handler the mount does not list', async () => {
+        const {dom, recover, sent} = setup(
+            `<form dj-auto-recover="unlisted" dj-value-step="2" data-step="2">${FORM}</form>`);
         try {
             await recover();
-            expect(sent()).toEqual([{event: 'old', params: {
-                _form_values: FORM_VALUES, _data_attrs: {step: '2'}}}]);
+            expect(sent()).toEqual([{event: 'unlisted', params: {step: '2'}}]);
         } finally { dom.window.close(); }
     });
 
-    it('keeps the 1.x envelope for a page that delivered no contract', async () => {
+    it('sends no envelope for a page that delivered no contract', async () => {
         const {dom, recover, sent} = setup(`<form dj-auto-recover="anything" data-step="2">${FORM}</form>`, undefined);
         try {
             await recover();
-            expect(sent()).toEqual([{event: 'anything', params: {
-                _form_values: FORM_VALUES, _data_attrs: {step: '2'}}}]);
+            expect(sent()).toEqual([{event: 'anything', params: {}}]);
         } finally { dom.window.close(); }
     });
 });

@@ -5,9 +5,9 @@
  * `checked` boolean per box.
  */
 import { describe, expect, it } from 'vitest';
-import { legacy, param, setup, strict } from './_form_events_harness.js';
+import { anyArgs, param, setup, strict } from './_form_events_harness.js';
 
-const handlers = { pick: legacy(), pick_list: strict(param('value', 'list[str]'), param('field', 'str')) };
+const handlers = { pick: anyArgs(), pick_list: strict(param('value', 'list[str]'), param('field', 'str')) };
 
 const group = (handler, checked = []) => `
     <form>

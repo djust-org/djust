@@ -7,8 +7,8 @@
  * view_id, so the server runs them on the page's view (runtime.py: no
  * `view_id` -> no child routing, no `component_id` -> no component routing).
  * Inside a `data-component-id` wrapper or an embedded child the client used to
- * look the handler up under that owner, which here lists it as legacy, and
- * sent the 1.x envelope a strict page handler refuses.
+ * look the handler up under that owner, whose contract differs from the page
+ * handler's, and sent the wrong arguments.
  *
  * Bindings that do carry owner context (dj-click) keep the nearest owner's
  * contract. Drives the bundled client over the HTTP fallback and records what
@@ -23,7 +23,10 @@ const source = readFileSync('./python/djust/static/djust/client.js', 'utf8');
 const param = (name, type) => ({name, type, kind: 'positional_or_keyword', required: true,
     reduced_checking: false});
 const strict = (...parameters) => ({policy: 'strict', coerce_types: true, parameters});
-const legacy = {policy: 'legacy'};
+// Takes everything: resolving under the wrong owner would send every generated
+// value the page's handler does not declare.
+const anything = strict({name: 'rest', type: 'Any', kind: 'var_keyword', required: false,
+    reduced_checking: true});
 
 // The page view's strict handlers.
 const page = {
@@ -32,12 +35,12 @@ const page = {
     copied: strict(),
     closed: strict(param('reason', 'str')),
     pushed: strict(),
-    clicked: legacy,
+    clicked: strict(param('n', 'str')),
 };
-// The same names under the component and the embedded child: legacy there, so
-// resolving under the wrong owner sends the 1.x envelope.
+// The same names under the component and the embedded child, with another
+// contract there, so resolving under the wrong owner sends something else.
 const nested = {
-    load_more: legacy, mutated: legacy, copied: legacy, closed: legacy, pushed: legacy,
+    load_more: anything, mutated: anything, copied: anything, closed: anything, pushed: anything,
     clicked: strict(param('n', 'int')),
 };
 const manifest = {version: 1, owners: [

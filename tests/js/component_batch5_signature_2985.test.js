@@ -12,6 +12,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { JSDOM } from 'jsdom';
+import { openContracts } from './_open_contracts.js';
 import fs from 'fs';
 
 const clientCode = fs.readFileSync('./python/djust/static/djust/client.js', 'utf-8');
@@ -44,7 +45,7 @@ function makeCtx(canvas) {
 
 function createEnv(bodyHtml, { dpr = 2, resizeObserver, requestAnimationFrame = true } = {}) {
     const dom = new JSDOM(
-        `<!DOCTYPE html><html><body><div dj-root>${bodyHtml}</div></body></html>`,
+        `<!DOCTYPE html><html><body><div dj-root dj-view="test.V">${bodyHtml}</div>${openContracts(bodyHtml)}</body></html>`,
         { url: 'http://localhost:8000/test/', runScripts: 'dangerously', pretendToBeVisual: true },
     );
     const { window } = dom;
@@ -67,6 +68,8 @@ function createEnv(bodyHtml, { dpr = 2, resizeObserver, requestAnimationFrame = 
     } catch (_e) {
         // client.js may throw on DOM APIs jsdom lacks; hooks still load.
     }
+    // The page's contract block is read at init, which this env does not fire.
+    try { window.djust._installPageParameterContracts(); } catch (_e) { /* no page */ }
     window.djust.handleEvent = (name, params) => { env.sent.push({ name, params }); };
     return env;
 }
@@ -564,7 +567,12 @@ describe('Save', () => {
         dflt.draw([[10, 10], [50, 50]]);
         dflt.sizer = () => 204800 - 22;
         dflt.click('save');
-        expect(dflt.sent).toHaveLength(1);
+        // The hook accepts it; the client's strict 64 KiB text bound is what stops it on the wire.
+        expect(dflt.hidden()).not.toBe('');
+        expect(dflt.status()).not.toMatch(/too detailed/);
+        dflt.sizer = () => 204800 + 1000;
+        dflt.click('save');
+        expect(dflt.status()).toMatch(/too detailed to send \(the limit is 200 KB\)/);
         const tiny = await boot(PAD({ maxBytes: 5 }), { dpr: 1, width: 400 });
         tiny.draw([[10, 10], [50, 50]]);
         tiny.sizer = () => 800;
@@ -606,7 +614,7 @@ describe('"Message too large"', () => {
         env.sizer = () => 70000;
         env.click('save');
         tooLarge(env, 70100);
-        expect(env.sent).toHaveLength(1);
+        // (the 70 KB first frame itself is over the client's 64 KiB strict text bound and never leaves)
         expect(env.status()).toMatch(/too detailed for the server's message limit/);
     });
 

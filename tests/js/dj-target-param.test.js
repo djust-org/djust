@@ -1,13 +1,12 @@
 /**
- * Tests for _target param in change/input/submit events.
- *
- * When multiple form fields share one handler (e.g., dj-change="validate"),
- * the _target param tells the server which field triggered the event.
- * Matches Phoenix LiveView's _target convention.
+ * The 1.x `_target` key is gone (#4205): a strict binding never generates it,
+ * whatever the handler declares. A handler that needs the field name takes
+ * `field` (dj-change / dj-input generate it) or a dj-value-* argument.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { JSDOM } from 'jsdom';
+import { withContracts } from './_open_contracts.js';
 import { readFileSync } from 'fs';
 import { setTimeout as nativeSleep } from 'node:timers/promises';
 
@@ -15,7 +14,7 @@ const clientCode = readFileSync('./python/djust/static/djust/client.js', 'utf-8'
 
 function createTestEnv(bodyHtml) {
     const dom = new JSDOM(
-        `<!DOCTYPE html><html><body>${bodyHtml}</body></html>`,
+        `<!DOCTYPE html><html><body>${withContracts(bodyHtml)}</body></html>`,
         { runScripts: 'dangerously', url: 'http://localhost/' }
     );
 
@@ -39,7 +38,7 @@ function createTestEnv(bodyHtml) {
             var body = {};
             try { body = JSON.parse((opts && opts.body) || "{}"); } catch(e) {}
             window._testFetchCalls.push({ eventName: eventName, body: body });
-            return { ok: true, json: async function() { return { patches: [], version: window._mockVersion }; } };
+            return { ok: true, json: async function() { return { patches: [], version: window._mockVersion, ...(() => { const s = document.querySelector('script[data-djust-parameter-contracts]'); if (!s) return {}; const m = JSON.parse(s.textContent); return {parameter_contracts: m.contracts, parameter_contract_view: m.view}; })() }; } };
         };
     `);
 
@@ -55,12 +54,12 @@ function getFetchCalls(dom) {
     return dom.window._testFetchCalls;
 }
 
-describe('_target param', () => {
+describe('_target is never sent (#4205)', () => {
     beforeEach(() => {
         vi.restoreAllMocks();
     });
 
-    it('dj-change includes _target matching field name attribute', async () => {
+    it('dj-change does not send _target', async () => {
         const dom = createTestEnv(`
             <div dj-view="app.FormView">
                 <input name="email" dj-change="validate" value="test@example.com" />
@@ -78,10 +77,10 @@ describe('_target param', () => {
         const calls = getFetchCalls(dom);
         const call = calls.find(c => c.eventName === 'validate');
         expect(call).toBeDefined();
-        expect(call.body._target).toBe('email');
+        expect(call.body).not.toHaveProperty('_target');
     });
 
-    it('dj-change uses id as _target fallback when no name', async () => {
+    it('dj-change with only an id does not send _target', async () => {
         const dom = createTestEnv(`
             <div dj-view="app.FormView">
                 <input id="id_email" dj-change="validate" value="test" />
@@ -99,10 +98,10 @@ describe('_target param', () => {
         const calls = getFetchCalls(dom);
         const call = calls.find(c => c.eventName === 'validate');
         expect(call).toBeDefined();
-        expect(call.body._target).toBe('id_email');
+        expect(call.body).not.toHaveProperty('_target');
     });
 
-    it('dj-change sets _target to null when no name or id', async () => {
+    it('dj-change with no name or id does not send _target', async () => {
         const dom = createTestEnv(`
             <div dj-view="app.FormView">
                 <input dj-change="validate" value="test" />
@@ -120,10 +119,10 @@ describe('_target param', () => {
         const calls = getFetchCalls(dom);
         const call = calls.find(c => c.eventName === 'validate');
         expect(call).toBeDefined();
-        expect(call.body._target).toBeNull();
+        expect(call.body).not.toHaveProperty('_target');
     });
 
-    it('dj-input includes _target matching field name', async () => {
+    it('dj-input does not send _target', async () => {
         const dom = createTestEnv(`
             <div dj-view="app.FormView">
                 <input name="search_query" dj-input="search" data-debounce="0" value="" />
@@ -142,10 +141,10 @@ describe('_target param', () => {
         const calls = getFetchCalls(dom);
         const call = calls.find(c => c.eventName === 'search');
         expect(call).toBeDefined();
-        expect(call.body._target).toBe('search_query');
+        expect(call.body).not.toHaveProperty('_target');
     });
 
-    it('dj-submit includes submitter name as _target when e.submitter exists', async () => {
+    it('dj-submit does not send _target', async () => {
         const dom = createTestEnv(`
             <div dj-view="app.FormView">
                 <form dj-submit="save">
@@ -168,11 +167,10 @@ describe('_target param', () => {
         const calls = getFetchCalls(dom);
         const call = calls.find(c => c.eventName === 'save');
         expect(call).toBeDefined();
-        // Without submitter, _target should be null (JSDOM doesn't support SubmitEvent.submitter)
-        expect(call.body).toHaveProperty('_target');
+        expect(call.body).not.toHaveProperty('_target');
     });
 
-    it('_target is not stripped by handleEvent (passes through to server)', async () => {
+    it('the declared field generated value is what identifies the field', async () => {
         const dom = createTestEnv(`
             <div dj-view="app.FormView">
                 <input name="username" dj-change="validate" value="test" />
@@ -190,9 +188,8 @@ describe('_target param', () => {
         const calls = getFetchCalls(dom);
         const call = calls.find(c => c.eventName === 'validate');
         expect(call).toBeDefined();
-        // _target should NOT be stripped (it's meaningful server-side data)
-        expect(call.body._target).toBe('username');
-        // But _targetElement should be stripped
+        expect(call.body).not.toHaveProperty('_target');
         expect(call.body).not.toHaveProperty('_targetElement');
+        expect(call.body.field).toBe('username');
     });
 });

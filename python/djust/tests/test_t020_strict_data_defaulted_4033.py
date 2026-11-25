@@ -68,8 +68,7 @@ def module(tmp_path):
 def _all(owner):
     engine = django_engine()
     assert engine is not None
-    # T028 is the 1.3 shape of these bindings (a legacy handler); it has its own tests.
-    return [m for m in _messages([scan_owner(owner, "view", engine, {})]) if m.id != "djust.T028"]
+    return list(_messages([scan_owner(owner, "view", engine, {})]))
 
 
 def _found(owner):

@@ -4,6 +4,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { JSDOM } from 'jsdom';
+import { openContracts } from './_open_contracts.js';
 import fs from 'fs';
 
 const clientCode = fs.readFileSync('./python/djust/static/djust/client.js', 'utf-8');
@@ -40,6 +41,7 @@ function createDom(innerHtml) {
   <div dj-view="test.views.TestView" dj-root>
     ${innerHtml}
   </div>
+  ${openContracts(innerHtml, 'test.views.TestView')}
 </body>
 </html>`, { runScripts: 'dangerously', pretendToBeVisual: true });
 
@@ -63,6 +65,7 @@ function createDom(innerHtml) {
     installIOStub(dom.window);
 
     dom.window.eval(clientCode);
+    dom.window.djust._installPageParameterContracts();
     return dom;
 }
 

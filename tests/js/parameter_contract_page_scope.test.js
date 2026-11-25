@@ -11,9 +11,12 @@ if (source.split(seam).length !== 2) throw new Error('Missing page contract test
 const strict = {policy: 'strict', coerce_types: true, parameters: [
     {name: 'value', type: 'int', kind: 'positional_or_keyword', required: true, reduced_checking: false},
 ]};
+const other = {policy: 'strict', coerce_types: true, parameters: [
+    {name: 'other', type: 'str', kind: 'positional_or_keyword', required: true, reduced_checking: false},
+]};
 const manifest = () => ({version: 1, owners: [
-    {view_id: null, component_id: null, handlers: {choose: strict, plain: {policy: 'legacy'}}},
-    {view_id: null, component_id: 'menu', handlers: {choose: {policy: 'legacy'}}},
+    {view_id: null, component_id: null, handlers: {choose: strict, plain: other}},
+    {view_id: null, component_id: 'menu', handlers: {choose: other}},
     {view_id: 'child', component_id: null, handlers: {choose: strict}},
 ]});
 const block = contracts =>
@@ -53,29 +56,30 @@ describe('initial page contract scope', () => {
     it('installs the rendered root contracts and resolves owners like server routing', () => {
         const {dom, resolve} = setup(block({view: 'app.Page', contracts: manifest()}));
         try {
-            expect(resolve('root').policy).toBe('strict');
+            expect(resolve('root').contract.policy).toBe('strict');
             expect(resolve('root').contract.parameters[0].name).toBe('value');
-            expect(resolve('root', 'plain').policy).toBe('legacy');
-            expect(resolve('component').policy).toBe('legacy');
+            expect(resolve('root', 'plain').contract.parameters[0].name).toBe('other');
+            expect(resolve('component').contract.parameters[0].name).toBe('other');
             // An embedded child's view_id wins over an enclosing component.
-            expect(resolve('child')).toMatchObject({policy: 'strict', viewId: 'child', componentId: null});
-            // Not declared by this mount: never strict, the server validates it.
-            expect(resolve('root', 'misspelled').policy).toBe('unknown');
+            expect(resolve('child')).toMatchObject({viewId: 'child', componentId: null});
+            expect(resolve('child').contract.policy).toBe('strict');
+            // Not declared by this mount: declares nothing, the server validates it.
+            expect(resolve('root', 'misspelled').contract).toBeNull();
             expect(resolve('root').transport).toBe(dom.window.pageTransport);
         } finally { dom.window.close(); }
     });
 
-    it('treats a page without a contract block as a legacy mount', () => {
+    it('treats a page without a contract block as a tree with no handlers', () => {
         const {dom, resolve} = setup();
         try {
-            expect(resolve('root').policy).toBe('legacy');
+            expect(resolve('root').contract).toBeNull();
         } finally { dom.window.close(); }
     });
 
     it('leaves another view\'s block unknown instead of applying stale rules', () => {
         const {dom, resolve} = setup(block({view: 'app.Other', contracts: manifest()}));
         try {
-            expect(resolve('root').policy).toBe('unknown');
+            expect(resolve('root').contract).toBeNull();
         } finally { dom.window.close(); }
     });
 
@@ -102,13 +106,13 @@ describe('HTTP fallback contract scope', () => {
         try {
             await send(dom);
             expect(dom.window._fetches[0]['X-Djust-Parameter-Contracts']).toBe('1');
-            expect(resolve('root').policy).toBe('legacy');
+            expect(resolve('root').contract).toBeNull();
             await send(dom);
             expect(dom.window._fetches[1]['X-Djust-Parameter-Contracts']).toBeUndefined();
         } finally { dom.window.close(); }
     });
 
-    it('never sends the header from a legacy page', async () => {
+    it('never sends the header from a page with no handlers', async () => {
         const {dom} = setup();
         try {
             await send(dom);
@@ -122,9 +126,9 @@ describe('HTTP fallback contract scope', () => {
         const {dom, resolve} = setup(block({view: 'app.Page', contracts: manifest()}),
             [{patches: [], parameter_contracts: replaced, parameter_contract_view: 'app.Page'}]);
         try {
-            expect(resolve('root', 'plain').policy).toBe('legacy');
+            expect(resolve('root', 'plain').contract.parameters[0].name).toBe('other');
             await send(dom);
-            expect(resolve('root', 'plain').policy).toBe('strict');
+            expect(resolve('root', 'plain').contract.parameters[0].name).toBe('value');
         } finally { dom.window.close(); }
     });
 
@@ -146,7 +150,7 @@ describe('transport selection', () => {
                     _parameterContracts: new Map([['app.Page', null]])});
             `);
             const resolved = resolve('root');
-            expect(resolved.policy).toBe('legacy');
+            expect(resolved.contract).toBeNull();
             expect(resolved.transport).not.toBe(dom.window.pageTransport);
         } finally { dom.window.close(); }
     });

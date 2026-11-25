@@ -1,3 +1,4 @@
+import {openContracts} from './_open_contracts.js';
 import {it, expect} from 'vitest';
 import {JSDOM} from 'jsdom';
 import {readFileSync} from 'node:fs';
@@ -10,15 +11,16 @@ const client = readFileSync('./python/djust/static/djust/client.js', 'utf8');
 
 function page() {
     const dom = new JSDOM(
-        '<!doctype html><body><div dj-root>' +
+        '<!doctype html><body><div dj-root dj-view="test.V">' +
         '<form id="login-form" action="/accounts/login/" method="POST" dj-submit="check" dj-trigger-action>' +
         '<input name="username" value="ann"><input name="password" type="password" value="pw">' +
         '<button type="submit">Sign in</button></form>' +
         '<form id="other" action="/other/" method="POST"><input name="x"></form>' +
-        '</div></body>',
+        '</div>' + openContracts('<form dj-submit="check">', 'test.V') + '</body>',
         {url: 'http://localhost/', runScripts: 'dangerously'},
     );
     dom.window.eval(client);
+    dom.window.djust._installPageParameterContracts();
     dom.window.djust.bindLiveViewEvents();
     return dom;
 }

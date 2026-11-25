@@ -16,7 +16,6 @@ from django.urls import path
 from djust import LiveView
 from djust.decorators import event_handler, state
 from djust.testing import open_live_page
-from djust.validation import get_project_parameter_policy
 
 pytestmark = [pytest.mark.django_db(transaction=True)]
 
@@ -48,10 +47,6 @@ def _routes():
     ):
         yield
     CALLS.clear()
-
-
-def test_the_project_default_is_strict():
-    assert get_project_parameter_policy() == "strict"
 
 
 async def test_an_unpinned_handler_is_strict_over_the_websocket():

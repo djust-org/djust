@@ -11,8 +11,7 @@ malicious parameters sent through WebSocket event messages. Covers:
 """
 
 import pytest
-from decimal import Decimal
-from uuid import UUID
+from typing import Any
 
 from djust.security.attribute_guard import (
     AttributeSecurityError,
@@ -20,28 +19,22 @@ from djust.security.attribute_guard import (
     is_safe_attribute_name,
     safe_setattr,
 )
-from djust.validation import (
-    coerce_parameter_types,
-    validate_handler_params,
-    validate_parameter_types,
-)
+from djust.validation import validate_handler_params
+
+
+def _bound(function):
+    """``function`` (written with a ``self``) as the bound method of a throwaway view."""
+
+    class _View:
+        pass
+
+    _View.handler = function
+    return _View().handler
 
 
 # ============================================================================
 # Attribute injection (prototype pollution) tests
 # ============================================================================
-
-
-@pytest.fixture(autouse=True)
-def _legacy_parameter_policy():
-    """This module tests the legacy parameter path; strict became the default in #4189.
-    Removed with the legacy path (#4198/#4205)."""
-    from djust.config import config
-
-    previous = config.get("event_parameter_policy", "strict")
-    config.set("event_parameter_policy", "legacy")
-    yield
-    config.set("event_parameter_policy", previous)
 
 
 class TestPrototypePollutionBlocked:
@@ -198,146 +191,6 @@ class TestAttributeNameValidation:
 
 
 # ============================================================================
-# Type coercion abuse tests
-# ============================================================================
-
-
-class TestTypeCoercionSQLInjection:
-    """Verify type coercion rejects SQL injection payloads."""
-
-    def test_sql_injection_in_int_param(self):
-        """SQL injection string fails int coercion, kept as original string."""
-
-        def handler(self, item_id: int = 0, **kwargs):
-            pass
-
-        result = coerce_parameter_types(handler, {"item_id": "1; DROP TABLE users;--"})
-        # Coercion fails, value stays as string
-        assert isinstance(result["item_id"], str)
-        assert "DROP TABLE" in result["item_id"]
-
-    def test_sql_injection_caught_by_type_validation(self):
-        """After failed coercion, type validation catches the mismatch."""
-
-        def handler(self, item_id: int = 0, **kwargs):
-            pass
-
-        params = coerce_parameter_types(handler, {"item_id": "1 OR 1=1"})
-        errors = validate_parameter_types(handler, params)
-        assert errors is not None
-        assert errors[0]["param"] == "item_id"
-        assert errors[0]["expected"] == "int"
-        assert errors[0]["actual"] == "str"
-
-    def test_sql_union_injection_in_uuid(self):
-        """SQL UNION injection in UUID param fails coercion."""
-
-        def handler(self, ref: UUID, **kwargs):
-            pass
-
-        result = coerce_parameter_types(handler, {"ref": "' UNION SELECT password FROM users--"})
-        # UUID coercion fails, value stays as string
-        assert isinstance(result["ref"], str)
-
-
-class TestTypeCoercionCommandInjection:
-    """Verify command injection payloads are handled safely in type coercion."""
-
-    def test_command_injection_in_int_param(self):
-        """Shell command in int param fails coercion."""
-
-        def handler(self, count: int = 0, **kwargs):
-            pass
-
-        result = coerce_parameter_types(handler, {"count": "$(rm -rf /)"})
-        assert isinstance(result["count"], str)  # Not coerced
-
-    def test_pipe_injection_in_string_param(self):
-        """String params preserve the value (strings are valid strings)."""
-
-        def handler(self, query: str = "", **kwargs):
-            pass
-
-        result = coerce_parameter_types(handler, {"query": "test | cat /etc/passwd"})
-        # String coercion succeeds (it is a string), but the app should
-        # handle this safely via Django ORM parameterized queries
-        assert result["query"] == "test | cat /etc/passwd"
-
-    def test_newline_injection_in_string_param(self):
-        """Newline characters in string params are preserved for the handler."""
-
-        def handler(self, value: str = "", **kwargs):
-            pass
-
-        result = coerce_parameter_types(handler, {"value": "line1\r\nline2"})
-        assert result["value"] == "line1\r\nline2"
-
-
-class TestTypeCoercionOverflow:
-    """Verify numeric overflow and edge cases in type coercion."""
-
-    def test_extremely_large_int(self):
-        """Very large integers are valid in Python, coercion should succeed."""
-
-        def handler(self, count: int = 0, **kwargs):
-            pass
-
-        result = coerce_parameter_types(handler, {"count": "9" * 1000})
-        assert isinstance(result["count"], int)
-
-    def test_float_nan(self):
-        """NaN string coerces to float NaN."""
-
-        def handler(self, value: float = 0.0, **kwargs):
-            pass
-
-        import math
-
-        result = coerce_parameter_types(handler, {"value": "nan"})
-        assert isinstance(result["value"], float)
-        assert math.isnan(result["value"])
-
-    def test_float_inf(self):
-        """Infinity string coerces to float inf."""
-
-        def handler(self, value: float = 0.0, **kwargs):
-            pass
-
-        import math
-
-        result = coerce_parameter_types(handler, {"value": "inf"})
-        assert isinstance(result["value"], float)
-        assert math.isinf(result["value"])
-
-    def test_decimal_extreme_precision(self):
-        """Extremely precise Decimal values are handled."""
-
-        def handler(self, price: Decimal = Decimal("0"), **kwargs):
-            pass
-
-        result = coerce_parameter_types(handler, {"price": "0." + "1" * 100})
-        assert isinstance(result["price"], Decimal)
-
-    def test_empty_string_int_coercion(self):
-        """Empty string coerces to 0 for int type."""
-
-        def handler(self, count: int = 0, **kwargs):
-            pass
-
-        result = coerce_parameter_types(handler, {"count": ""})
-        assert result["count"] == 0
-
-    def test_empty_string_float_coercion(self):
-        """Empty string coerces to 0.0 for float type."""
-
-        def handler(self, value: float = 0.0, **kwargs):
-            pass
-
-        result = coerce_parameter_types(handler, {"value": ""})
-        assert result["value"] == 0.0
-
-
-# ============================================================================
 # Positional argument override attacks
 # ============================================================================
 
@@ -348,45 +201,41 @@ class TestPositionalArgOverride:
     def test_positional_args_mapped_correctly(self):
         """Positional args map to handler params in order."""
 
-        def handler(self, item_id: int = 0, action: str = "", **kwargs):
+        def handler(self, item_id: int = 0, action: str = "", **kwargs: Any):
             pass
 
-        result = validate_handler_params(handler, {}, "test", positional_args=[42, "delete"])
+        result = validate_handler_params(_bound(handler), {}, "test", positional_args=[42, "delete"])
         assert result["valid"] is True
         assert result["coerced_params"]["item_id"] == 42
         assert result["coerced_params"]["action"] == "delete"
 
-    def test_positional_args_override_data_attrs(self):
-        """Positional args override conflicting data-* attributes."""
+    def test_a_value_given_positionally_and_by_name_is_refused(self):
+        """Strict (#4205): a conflicting named value never silently loses to the positional one."""
 
-        def handler(self, item_id: int = 0, **kwargs):
+        def handler(self, item_id: int = 0, **kwargs: Any):
             pass
 
-        # Attacker sends data-item-id="999" but inline handler has id=1
-        result = validate_handler_params(handler, {"item_id": "999"}, "test", positional_args=[1])
-        assert result["valid"] is True
-        assert result["coerced_params"]["item_id"] == 1  # Positional wins
+        result = validate_handler_params(_bound(handler), {"item_id": "999"}, "test", positional_args=[1])
+        assert result["valid"] is False
 
-    def test_excess_positional_args_ignored(self):
-        """Extra positional args beyond handler params are safely ignored."""
+    def test_excess_positional_args_are_refused(self):
+        """Strict (#4205): arguments beyond the signature are an error, not dropped."""
 
-        def handler(self, item_id: int = 0, **kwargs):
+        def handler(self, item_id: int = 0):
             pass
 
         result = validate_handler_params(
-            handler, {}, "test", positional_args=[42, "extra1", "extra2"]
+            _bound(handler), {}, "test", positional_args=[42, "extra1", "extra2"]
         )
-        assert result["valid"] is True
-        assert result["coerced_params"]["item_id"] == 42
-        assert "extra1" not in result["coerced_params"]
+        assert result["valid"] is False
 
     def test_no_positional_args_normal_flow(self):
-        """Without positional args, data-* params work normally."""
+        """Without positional args, declared named params work normally."""
 
-        def handler(self, value: str = "", **kwargs):
+        def handler(self, value: str = "", **kwargs: Any):
             pass
 
-        result = validate_handler_params(handler, {"value": "hello"}, "test", positional_args=[])
+        result = validate_handler_params(_bound(handler), {"value": "hello"}, "test", positional_args=[])
         assert result["valid"] is True
         assert result["coerced_params"]["value"] == "hello"
 
@@ -405,17 +254,17 @@ class TestHandlerValidationSecurity:
         def handler(self, value: str = ""):
             pass
 
-        result = validate_handler_params(handler, {"value": "ok", "__class__": "object"}, "test")
+        result = validate_handler_params(_bound(handler), {"value": "ok", "__class__": "object"}, "test")
         assert result["valid"] is False
-        assert "unexpected parameters" in result["error"]
+        assert "undeclared argument" in result["error"]
 
     def test_kwargs_handler_accepts_extra_params(self):
         """Handler with **kwargs accepts extra params (by design)."""
 
-        def handler(self, value: str = "", **kwargs):
+        def handler(self, value: str = "", **kwargs: Any):
             pass
 
-        result = validate_handler_params(handler, {"value": "ok", "extra_key": "data"}, "test")
+        result = validate_handler_params(_bound(handler), {"value": "ok", "extra_key": "data"}, "test")
         assert result["valid"] is True
 
     def test_missing_required_params_rejected(self):
@@ -424,19 +273,18 @@ class TestHandlerValidationSecurity:
         def handler(self, required_id: int):
             pass
 
-        result = validate_handler_params(handler, {}, "test")
+        result = validate_handler_params(_bound(handler), {}, "test")
         assert result["valid"] is False
-        assert "missing required parameters" in result["error"]
+        assert "required argument is missing" in result["error"]
 
     def test_type_mismatch_detected(self):
         """Type validation catches incorrect param types after coercion fails."""
 
-        def handler(self, count: int = 0, **kwargs):
+        def handler(self, count: int = 0, **kwargs: Any):
             pass
 
-        result = validate_handler_params(handler, {"count": "not-a-number"}, "test")
+        result = validate_handler_params(_bound(handler), {"count": "not-a-number"}, "test")
         assert result["valid"] is False
-        assert result["type_errors"] is not None
 
 
 # ============================================================================

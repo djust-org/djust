@@ -35,8 +35,8 @@ from djust.components.base import LiveComponent
 
 
 def _messages(reports):
-    """T019-T022 only: T028 (a legacy handler strict would refuse) has its own tests."""
-    return [m for m in _all_messages(reports) if m.id != "djust.T028"]
+    """The T019-T022 messages of ``reports``."""
+    return _all_messages(reports)
 
 
 MODULE = "binding_check_fixture"

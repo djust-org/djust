@@ -31,7 +31,7 @@ from asgiref.sync import sync_to_async
 from channels.testing import WebsocketCommunicator
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.sessions.backends.db import SessionStore
-from django.core.checks import ERROR, WARNING
+from django.core.checks import ERROR
 from django.test import RequestFactory, override_settings
 
 from djust import LiveView, state
@@ -282,9 +282,8 @@ async def test_a_catch_all_receives_both_recovery_values():
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
-async def test_the_strict_project_policy_needs_no_handler_declaration():
-    with override_settings(LIVEVIEW_CONFIG={"event_parameter_policy": "strict"}):
-        params, text, browser = await _recover("ws", ProjectStrict)
+async def test_strict_is_the_project_default_so_a_handler_needs_no_declaration():
+    params, text, browser = await _recover("ws", ProjectStrict)
     try:
         assert _application(params) == {"form_values": EXPECTED_FORM, "data_attrs": EXPECTED_DATA}
         assert CALLS == [("project", EXPECTED_FORM, EXPECTED_DATA)]
@@ -508,10 +507,7 @@ def _check(handler_source: str, **liveview_config: Any) -> list:
     sys.modules[name] = module
     try:
         exec(compile(_VIEW % handler_source, "<4178>", "exec"), module.__dict__)  # noqa: S102
-        # The "under legacy" cases state the project policy; strict is the default (#4189).
-        with override_settings(
-            LIVEVIEW_CONFIG={"event_parameter_policy": "legacy", **liveview_config}
-        ):
+        with override_settings(LIVEVIEW_CONFIG=liveview_config):
             messages = check_event_parameter_contracts(None)
     finally:
         del sys.modules[name]
@@ -522,18 +518,9 @@ def _check(handler_source: str, **liveview_config: Any) -> list:
 
 
 @pytest.mark.parametrize("handler", [OLD_DECLARED, OLD_KWARGS], ids=["declared", "kwargs"])
-def test_v031_warns_about_the_envelope_under_legacy(handler, monkeypatch):
-    _source_for(monkeypatch, handler)
-    found = _check(handler)
-    assert [(m.id, m.level) for m in found] == [("djust.V031", WARNING)]
-    assert "2.0 removes it" in found[0].msg
-    assert NEW_SIGNATURE in found[0].hint
-
-
-@pytest.mark.parametrize("handler", [OLD_DECLARED, OLD_KWARGS], ids=["declared", "kwargs"])
 def test_v031_is_an_error_for_the_envelope_under_strict(handler, monkeypatch):
     _source_for(monkeypatch, handler)
-    found = _check(handler, event_parameter_policy="strict")
+    found = _check(handler)
     # One message naming the replacement, not also V016's reserved-name error.
     assert [(m.id, m.level) for m in found] == [("djust.V031", ERROR)]
     assert "strict dispatch never delivers" in found[0].msg
@@ -541,19 +528,13 @@ def test_v031_is_an_error_for_the_envelope_under_strict(handler, monkeypatch):
 
 
 def test_v031_is_quiet_for_the_2_0_spelling_under_strict():
-    assert _check(NEW, event_parameter_policy="strict") == []
-
-
-def test_v031_is_an_error_for_the_2_0_spelling_under_legacy():
-    found = _check(NEW)
-    assert [(m.id, m.level) for m in found] == [("djust.V031", ERROR)]
-    assert "legacy parameter policy" in found[0].msg
+    assert _check(NEW) == []
 
 
 def test_v031_ignores_a_read_in_a_handler_no_recovery_binding_targets(monkeypatch):
     other = OLD_KWARGS.replace("def restore", "def other")
     _source_for(monkeypatch, other)
-    assert _check(other, event_parameter_policy="strict") == []
+    assert _check(other) == []
 
 
 def _check_module(source: str, monkeypatch, **liveview_config: Any) -> list:
@@ -567,10 +548,7 @@ def _check_module(source: str, monkeypatch, **liveview_config: Any) -> list:
     sys.modules[name] = module
     try:
         exec(compile(source, "<4178>", "exec"), module.__dict__)  # noqa: S102
-        # The "under legacy" cases state the project policy; strict is the default (#4189).
-        with override_settings(
-            LIVEVIEW_CONFIG={"event_parameter_policy": "legacy", **liveview_config}
-        ):
+        with override_settings(LIVEVIEW_CONFIG=liveview_config):
             messages = check_event_parameter_contracts(None)
     finally:
         del sys.modules[name]
@@ -605,21 +583,18 @@ class Page(LiveView):
 )
 
 
-@pytest.mark.parametrize(
-    "config, level", [({}, WARNING), ({"event_parameter_policy": "strict"}, ERROR)]
-)
-def test_v031_reports_a_computed_target_that_reads_the_envelope(config, level, monkeypatch):
+def test_v031_reports_a_computed_target_that_reads_the_envelope(monkeypatch):
     """dj-auto-recover="{{ handler }}" cannot be resolved statically; a handler
     reading _form_values from **kwargs is a recovery handler by that read."""
-    found = _check_module(COMPUTED, monkeypatch, **config)
-    assert [(i, lvl) for i, lvl, _ in found] == [("djust.V031", level)]
+    found = _check_module(COMPUTED, monkeypatch)
+    assert [(i, lvl) for i, lvl, _ in found] == [("djust.V031", ERROR)]
     assert "possible target of a computed dj-auto-recover" in found[0][2]
     assert "reads _form_values from **kwargs" in found[0][2]
 
 
 def test_v031_ignores_a_handler_a_computed_target_may_name_but_that_reads_nothing(monkeypatch):
     source = COMPUTED.replace('values = kwargs.get("_form_values", {})', "pass")
-    assert _check_module(source, monkeypatch, event_parameter_policy="strict") == []
+    assert _check_module(source, monkeypatch) == []
 
 
 POSITIONAL = (
@@ -663,11 +638,10 @@ class Second(Base):
 )
 
 
-@pytest.mark.parametrize("config", [{}, {"event_parameter_policy": "strict"}])
-def test_v031_reports_an_inherited_handler_once(config, monkeypatch):
+def test_v031_reports_an_inherited_handler_once(monkeypatch):
     """One message per declaration, not one per view whose template targets it,
     and no V016 for its "_" names under any of them."""
-    found = _check_module(INHERITED, monkeypatch, **config)
+    found = _check_module(INHERITED, monkeypatch)
     assert [i for i, _lvl, _msg in found] == ["djust.V031"]
     assert "this dj-auto-recover handler declares _form_values" in found[0][2]
 
@@ -703,17 +677,13 @@ class Editor(LiveComponent):
 def test_v031_leaves_untargeted_and_component_handlers_to_v016(monkeypatch):
     """A "_" parameter on a handler no recovery binding targets, or on a
     LiveComponent (recovery events reach the page's view), is V016's reserved
-    name under strict, and nothing under legacy."""
-    strict = _check_module(NOT_A_TARGET, monkeypatch, event_parameter_policy="strict")
+    name."""
+    strict = _check_module(NOT_A_TARGET, monkeypatch)
     # "<module>.Page.other(): ..." -> "Page.other"
     assert sorted((i, m.split("(")[0].split(".", 1)[1]) for i, _lvl, m in strict) == [
         ("djust.V016", "Editor.save"),
         ("djust.V016", "Page.other"),
     ]
-    legacy = _check_module(NOT_A_TARGET, monkeypatch)
-    # Only the 2.0 spelling under legacy, on the real target.
-    assert [(i, lvl) for i, lvl, _ in legacy] == [("djust.V031", ERROR)]
-    assert ".restore()" in legacy[0][2]
 
 
 def test_v019_is_never_emitted():

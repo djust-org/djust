@@ -34,6 +34,7 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { JSDOM } from 'jsdom';
+import { withContracts } from './_open_contracts.js';
 import { readFileSync } from 'fs';
 import { setTimeout as nativeSleep } from 'node:timers/promises';
 
@@ -41,7 +42,7 @@ const clientCode = readFileSync('./python/djust/static/djust/client.js', 'utf-8'
 
 function createTestEnv(bodyHtml) {
     const dom = new JSDOM(
-        `<!DOCTYPE html><html><body>${bodyHtml}</body></html>`,
+        `<!DOCTYPE html><html><body>${withContracts(bodyHtml)}</body></html>`,
         { runScripts: 'dangerously', url: 'http://localhost/' }
     );
 
@@ -131,9 +132,9 @@ describe('#2781 TableComponent row checkbox identity must ride dj-value-*', () =
         // payload — see toggle_row's signature in table.py.
     });
 
-    it('the same data-row-id DOES reach a dj-click handler (the contrast)', async () => {
-        // Explains why data-row-id looked plausible: it works for dj-click,
-        // just not for the dj-change the checkbox actually uses.
+    it('the same data-row-id no longer reaches a dj-click handler either (#4205)', async () => {
+        // data-row-id looked plausible because 1.x collected data-* on dj-click.
+        // A strict binding sends only dj-value-*: no binder reads data-*.
         const dom = createTestEnv(`
             <div dj-view="app.TableView">
                 <button dj-click="toggle_row" data-component-id="tablecomponent_1"
@@ -147,6 +148,6 @@ describe('#2781 TableComponent row checkbox identity must ride dj-value-*', () =
 
         const call = findCall(dom, 'toggle_row');
         expect(call).toBeDefined();
-        expect(call.body.row_id).toBe('7');
+        expect(call.body.row_id).toBeUndefined();
     });
 });

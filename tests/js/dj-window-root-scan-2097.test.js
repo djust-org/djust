@@ -21,12 +21,13 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { JSDOM } from 'jsdom';
+import { withContracts } from './_open_contracts.js';
 import { readFileSync } from 'fs';
 
 const clientCode = readFileSync('./python/djust/static/djust/client.js', 'utf-8');
 
 function createTestEnv(bodyHtml) {
-    const dom = new JSDOM(`<!DOCTYPE html><html><body>${bodyHtml}</body></html>`, {
+    const dom = new JSDOM(`<!DOCTYPE html><html><body>${withContracts(bodyHtml)}</body></html>`, {
         runScripts: 'dangerously',
         url: 'http://localhost/',
     });

@@ -1,12 +1,9 @@
 """The framework's own markup passes event arguments as ``dj-value-*`` (#4186).
 
 A strict handler (ADR-036) receives only ``dj-value-*`` arguments: the client
-never collects ``data-*`` for it. Under the legacy policy the click-style
-binders collect ``data-*`` AND ``dj-value-*`` (``extractTypedParams``,
-``08-event-parsing.js``), while the form-field binders (input, change, blur,
-focus, keydown, keyup) collect only ``dj-value-*`` under either policy
-(``buildFormEventParams``, ``09-event-binding.js``). So a ``dj-value-x`` sends
-the same ``x`` under both policies, and a ``data-x`` reaches no strict handler.
+never collects ``data-*`` for it, whatever the binder (#4205 removed the 1.x
+``extractTypedParams`` that did for the click-style ones). So a ``dj-value-x``
+sends ``x`` and a ``data-x`` reaches no handler.
 
 What this file proves:
 
@@ -18,12 +15,10 @@ What this file proves:
   A new ``data-*`` argument on a framework event element fails here.
 * ``TestConvertedSites`` pins one converted element per component family
   (``tests/js/fixtures/framework_dj_value_4186.json``) to what the framework
-  renders now, and binds the arguments the client sends for it to the handler
-  under the strict and the legacy policy. ``tests/js/framework_dj_value_4186.test.js``
+  renders now, and binds the arguments the client sends for it to the handler. ``tests/js/framework_dj_value_4186.test.js``
   proves the client sends exactly those arguments from that element.
 * ``test_data_table_events_over_websocket`` sends those arguments through a real
-  ``WebsocketCommunicator`` to the data table mixin's handlers under both
-  policies (the table and tabs components' own WebSocket tests are in
+  ``WebsocketCommunicator`` to the data table mixin's handlers (the table and tabs components' own WebSocket tests are in
   ``test_table_sort_handler_2776.py``).
 
 Regenerate the fixture with ``DJUST_REGEN_4186_FIXTURE=1``.
@@ -43,7 +38,6 @@ from asgiref.sync import sync_to_async
 from django.template import engines
 
 from djust import LiveView
-from djust.config import config
 from djust.decorators import event_handler
 from djust.validation import validate_handler_params, validated_call_arguments
 
@@ -57,14 +51,14 @@ EVENT_ATTR = re.compile(
     r"dj-(click|change|input|submit|blur|focus|keydown|keyup|paste|click-away|"
     r"mouseenter|mouseleave|mounted|poll|shortcut|window-[a-z-]+|document-[a-z-]+)(\.[a-z.]+)?"
 )
-# The binders that collect ``data-*`` under the legacy policy; the rest are form-field binders.
+# The form-field binders (the rest are click-style).
 FORM_FIELD_EVENTS = {"change", "input", "submit", "blur", "focus", "keydown", "keyup", "paste"}
 
 # ``data-*`` attributes a framework event element may carry, and why each is not an
 # argument. ``files`` scopes a name to the source files allowed to put it on an event
 # element (``None``: anywhere). Everything else must be a ``dj-value-*``.
 NON_ARGUMENTS: Dict[str, Tuple[str, Optional[Tuple[str, ...]]]] = {
-    # Never collected: the client strips them (extractTypedParams, 08-event-parsing.js).
+    # Never collected: no binder sends data-*.
     "data-component-id": ("routing: names the component the event is sent to", None),
     "data-dj-close": ("marks a dialog's close control (51-keyboard-nav.js); stripped", None),
     "data-loading": ("loading-state marker; stripped", None),
@@ -105,7 +99,7 @@ NON_ARGUMENTS: Dict[str, Tuple[str, Optional[Tuple[str, ...]]]] = {
         "calendar day marker; the day is sent as dj-value-value",
         ("components/templatetags/_advanced.py", "components/components/calendar_view.py"),
     ),
-    # On a form-field binding, which collects no data-* under either policy.
+    # On a form-field binding, which collects no data-*.
     "data-parent": (
         "dependent select: a dj-change element, never collected",
         ("components/templatetags/_forms.py", "components/components/dependent_select.py"),
@@ -416,9 +410,6 @@ class TestNoDataArguments:
         allowed = {
             "components/components/button.py",
             "components/components/card.py",
-            # Hint text of the legacy policy's type errors, not markup; that path
-            # goes with the legacy parameter policy (#4205).
-            "validation.py",
         }
         found = sorted(
             f"{path.relative_to(PACKAGE)}:{n}"
@@ -671,16 +662,6 @@ class TestConvertedSites:
             assert names == set(entry["params"]), entry
 
 
-@pytest.fixture
-def policy(request):
-    old = config.get("event_parameter_policy", "strict")
-    config.set("event_parameter_policy", request.param)
-    try:
-        yield request.param
-    finally:
-        config.set("event_parameter_policy", old)
-
-
 class _UserHandlers(LiveView):
     """The handlers an application declares for the framework tags' events, the
     strict way: each declares the arguments the tag sends, nothing more."""
@@ -758,9 +739,8 @@ def _bind_and_call(handler: Any, params: Dict[str, Any]) -> Any:
     return handler(*args, **kwargs)
 
 
-@pytest.mark.parametrize("policy", ["strict", "legacy"], indirect=True)
 class TestHandlersReceiveTheArguments:
-    def test_user_handlers(self, policy):
+    def test_user_handlers(self):
         view = _UserHandlers()
         fixture = _elements()
         for case_id, expected in _EXPECTED_USER_RESULTS.items():
@@ -768,7 +748,7 @@ class TestHandlersReceiveTheArguments:
             handler = getattr(view, entry["event"])
             assert _bind_and_call(handler, _client_params(entry)) == expected, case_id
 
-    def test_data_table_mixin_handlers(self, policy):
+    def test_data_table_mixin_handlers(self):
         view = _TableView()
         view.mount(None)
         fixture = _elements()
@@ -782,7 +762,7 @@ class TestHandlersReceiveTheArguments:
         _bind_and_call(view.on_table_filter, _client_params(fixture["data_table.filter"]))
         assert view.table_filters == {"name": "Ann"}
 
-    def test_expression_filter_takes_the_column(self, policy):
+    def test_expression_filter_takes_the_column(self):
         view = _TableView()
         view.mount(None)
         _bind_and_call(view.on_table_expression, {"value": ">1", "column": "name"})
@@ -792,7 +772,7 @@ class TestHandlersReceiveTheArguments:
         )
         assert view.table_active_expressions == {}
 
-    def test_validate_field_from_a_combobox_option(self, policy):
+    def test_validate_field_from_a_combobox_option(self):
         fixture = _elements()
         view = _FormView()
         _bind_and_call(view.validate_field, _client_params(fixture["combobox"]))
@@ -857,8 +837,7 @@ async def _mount(view_path: str):
 
 @pytest.mark.asyncio
 @pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize("policy", ["strict", "legacy"], indirect=True)
-async def test_data_table_events_over_websocket(policy):
+async def test_data_table_events_over_websocket():
     from django.test import override_settings
 
     fixture = _elements()
@@ -866,12 +845,8 @@ async def test_data_table_events_over_websocket(policy):
         socket, mounted = await _mount(f"{_MODULE}._TableView")
         try:
             contracts = mounted.get("parameter_contracts")
-            if policy == "strict":
-                handlers = contracts["owners"][0]["handlers"]
-                assert handlers["on_table_sort"]["policy"] == "strict"
-            else:
-                # A legacy mount publishes no strict contract.
-                assert contracts is None or "strict" not in json.dumps(contracts), contracts
+            handlers = contracts["owners"][0]["handlers"]
+            assert handlers["on_table_sort"]["policy"] == "strict"
             steps = [
                 ("data_table.sort", "name|2|"),
                 ("data_table.page", "name|1|"),

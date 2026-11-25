@@ -15,6 +15,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { JSDOM } from 'jsdom';
+import { openContracts } from './_open_contracts.js';
 import fs from 'fs';
 
 const clientCode = fs.readFileSync('./python/djust/static/djust/client.js', 'utf-8');
@@ -71,6 +72,7 @@ function createHarness(handlerConfig) {
     const dom = new JSDOM(
         '<!DOCTYPE html><html><head></head><body>'
         + '<div dj-view="test.V" dj-root><button id="btn" dj-click="search">go</button></div>'
+        + openContracts('<button dj-click="search">', 'test.V', ['search'])
         + '</body></html>',
         { runScripts: 'dangerously', url: 'http://localhost/', pretendToBeVisual: true }
     );
