@@ -31,7 +31,7 @@ What it cannot see: a hand-off built dynamically (``getattr(asgiref.sync, name)`
 ``partial(api_in_a_variable, ...)`` is not), and a hook reached through a call the exact
 resolver cannot follow (an attribute call to a method defined in several classes).
 
-What it asserts without checking: the ``outside`` (12), ``entry`` (4) and ``external`` (3)
+What it asserts without checking: the ``outside`` (13), ``entry`` (4) and ``external`` (3)
 entries of ``ALLOWED`` are named and carry a reason, and nothing more. They are threads of
 other subsystems (clocks, the worker pool, the dev server), the HTTP request entry, and
 calls into Django or the Rust extension; no test here proves they enter no hook. And an
@@ -767,6 +767,11 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     ("websocket.py", "LiveViewConsumer._queue_on_lane", "consumer._run_lane_item"): outside(_LANE),
     ("websocket.py", "LiveViewConsumer.handle_unmount", "self._unmount_slot"): outside(_LANE),
     ("websocket.py", "LiveViewConsumer._handle_upload_frame", "owner._run_lane_item"): outside(
+        _LANE
+    ),
+    # #4312: an upload hook queued on the owner's lane; it runs as its own
+    # turn (_run_upload_hook_turn) when the lane reaches it.
+    ("websocket.py", "LiveViewConsumer._run_upload_hook", "self._run_queued_upload_hook"): outside(
         _LANE
     ),
     (
@@ -2078,4 +2083,4 @@ def test_the_unchecked_allowed_kinds_are_the_ones_the_module_docstring_names():
     """The docstring says which entries carry a reason and no mechanical check; keep that
     list from drifting (#3646 review)."""
     counts = collections.Counter(entry_.kind for entry_ in ALLOWED.values())
-    assert (counts["outside"], counts["entry"], counts["external"]) == (12, 4, 3), counts
+    assert (counts["outside"], counts["entry"], counts["external"]) == (13, 4, 3), counts
