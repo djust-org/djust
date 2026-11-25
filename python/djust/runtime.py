@@ -4674,6 +4674,21 @@ class ViewRuntime(RuntimeTurnPort):
                 }
 
         await self.transport.send(mount_msg)
+        # #4181: a carried sticky child whose updatable inputs this page changed
+        # took them through ``_on_sticky_update``; the browser reattached its old
+        # DOM with the mount frame, so it is re-rendered right after it.
+        for child in view_instance.__dict__.pop("_djust_sticky_refresh", None) or ():
+            slot = getattr(child, "_view_id", None)
+            if slot is None or view_instance._get_all_child_views().get(slot) is not child:
+                continue
+            try:
+                from .websocket import render_embedded_child_html
+
+                html = await sync_to_async(render_embedded_child_html)(child)
+            except Exception:  # noqa: BLE001 — application render errors may carry values
+                logger.error("Sticky child refresh after navigation failed")
+                continue
+            await self.transport.send({"type": "embedded_update", "view_id": slot, "html": html})
         # From here a server-originated turn (push / tick, #3809) may address
         # this view: before the mount frame the client has nothing to patch.
         self._mount_sent_for = view_instance

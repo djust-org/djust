@@ -332,7 +332,10 @@ token = state("", persist="server", render=False)  # handlers only, never templa
   them in `get_context_data()`.
 - **Embedded children.** Sticky explicit children persist their declared
   fields. Non-sticky explicit children are transient and may not declare
-  persisted fields.
+  persisted fields. A sticky child's `{% live_render %}` inputs are part of
+  its identity, except those it names in `sticky_update_inputs`, which reach
+  its `_on_sticky_update` hook instead (see
+  [Sticky LiveViews](../guides/sticky-liveviews.md)).
 - **`lazy=True` children.** A lazy explicit child is a transient child that
   mounts when its slot is filled, on the plain page render and on the
   streaming GET. The fill reads the session and user from storage again and

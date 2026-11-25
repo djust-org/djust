@@ -29,7 +29,7 @@ import itertools
 import logging
 import re
 import uuid
-from typing import Any, Callable, Dict, Optional, Union
+from typing import Any, Callable, Dict, Optional, Tuple, Union
 
 from .._mapping import mapping_items
 
@@ -108,6 +108,14 @@ class StickyChildRegistry:
 
     # Populated by ``_init_sticky``; declared here for type checkers.
     _child_views: Dict[str, Any]
+
+    #: The ``{% live_render %}`` inputs of an explicit sticky child that may
+    #: change without remounting it (#4181). They are left out of the child's
+    #: identity (reuse, carry across ``live_redirect``, state binding): a change
+    #: to one reaches :meth:`_on_sticky_update`, and the child keeps its state.
+    #: A change to any other input remounts the child. ``mount()`` still gets
+    #: every input.
+    sticky_update_inputs: Tuple[str, ...] = ()
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -334,6 +342,8 @@ class StickyChildRegistry:
             class Sidebar(LiveView):
                 sticky = True
                 sticky_id = "sidebar"
+                sticky_update_inputs = ("section",)
+                section = state("home")
 
                 def mount(self, request, section="home", **kwargs):
                     self.section = section
@@ -362,13 +372,18 @@ class StickyChildRegistry:
           every render; the hook must be idempotent.
         * Private by name, so no client event can name it: it is reachable
           only from the ``{% live_render %}`` tag, never over the socket.
-        * Not called for a sticky preserved across ``live_redirect``: that
-          child is not rendered again, the browser keeps its DOM.
+        * A legacy sticky preserved across ``live_redirect`` is not called:
+          that child is not rendered again, the browser keeps its DOM. An
+          explicit one carried there is called with the destination's changed
+          updatable inputs, and re-rendered to the browser after the mount
+          frame.
         * A child that does not override it keeps today's behaviour: the new
           values are ignored and djust logs a warning naming them.
-        * A child with ``exposure_policy = "explicit"`` is remounted when its
-          inputs change (they are part of its reuse identity), so this is
-          never reached for one.
+        * A child with ``exposure_policy = "explicit"`` receives only the
+          inputs named in its ``sticky_update_inputs``. Every other input is
+          part of its identity: a change to one remounts the child (its
+          ``persist="server"`` state is not restored either), so this is
+          never reached for it.
 
         The default does nothing.
         """

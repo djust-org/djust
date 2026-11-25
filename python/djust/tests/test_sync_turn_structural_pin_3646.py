@@ -625,6 +625,12 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
         "ViewRuntime._run_child_event",
         "render_embedded_child_html",
     ): plumbing(_RENDER, _GET_TEMPLATE),
+    # #4181: a carried sticky child re-rendered after the navigation's mount frame.
+    (
+        "runtime.py",
+        "ViewRuntime._dispatch_mount_body",
+        "render_embedded_child_html",
+    ): plumbing(_RENDER, _GET_TEMPLATE),
     (
         "runtime.py",
         "ViewRuntime._dispatch_url_change_inner",

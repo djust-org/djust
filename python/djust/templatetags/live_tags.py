@@ -1847,6 +1847,24 @@ _STICKY_MOUNT_KWARGS_ATTR = "_djust_sticky_mount_kwargs"
 _STICKY_KWARGS_WARNED_ATTR = "_djust_sticky_kwargs_warned"
 
 
+def _sticky_identity_inputs(
+    child_cls: type, view_path: str, kwargs: Dict[str, Any]
+) -> Dict[str, Any]:
+    """The tag inputs that are part of an explicit sticky child's identity (#4181).
+
+    The names in the child's ``sticky_update_inputs`` are left out: a change to
+    one of them reuses the child and reaches ``_on_sticky_update`` instead of
+    remounting it. ``mount()`` still receives every input.
+    """
+    names = getattr(child_cls, "sticky_update_inputs", ())
+    if type(names) is not tuple or any(type(n) is not str for n in names):
+        raise TemplateSyntaxError(
+            "{%% live_render %%} %r: sticky_update_inputs must be a tuple of input names."
+            % view_path
+        )
+    return {k: v for k, v in kwargs.items() if k not in names}
+
+
 def _record_sticky_mount_kwargs(child: Any, kwargs: Dict[str, Any]) -> None:
     """Remember the kwargs a sticky child was mounted with (#2919)."""
     try:
@@ -1878,7 +1896,7 @@ def _changed_sticky_kwargs(child: Any, kwargs: Dict[str, Any]) -> Dict[str, Any]
     return changed
 
 
-def _apply_sticky_input_changes(child: Any, kwargs: Dict[str, Any], view_path: str) -> None:
+def _apply_sticky_input_changes(child: Any, kwargs: Dict[str, Any], view_path: str) -> bool:
     """Hand changed ``{% live_render %}`` kwargs to a reused sticky child (#2919).
 
     Called on the live-instance-reuse path, after the child was re-authorized
@@ -1891,16 +1909,18 @@ def _apply_sticky_input_changes(child: Any, kwargs: Dict[str, Any], view_path: s
 
     A child without the override keeps the pre-hook behaviour: the new values
     are ignored and :func:`_warn_if_sticky_kwargs_changed` says so.
+
+    Returns whether the hook ran.
     """
     from ..mixins.sticky import StickyChildRegistry
 
     hook = getattr(type(child), "_on_sticky_update", None)
     if hook is None or hook is StickyChildRegistry._on_sticky_update:
         _warn_if_sticky_kwargs_changed(child, kwargs, view_path)
-        return
+        return False
     changed = _changed_sticky_kwargs(child, kwargs)
     if not changed:
-        return
+        return False
     if inspect.iscoroutinefunction(hook):
         raise TypeError(
             "%s._on_sticky_update must be a plain function: it runs while the "
@@ -1908,6 +1928,7 @@ def _apply_sticky_input_changes(child: Any, kwargs: Dict[str, Any], view_path: s
         )
     child._on_sticky_update(changed)
     _record_sticky_mount_kwargs(child, kwargs)
+    return True
 
 
 def _warn_if_sticky_kwargs_changed(
@@ -2492,6 +2513,8 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
             # Template literals arrive as SafeString; the identity is exact-str.
             preferred_view_id = str.__str__(preferred_view_id)
     sticky_id_value = None
+    # The inputs an explicit sticky child's identity is computed from (#4181).
+    identity_kwargs = kwargs
     if sticky_kwarg:
         if getattr(child_cls, "sticky", False) is not True:
             raise TemplateSyntaxError(
@@ -2521,6 +2544,8 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
         seen.add(sticky_id_value)
         # Pin the sticky_id as the view_id for register/dispatch.
         preferred_view_id = sticky_id_value
+        if explicit_target:
+            identity_kwargs = _sticky_identity_inputs(child_cls, view_path, kwargs)
 
         # ADR-014: auto-detect a preserved sticky carried over from the
         # previous view via ``LiveViewConsumer._sticky_preserved``. When
@@ -2540,15 +2565,23 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
         if survivor is not None and explicit_target:
             from .._exposure_child_identity import carried_reuse_identity, child_can_reuse
 
-            if not child_can_reuse(survivor, child_cls, parent, request, sticky_id_value, kwargs):
+            if not child_can_reuse(
+                survivor, child_cls, parent, request, sticky_id_value, identity_kwargs
+            ):
                 carried_identity = carried_reuse_identity(
-                    survivor, child_cls, parent, request, sticky_id_value, kwargs
+                    survivor, child_cls, parent, request, sticky_id_value, identity_kwargs
                 )
         if (
             survivor is not None
             and carried_identity is None
             and not _match_sticky_child(
-                survivor, child_cls, parent, request, sticky_id_value, kwargs, preserved=True
+                survivor,
+                child_cls,
+                parent,
+                request,
+                sticky_id_value,
+                identity_kwargs,
+                preserved=True,
             )
         ):
             survivor = None
@@ -2559,7 +2592,7 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
                     request,
                     parent,
                     sticky_id_value,
-                    kwargs,
+                    identity_kwargs,
                     view_path,
                     carried_identity=carried_identity,
                 )
@@ -2598,7 +2631,9 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
                         # all of the subtree or none of it: prepared first,
                         # written in one session save.
                         moves = [
-                            rebind_child_state(survivor, parent, request, sticky_id_value, kwargs)
+                            rebind_child_state(
+                                survivor, parent, request, sticky_id_value, identity_kwargs
+                            )
                         ]
                         for descendant, _identity in planned:
                             moves.append(
@@ -2625,12 +2660,15 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
                 # may have populated attributes (auth, session, etc.)
                 # the survivor's handlers will read.
                 survivor.request = request
-                _warn_if_sticky_kwargs_changed(
-                    survivor,
-                    {k: v for k, v in kwargs.items() if k != "lazy"},
-                    view_path,
-                    preserved=True,
-                )
+                tag_inputs = {k: v for k, v in kwargs.items() if k != "lazy"}
+                if not _legacy_policy(type(survivor)):
+                    # #4181: a carried explicit child takes its changed
+                    # updatable inputs through its hook, and is re-rendered to
+                    # the browser right after the mount frame.
+                    if _apply_sticky_input_changes(survivor, tag_inputs, view_path):
+                        parent.__dict__.setdefault("_djust_sticky_refresh", []).append(survivor)
+                else:
+                    _warn_if_sticky_kwargs_changed(survivor, tag_inputs, view_path, preserved=True)
                 # ``consumer`` is guaranteed non-None here: ``survivor`` was
                 # read from ``preserved_map``, which is only set when
                 # ``consumer`` is truthy (see the ``... if consumer else None``
@@ -3034,7 +3072,7 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
                 )
                 existing_child = None
         if existing_child is not None and not _match_sticky_child(
-            existing_child, child_cls, parent, request, preferred_view_id, kwargs
+            existing_child, child_cls, parent, request, preferred_view_id, identity_kwargs
         ):
             existing_child = None
         # Only reuse a genuine sticky instance of the EXPECTED class. A class
@@ -3052,7 +3090,7 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
                 request,
                 parent,
                 preferred_view_id,
-                kwargs,
+                identity_kwargs,
                 view_path,
                 registered_view_id=preferred_view_id,
             )
@@ -3154,7 +3192,8 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
         # Compile the trusted ownership scope before mount can mutate inputs.
         # Legacy mixed-policy children remain on their existing path; an
         # explicit child cannot infer an explicit contract from legacy ancestry.
-        explicit_mount_inputs = clone_json_state(kwargs)
+        # #4181: a sticky child's updatable inputs are not part of its identity.
+        explicit_mount_inputs = clone_json_state(identity_kwargs)
         record_child_mount_inputs(child, explicit_mount_inputs)
         if sticky_kwarg:
             explicit_adapter = child_state_adapter(
