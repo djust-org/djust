@@ -155,18 +155,24 @@ class StickyChildRegistry:
             return preferred
         per_render = self.__dict__.get("_render_child_ids")
         if per_render is not None:
+            # Ids handed out in this render that are not registered (yet): a
+            # lazy slot registers its child only when filled, so the registry
+            # alone would give an eager twin the same id (#4173 review).
+            assigned = self.__dict__.setdefault("_render_assigned_ids", set())
             if identity:
                 # A callable is only run here: over a socket the id is the
                 # counter's and the (possibly large) arguments are not hashed.
                 base = f"child_{identity() if callable(identity) else identity}"
                 candidate, n = base, 1
-                while candidate in registry:
+                while candidate in registry or candidate in assigned:
                     n += 1
                     candidate = f"{base}_{n}"
+                assigned.add(candidate)
                 return candidate
             while True:
                 candidate = f"child_{next(per_render)}"
-                if candidate not in registry:
+                if candidate not in registry and candidate not in assigned:
+                    assigned.add(candidate)
                     return candidate
         return f"child_{next(_view_id_counter)}"
 
@@ -192,6 +198,7 @@ class StickyChildRegistry:
         from .._exposure import uses_legacy_exposure
 
         self.__dict__["_render_child_ids"] = itertools.count(1)
+        self.__dict__["_render_assigned_ids"] = set()
         registry = getattr(self, "_child_views", None)
         if type(registry) is not dict:
             return

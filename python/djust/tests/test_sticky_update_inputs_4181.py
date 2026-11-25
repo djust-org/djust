@@ -109,10 +109,91 @@ class BadShell(LiveView):
     template = _page("BadShell", f'{{% live_render "{MODULE}.BadPlayer" sticky=True title="x" %}}')
 
 
+class ObjPlayer(LiveView):
+    """Its object is an updatable input; one object is forbidden."""
+
+    exposure_policy = "explicit"
+    sticky = True
+    sticky_id = "objplayer"
+    sticky_update_inputs = ("object_id",)
+    object_id = state("")
+    template = '<div>obj={{ object_id }}<b dj-click="noop">p</b></div>'
+    instances: list = []
+
+    def mount(self, request, object_id="", **kwargs):
+        type(self).instances.append(self)
+        self.object_id = str(object_id)
+
+    def _on_sticky_update(self, changed):
+        self.object_id = str(changed["object_id"])
+
+    def get_object(self):
+        return self.object_id
+
+    def has_object_permission(self, request, obj):
+        return obj != "forbidden"
+
+    @event_handler()
+    def noop(self, **kwargs):
+        pass
+
+
+class ObjShell(LiveView):
+    exposure_policy = "explicit"
+    object_id = state("ok")
+    template = _page(
+        "ObjShell", f'{{% live_render "{MODULE}.ObjPlayer" sticky=True object_id=object_id %}}'
+    )
+
+    @event_handler()
+    def set_object(self, value: str = "", **kwargs):
+        self.object_id = value
+
+
+class ObjOtherShell(LiveView):
+    exposure_policy = "explicit"
+    template = _page(
+        "ObjOtherShell",
+        f'<h1>o</h1>{{% live_render "{MODULE}.ObjPlayer" sticky=True object_id="forbidden" %}}',
+    )
+
+
+class TitlePlayer(LiveView):
+    """An updatable input backing a persisted field."""
+
+    exposure_policy = "explicit"
+    sticky = True
+    sticky_id = "titleplayer"
+    sticky_update_inputs = ("title",)
+    title = state("", persist="server")
+    template = "<div>title={{ title }}</div>"
+
+    def mount(self, request, title="", **kwargs):
+        self.title = str(title)
+
+    def _on_sticky_update(self, changed):
+        self.title = str(changed["title"])
+
+
+class TitleShell(LiveView):
+    exposure_policy = "explicit"
+    title = state("a")
+    template = _page(
+        "TitleShell", f'{{% live_render "{MODULE}.TitlePlayer" sticky=True title=title %}}'
+    )
+
+    @event_handler()
+    def set_title(self, value: str = "", **kwargs):
+        self.title = value
+
+
 urlpatterns = [
     path("shell/", Shell.as_view()),
     path("other/", OtherShell.as_view()),
     path("t9/", OtherTrackShell.as_view()),
+    path("obj/", ObjShell.as_view()),
+    path("objother/", ObjOtherShell.as_view()),
+    path("title/", TitleShell.as_view()),
 ]
 
 
@@ -261,6 +342,160 @@ async def test_identity_change_across_live_redirect_remounts():
             await comm.disconnect()
     assert Player.mounts == 2
     assert Player.updates == []
+
+
+@pytest.mark.asyncio
+async def test_object_permission_is_checked_again_after_the_hook():
+    """An updatable input that names the object: switching it to a forbidden one
+    drops the child and refuses the embed, as a fresh mount would."""
+    from djust.websocket import LiveViewConsumer  # noqa: F401  (app import)
+
+    ObjPlayer.instances.clear()
+    key = await sync_to_async(_new_session)()
+    with override_settings(**SETTINGS):
+        from channels.testing import WebsocketCommunicator
+
+        from djust.websocket import LiveViewConsumer as Consumer
+
+        comm = WebsocketCommunicator(Consumer.as_asgi(), "/ws/")
+        comm.scope["session"] = SessionStore(key)
+        comm.scope["user"] = AnonymousUser()
+        assert (await comm.connect())[0]
+        await comm.receive_json_from()
+        try:
+            await comm.send_json_to({"type": "mount", "view": f"{MODULE}.ObjShell", "url": "/obj/"})
+            frame = await comm.receive_json_from()
+            assert "obj=ok" in frame["html"]
+            await _event(comm, "set_object", value="forbidden")
+            (child,) = ObjPlayer.instances
+            assert child.object_id == "forbidden"  # the hook ran...
+            # ...and the re-check dropped it: it takes no more events.
+            assert getattr(child, "_djust_child_disposed", False)
+            reply = await _event(comm, "noop", view_id="objplayer")
+            assert reply["type"] == "error", reply
+        finally:
+            await comm.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_carried_child_object_permission_is_checked_again_after_the_hook():
+    ObjPlayer.instances.clear()
+    key = await sync_to_async(_new_session)()
+    with override_settings(**SETTINGS):
+        from channels.testing import WebsocketCommunicator
+
+        from djust.websocket import LiveViewConsumer as Consumer
+
+        comm = WebsocketCommunicator(Consumer.as_asgi(), "/ws/")
+        comm.scope["session"] = SessionStore(key)
+        comm.scope["user"] = AnonymousUser()
+        assert (await comm.connect())[0]
+        await comm.receive_json_from()
+        try:
+            await comm.send_json_to({"type": "mount", "view": f"{MODULE}.ObjShell", "url": "/obj/"})
+            assert "obj=ok" in (await comm.receive_json_from())["html"]
+            await comm.send_json_to(
+                {
+                    "type": "live_redirect_mount",
+                    "view": f"{MODULE}.ObjOtherShell",
+                    "url": "/objother/",
+                }
+            )
+            from ._ws_frames import drain_extra
+
+            frames = [await comm.receive_json_from(timeout=10)]
+            frames += await drain_extra(comm)
+            carried = ObjPlayer.instances[0]
+            assert carried.object_id == "forbidden"  # the hook ran...
+            assert getattr(carried, "_djust_child_disposed", False)  # ...then it was dropped
+            assert not any(
+                f.get("type") == "embedded_update" and "obj=forbidden" in f.get("html", "")
+                for f in frames
+            )
+        finally:
+            await comm.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_updatable_persisted_field_over_ws():
+    key = await sync_to_async(_new_session)()
+    with override_settings(**SETTINGS):
+        from channels.testing import WebsocketCommunicator
+
+        from djust.websocket import LiveViewConsumer as Consumer
+
+        comm = WebsocketCommunicator(Consumer.as_asgi(), "/ws/")
+        comm.scope["session"] = SessionStore(key)
+        comm.scope["user"] = AnonymousUser()
+        assert (await comm.connect())[0]
+        await comm.receive_json_from()
+        try:
+            await comm.send_json_to(
+                {"type": "mount", "view": f"{MODULE}.TitleShell", "url": "/title/"}
+            )
+            assert "title=a" in (await comm.receive_json_from())["html"]
+            await _event(comm, "set_title", value="z")
+            html = await _recovery(comm)
+        finally:
+            await comm.disconnect()
+    assert "title=z" in html, html
+
+
+def test_updatable_persisted_field_over_http_matches_ws():
+    """Over HTTP every POST mounts the child afresh and restores its persisted
+    title over mount(title=new); the hook then applies the new input again, so
+    the page shows what a live socket shows (#4181 review)."""
+    import json
+
+    with override_settings(**SETTINGS):
+        session = SessionStore()
+        session.create()
+
+        def call(method, body=None):
+            factory = RequestFactory()
+            request = (
+                factory.get("/title/")
+                if method == "get"
+                else factory.post(
+                    "/title/",
+                    json.dumps(body),
+                    content_type="application/json",
+                    HTTP_X_DJUST_EVENT=body["event"],
+                )
+            )
+            request.user = AnonymousUser()
+            request.tenant = None
+            request.session = SessionStore(session.session_key)
+            response = TitleShell.as_view()(request)
+            request.session.save()
+            return response
+
+        assert "title=a" in call("get").content.decode()
+        response = call("post", {"event": "set_title", "params": {"value": "z"}})
+        assert response.status_code == 200, response.content
+        assert "title=z" in json.loads(response.content)["html"]
+        # The next POST restores the saved title and still shows the page's input.
+        response = call("post", {"event": "set_title", "params": {"value": "y"}})
+        assert "title=y" in json.loads(response.content)["html"]
+
+
+def test_sticky_update_inputs_where_ignored_warns():
+    with pytest.warns(UserWarning, match="sticky_update_inputs"):
+
+        class NotSticky(LiveView):
+            exposure_policy = "explicit"
+            sticky_update_inputs = ("x",)
+
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+
+        class Fine(LiveView):
+            exposure_policy = "explicit"
+            sticky = True
+            sticky_id = "fine"
+            sticky_update_inputs = ("x",)
 
 
 def _http_get(view_class):

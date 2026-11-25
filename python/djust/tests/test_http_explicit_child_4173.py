@@ -89,10 +89,27 @@ class PostGuardKid(Kid):
         return super().post(request, *args, **kwargs)
 
 
+class LabelKid(LiveView):
+    exposure_policy = "explicit"
+    label = state("")
+    template = "<span>KID {{ label }}</span>"
+    seen: list = []
+
+    def mount(self, request, label="", **kwargs):
+        type(self).seen.append(type(label))
+        self.label = label
+
+
+class TemplateHost(LiveView):
+    exposure_policy = "explicit"
+    template_name = "host.html"
+
+
 class NestedHost(LiveView):
     exposure_policy = "explicit"
     template = (
-        '{% load live_tags %}<section class="host">{% live_render "' + MOD + '.Kid" %}</section>'
+        "{% load live_tags %}"
+        '<section class="host">{% live_render "' + MOD + '.Kid" label="inner" %}</section>'
     )
 
 
@@ -160,6 +177,20 @@ class LazyPage(LiveView):
         '<div dj-root dj-view="' + MOD + '.LazyPage">'
         '{% live_render "' + MOD + '.Kid" lazy=True %}'
         '{% live_render "' + MOD + '.DeniedKid" lazy=True %}</div>'
+    )
+
+
+class LazyEagerPage(LiveView):
+    """A lazy and an eager tag with one view and one set of arguments, and two
+    identical lazy tags (#4173 review): every one gets its own id."""
+
+    exposure_policy = "explicit"
+    template = (
+        "{% load live_tags %}"
+        '<div dj-root dj-view="' + MOD + '.LazyEagerPage">'
+        '{% live_render "' + MOD + '.Kid" lazy=True %}'
+        '{% live_render "' + MOD + '.Kid" %}'
+        '{% live_render "' + MOD + '.Kid" lazy=True %}</div>'
     )
 
 
@@ -334,6 +365,60 @@ def test_lazy_tag_child_takes_events_over_http(session):
     response = _post(session, {"view_id": denied}, view_class=LazyPage)
     assert response.status_code == 400
     assert json.loads(response.content) == {"error": "Embedded view not found"}
+
+
+@pytest.mark.django_db
+def test_lazy_and_eager_twins_get_distinct_ids_and_each_is_routed(session):
+    ids, html = _page(session, LazyEagerPage)
+    slots = re.findall(r'<dj-lazy-slot[^>]*data-id="([^"]+)"', html)
+    assert len(slots) == 2 and len(set(slots)) == 2
+    # Both slots filled, and the eager twin has an id of its own.
+    assert set(slots) <= set(ids) and len(ids) == 3, (ids, slots)
+    assert 'data-status="error"' not in html
+    for view_id in ids:
+        response = _post(session, {"view_id": view_id}, view_class=LazyEagerPage)
+        assert response.status_code == 200, (view_id, response.content)
+        data = json.loads(response.content)
+        assert data["view_id"] == view_id and _count(response) == 1
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("where", ["page", "nested"])
+def test_template_literal_kwargs_reach_an_explicit_child_as_str(tmp_path, where):
+    """Django marks a tag's string literal safe; an explicit child's inputs are
+    exact-str JSON identities, so the tag normalises them (#4173 review)."""
+    from django.contrib.sessions.backends.signed_cookies import SessionStore as Signed
+
+    tag = '{% live_render "' + MOD + '.LabelKid" label="inner" %}'
+    (tmp_path / "host.html").write_text("{% load live_tags %}<section>" + tag + "</section>")
+    if where == "page":
+        page_tag = tag
+    else:
+        page_tag = '{% live_render "' + MOD + '.TemplateHost" %}'
+    (tmp_path / "page.html").write_text("{% load live_tags %}<main dj-root>" + page_tag + "</main>")
+
+    class TemplatePage(LiveView):
+        exposure_policy = "explicit"
+        template_name = "page.html"
+
+    LabelKid.seen.clear()
+    request = RequestFactory().get("/")
+    request.user = AnonymousUser()
+    request.session = Signed()
+    request.tenant = None
+    templates = [
+        {
+            "BACKEND": "django.template.backends.django.DjangoTemplates",
+            "DIRS": [str(tmp_path)],
+            "APP_DIRS": True,
+        }
+    ]
+    with override_settings(TEMPLATES=templates, DJUST_LIVE_RENDER_ALLOWED_MODULES=[MOD]):
+        page = TemplatePage()
+        page.request = request
+        html, _, _ = page.render_with_diff(request)
+    assert "KID inner" in html
+    assert LabelKid.seen == [str]
 
 
 def _strip(html):

@@ -172,7 +172,7 @@ def test_denied_explicit_lazy_child_is_not_registered(session, view):
         assert ids == []
     else:
         assert len(ids) == 1
-        assert post(session, ids[0], "djust_lazy_mount", DeniedPage).status_code in (400, 403)
+        assert post(session, ids[0], "djust_lazy_mount", DeniedPage).status_code == 403
 
 
 @pytest.mark.django_db

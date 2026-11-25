@@ -166,6 +166,20 @@ class LazyTagPage(Page):
     )
 
 
+class LazyEagerTagPage(Page):
+    """A lazy and an eager tag with one view and arguments, and two identical
+    lazy tags (#4173 review): every one gets its own id."""
+
+    template = (
+        "{% load live_tags %}"
+        '<div dj-root dj-view="' + MOD + '.LazyEagerTagPage">'
+        '{% live_render "' + MOD + '.Child" lazy=True %}'
+        '{% live_render "' + MOD + '.Child" %}'
+        '{% live_render "' + MOD + '.Child" lazy=True %}'
+        "</div>"
+    )
+
+
 def _request(method, session, body=None, event=None, user=None, path=PATH):
     factory = RequestFactory()
     if method == "get":
@@ -450,6 +464,18 @@ def test_a_lazy_tag_child_is_routed_over_http(session):
     data = json.loads(response.content)
     assert data["type"] == "embedded_update" and data["view_id"] == ids[0]
     assert "click" in _html(response)
+
+
+@pytest.mark.django_db
+def test_lazy_and_eager_twins_get_distinct_ids_and_each_is_routed(session):
+    ids = _page(session, LazyEagerTagPage)
+    assert len(ids) == 3 and len(set(ids)) == 3, ids
+    for view_id in ids:
+        response = _post(session, {"view_id": view_id}, view_class=LazyEagerTagPage)
+        assert response.status_code == 200, (view_id, response.content)
+        data = json.loads(response.content)
+        assert data["view_id"] == view_id
+        assert "click" in _html(response)
 
 
 # --------------------------------------------------------------------------- #

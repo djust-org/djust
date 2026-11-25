@@ -333,7 +333,14 @@ How it behaves:
   a `TemplateSyntaxError`) reach the hook. Every other input is part of the
   child's identity: a change to one remounts the child and discards its
   in-memory state. Its `persist="server"` fields survive a change to an
-  updatable input, but not to an identity input.
+  updatable input, but not to an identity input. The object permission is
+  checked again after the hook runs, so an updatable input that names the
+  object cannot switch the child to one the user may not see. On the HTTP
+  fallback (and on any mount that restores saved state) the child is mounted
+  afresh, its saved fields are restored, and the hook then receives every
+  updatable input on the tag, so it ends where a live socket's child would.
+  Setting `sticky_update_inputs` on a non-sticky or legacy view warns: it is
+  ignored there.
 - **Preserved children.** An explicit sticky carried across a `live_redirect`
   gets the hook with the destination's changed updatable inputs, and is
   re-rendered to the browser right after the mount frame. A legacy sticky

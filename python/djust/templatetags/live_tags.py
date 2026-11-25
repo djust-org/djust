@@ -23,7 +23,7 @@ import logging
 import re
 import threading
 from collections.abc import Iterator
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, Optional
 
 if TYPE_CHECKING:
     from ..live_view import LiveView
@@ -1865,6 +1865,38 @@ def _sticky_identity_inputs(
     return {k: v for k, v in kwargs.items() if k not in names}
 
 
+def _recheck_object_after_update(
+    child: Any, request: Any, view_path: str, deny: Callable[[], None]
+) -> None:
+    """Re-run a sticky child's object permission after ``_on_sticky_update`` (#4181).
+
+    The hook may point the child at another object (an updatable ``object_id``):
+    the object check that passed before it ran no longer covers what the child
+    is about to render. A denial drops the child (``deny``) and refuses the
+    embed, as a fresh mount's denial does.
+    """
+    from ..auth.core import enforce_object_permission
+
+    try:
+        enforce_object_permission(child, request)
+    except Exception:  # noqa: BLE001 — broken predicates must not permit the render
+        deny()
+        raise _LiveRenderDenied(
+            "{%% live_render %%} target %r denied access: object-level permission "
+            "check failed for the requested object." % view_path
+        ) from None
+
+
+def _root_view(view: Any) -> Any:
+    """The page view at the top of ``view``'s embedding chain (16 levels at most)."""
+    for _ in range(16):
+        parent = getattr(view, "_parent_view", None)
+        if parent is None:
+            return view
+        view = parent
+    return view
+
+
 def _record_sticky_mount_kwargs(child: Any, kwargs: Dict[str, Any]) -> None:
     """Remember the kwargs a sticky child was mounted with (#2919)."""
     try:
@@ -1928,6 +1960,31 @@ def _apply_sticky_input_changes(child: Any, kwargs: Dict[str, Any], view_path: s
         )
     child._on_sticky_update(changed)
     _record_sticky_mount_kwargs(child, kwargs)
+    return True
+
+
+def _hand_updatable_inputs_after_restore(child: Any, kwargs: Dict[str, Any]) -> bool:
+    """Call ``_on_sticky_update`` with the updatable inputs after a restore (#4181).
+
+    The child cannot know which of them changed since its state was saved, so
+    it receives all of them present on the tag (the hook must be idempotent).
+    Returns whether the hook ran.
+    """
+    from ..mixins.sticky import StickyChildRegistry
+
+    hook = getattr(type(child), "_on_sticky_update", None)
+    names = getattr(type(child), "sticky_update_inputs", ())
+    if hook is None or hook is StickyChildRegistry._on_sticky_update or not names:
+        return False
+    changed = {k: kwargs[k] for k in names if k in kwargs}
+    if not changed:
+        return False
+    if inspect.iscoroutinefunction(hook):
+        raise TypeError(
+            "%s._on_sticky_update must be a plain function: it runs while the "
+            "parent renders and cannot be awaited." % type(child).__name__
+        )
+    child._on_sticky_update(changed)
     return True
 
 
@@ -2492,6 +2549,13 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
     from .._exposure import uses_legacy_exposure as _legacy_policy
 
     explicit_target = not _legacy_policy(child_cls)
+    if explicit_target:
+        # Django marks a template string literal safe (``SafeString``); an
+        # explicit child's inputs are JSON identities, which take exact ``str``.
+        kwargs = {
+            k: (str.__str__(v) if isinstance(v, str) and type(v) is not str else v)
+            for k, v in kwargs.items()
+        }
     if explicit_target and not sticky_kwarg:
         from .._exposure import ExposureContract
 
@@ -2666,7 +2730,18 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
                     # updatable inputs through its hook, and is re-rendered to
                     # the browser right after the mount frame.
                     if _apply_sticky_input_changes(survivor, tag_inputs, view_path):
-                        parent.__dict__.setdefault("_djust_sticky_refresh", []).append(survivor)
+                        carried = survivor
+                        _recheck_object_after_update(
+                            carried,
+                            request,
+                            view_path,
+                            lambda: _drop_preserved_child(parent, sticky_id_value, carried),
+                        )
+                        # On the page view, which the runtime drains after the
+                        # mount frame, wherever the child is nested.
+                        _root_view(parent).__dict__.setdefault("_djust_sticky_refresh", []).append(
+                            carried
+                        )
                 else:
                     _warn_if_sticky_kwargs_changed(survivor, tag_inputs, view_path, preserved=True)
                 # ``consumer`` is guaranteed non-None here: ``survivor`` was
@@ -3101,7 +3176,14 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
             # (#2919) Hand kwargs that changed since the child was last given
             # them to its ``_on_sticky_update`` hook, before it renders; a child
             # without the hook keeps mount-time kwargs and a warning.
-            _apply_sticky_input_changes(existing_child, kwargs, view_path)
+            if _apply_sticky_input_changes(existing_child, kwargs, view_path):
+                reused = existing_child
+                _recheck_object_after_update(
+                    reused,
+                    request,
+                    view_path,
+                    lambda: _discard_sticky_child(parent, preferred_view_id, reused),
+                )
             # ``sticky_kwarg`` is True here, so ``sticky_id_value`` passed the
             # non-empty guard above and is a ``str``. Narrow for the helper's
             # ``str`` slot-key contract (inert at runtime).
@@ -3283,6 +3365,12 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
             from .._view_hooks import call_hook_sync
 
             call_hook_sync(handle_restore, request)
+        # #4181: a restore puts back the declared state a previous request
+        # saved, which may predate a change to an updatable input (over HTTP
+        # every request mounts afresh). The hook gets the updatable inputs
+        # again, so the child ends where a live socket's reused child would.
+        if sticky_kwarg and _hand_updatable_inputs_after_restore(child, kwargs):
+            _recheck_object_after_update(child, request, view_path, lambda: None)
 
     if explicit_child:
         assert explicit_slot is not None
