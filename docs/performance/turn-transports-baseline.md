@@ -288,6 +288,55 @@ The server's `total` figures here are not comparable with the server table's:
 uvicorn shares this process with the Playwright driver, and the server bench's
 HTTP figures do not pay the HTTP server.
 
+## #4325: item-level list deltas, multi-span text path, state backend
+
+Measured 2026-11-25 on the same machine, release build, same benchmark
+(`--shapes table --transports ws --modes nosave,save --rtt 0 --rounds 80`,
+two interleaved runs per side; "before" is the new `list_item_deltas`
+shortcut switched off through `djust._per_turn`). One changed cell in a
+1,000-row list, milliseconds per turn:
+
+| | before | after |
+| --- | ---: | ---: |
+| turn p50, `nosave` | 22.0-22.4 | 20.1-20.8 |
+| turn p50, `save` | 23.6-23.7 | 21.3-21.8 |
+| CPU per turn, `nosave` | 23.0-23.9 | 21.6-23.0 |
+| the Rust sync, in Python | 5.1 | 2.3 |
+| of which `update_state` (whole list) | 2.4 | 0.05 (`update_state_items`, one row) |
+| Rust render and diff | 11.6 | 9.6 |
+
+**Item-level deltas (`list_item_deltas`).** When the two event snapshots show
+that a handler changed only a few rows of a list in place (the same object, the
+same length, at least 16 rows, at most a quarter of them changed, and the
+fingerprint Rust's copy was built from equals the pre-event walk), the sync
+converts just those rows and replaces them in Rust's state with
+`RustLiveView.update_state_items`. Anything else, including a refusal from
+Rust, takes the whole-list path. The render still renders every row: a loop
+body that holds `{% if %}` carries index-numbered `dj-if` markers, so the loop
+render cache cannot reuse its rows, and rendering only the changed item needs a
+per-item fragment store in the renderer (not done; see below).
+
+**Multi-span text path.** A render whose HTML differs from the previous one
+only in the text of up to eight text nodes (two cells of one row, a heading and
+a footer) now skips the parse and diff like a one-span change does. A
+two-cell change in the same 1,000-row table, measured on `RustLiveView` alone
+(300 renders): `render_with_diff` p50 14.8-16.4 ms through the full parse,
+8.2-8.4 ms on the new path (parse plus diff 6.5-7.2 ms down to about 1 ms).
+The bench's own turn changes one cell, so its numbers above do not move with
+this.
+
+**State-backend serialization per render.** Not there any more: over 360 turns
+(table, form and dashboard; WebSocket, SSE and HTTP; `save` and `nosave`) the
+state backend's `set` and `refresh` ran 0 times, and `serialize_msgpack` is not
+called on a turn. `refresh()` has no production caller. The `save` mode's extra
+1-2 ms is the session handling, not the backend.
+
+**Still over the 10 ms target.** What is left for this turn, of about 20 ms:
+the Rust render of all 1,000 rows (about 6 ms), the text fast path itself
+(about 1 ms, most of it cloning the VDOM), and the two event snapshot walks
+(about 4 ms). Rendering only the changed loop item, and replacing the pre-event walk
+with the previous turn's fingerprints, are what remain.
+
 ## Reproduce
 
 ```sh
