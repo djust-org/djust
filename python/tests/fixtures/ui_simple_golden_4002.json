@@ -1,75 +1,83 @@
 {
- "_doc": "Golden renders of the djust.components.ui simple components (#4002). Captured from the retired Rust crate (djust_components) before it was removed; entries with 'fix' differ from 'rust_html' on purpose. See python/tests/test_ui_simple_golden_4002.py.",
+ "_doc": "Golden renders of the djust.components.ui simple components (#4002). The 15 classes the retired Rust crate drew were captured from it before it was removed (slice 1); Alert, Badge, Button, Card, Dropdown, Modal, Progress and Spinner now draw their ui *Component twin's markup (slice 3, recaptured). 'fix' entries differ from 'rust_html' on purpose. See python/tests/test_ui_simple_golden_4002.py.",
  "cases": [
   {
    "cls": "Alert",
    "csp_strict": false,
-   "html": "<div class=\"alert alert-info\" role=\"alert\">\n    Saved\n</div>",
+   "html": "<div class=\"alert alert-info\" role=\"alert\" id=\"alert\">Saved</div>",
    "kwargs": {
     "text": "Saved"
-   }
+   },
+   "slice1_html": "<div class=\"alert alert-info\" role=\"alert\">\n    Saved\n</div>"
   },
   {
    "cls": "Alert",
    "csp_strict": false,
-   "html": "<div class=\"alert alert-info\" role=\"alert\">\n    &lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;\n</div>",
+   "html": "<div class=\"alert alert-info\" role=\"alert\" id=\"alert\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</div>",
    "kwargs": {
     "text": "<b>x</b> & \"q\" 'a'"
-   }
+   },
+   "slice1_html": "<div class=\"alert alert-info\" role=\"alert\">\n    &lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;\n</div>"
   },
   {
    "cls": "Alert",
    "csp_strict": false,
-   "html": "<div class=\"alert alert-info\" role=\"alert\">\n    &lt;em&gt;safe&lt;/em&gt;\n</div>",
+   "html": "<div class=\"alert alert-info\" role=\"alert\" id=\"alert\">&lt;em&gt;safe&lt;/em&gt;</div>",
    "kwargs": {
     "text": {
      "safe": "<em>safe</em>"
     }
-   }
+   },
+   "slice1_html": "<div class=\"alert alert-info\" role=\"alert\">\n    &lt;em&gt;safe&lt;/em&gt;\n</div>"
   },
   {
    "cls": "Alert",
    "csp_strict": false,
-   "html": "<div class=\"alert alert-info\" role=\"alert\">\n    \n</div>",
+   "html": "<div class=\"alert alert-info\" role=\"alert\" id=\"alert\"></div>",
    "kwargs": {
     "text": ""
-   }
+   },
+   "slice1_html": "<div class=\"alert alert-info\" role=\"alert\">\n    \n</div>"
   },
   {
    "cls": "Alert",
    "csp_strict": false,
-   "html": "<div class=\"alert alert-success\" role=\"alert\">\n    Saved\n</div>",
+   "html": "<div class=\"alert alert-success\" role=\"alert\" id=\"alert\">Saved</div>",
    "kwargs": {
     "text": "Saved",
     "variant": "success"
-   }
+   },
+   "slice1_html": "<div class=\"alert alert-success\" role=\"alert\">\n    Saved\n</div>"
   },
   {
    "cls": "Alert",
    "csp_strict": false,
-   "html": "<div class=\"alert alert-danger\" role=\"alert\">\n    Saved\n</div>",
+   "html": "<div class=\"alert alert-danger\" role=\"alert\" id=\"alert\">Saved</div>",
    "kwargs": {
     "text": "Saved",
     "variant": "danger"
-   }
+   },
+   "slice1_html": "<div class=\"alert alert-danger\" role=\"alert\">\n    Saved\n</div>"
   },
   {
    "cls": "Alert",
    "csp_strict": false,
-   "html": "<div class=\"alert alert-x&quot; y\" role=\"alert\">\n    Saved\n</div>",
+   "html": "<div class=\"alert alert-info\" role=\"alert\" id=\"alert\">Saved</div>",
    "kwargs": {
     "text": "Saved",
     "variant": "x\" y"
-   }
+   },
+   "slice1_html": "<div class=\"alert alert-x&quot; y\" role=\"alert\">\n    Saved\n</div>"
   },
   {
    "cls": "Alert",
    "csp_strict": false,
-   "html": "<div class=\"alert alert-info alert-dismissible fade show\" role=\"alert\">\n    Saved\n    <button type=\"button\" class=\"btn-close\" data-bs-dismiss=\"alert\" aria-label=\"Close\"></button>\n</div>",
+   "html": "<div class=\"alert alert-info alert-dismissible fade show\" role=\"alert\" id=\"alert\">Saved<button type=\"button\" class=\"btn-close\" dj-click=\"dismiss\" data-component-id=\"alert\" aria-label=\"Close\"></button></div>",
    "kwargs": {
     "dismissable": true,
     "text": "Saved"
-   }
+   },
+   "slice1_html": "<div class=\"alert alert-info alert-dismissible fade show\" role=\"alert\">\n    Saved\n    <button type=\"button\" class=\"btn-close\" data-bs-dismiss=\"alert\" aria-label=\"Close\"></button>\n</div>"
   },
   {
    "cls": "Avatar",
@@ -504,294 +512,327 @@
   {
    "cls": "Badge",
    "csp_strict": false,
-   "html": "<span class=\"badge bg-primary fs-6\">New</span>",
+   "html": "<span class=\"badge bg-primary\" id=\"badge\">New</span>",
    "kwargs": {
     "text": "New"
-   }
+   },
+   "slice1_html": "<span class=\"badge bg-primary fs-6\">New</span>"
   },
   {
    "cls": "Badge",
    "csp_strict": false,
-   "html": "<span class=\"badge bg-primary fs-6\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</span>",
+   "html": "<span class=\"badge bg-primary\" id=\"badge\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</span>",
    "kwargs": {
     "text": "<b>x</b> & \"q\" 'a'"
-   }
+   },
+   "slice1_html": "<span class=\"badge bg-primary fs-6\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</span>"
   },
   {
    "cls": "Badge",
    "csp_strict": false,
-   "html": "<span class=\"badge bg-primary fs-6\">&lt;em&gt;safe&lt;/em&gt;</span>",
+   "html": "<span class=\"badge bg-primary\" id=\"badge\">&lt;em&gt;safe&lt;/em&gt;</span>",
    "kwargs": {
     "text": {
      "safe": "<em>safe</em>"
     }
-   }
+   },
+   "slice1_html": "<span class=\"badge bg-primary fs-6\">&lt;em&gt;safe&lt;/em&gt;</span>"
   },
   {
    "cls": "Badge",
    "csp_strict": false,
-   "html": "<span class=\"badge bg-primary fs-6\"></span>",
+   "html": "<span class=\"badge bg-primary\" id=\"badge\"></span>",
    "kwargs": {
     "text": ""
-   }
+   },
+   "slice1_html": "<span class=\"badge bg-primary fs-6\"></span>"
   },
   {
    "cls": "Badge",
    "csp_strict": false,
-   "html": "<span class=\"badge bg-danger fs-6\">New</span>",
+   "html": "<span class=\"badge bg-danger\" id=\"badge\">New</span>",
    "kwargs": {
     "text": "New",
     "variant": "danger"
-   }
+   },
+   "slice1_html": "<span class=\"badge bg-danger fs-6\">New</span>"
   },
   {
    "cls": "Badge",
    "csp_strict": false,
-   "html": "<span class=\"badge bg-x&quot; y fs-6\">New</span>",
+   "html": "<span class=\"badge bg-primary\" id=\"badge\">New</span>",
    "kwargs": {
     "text": "New",
     "variant": "x\" y"
-   }
+   },
+   "slice1_html": "<span class=\"badge bg-x&quot; y fs-6\">New</span>"
   },
   {
    "cls": "Badge",
    "csp_strict": false,
-   "html": "<span class=\"badge bg-primary\">New</span>",
+   "html": "<span class=\"badge bg-primary\" id=\"badge\">New</span>",
    "kwargs": {
     "size": "sm",
     "text": "New"
-   }
+   },
+   "slice1_html": "<span class=\"badge bg-primary\">New</span>"
   },
   {
    "cls": "Badge",
    "csp_strict": false,
-   "html": "<span class=\"badge bg-primary fs-5\">New</span>",
+   "html": "<span class=\"badge bg-primary\" id=\"badge\">New</span>",
    "kwargs": {
     "size": "lg",
     "text": "New"
-   }
+   },
+   "slice1_html": "<span class=\"badge bg-primary fs-5\">New</span>"
   },
   {
    "cls": "Badge",
    "csp_strict": false,
-   "html": "<span class=\"badge bg-primary\">New</span>",
+   "html": "<span class=\"badge bg-primary\" id=\"badge\">New</span>",
    "kwargs": {
     "size": "zz",
     "text": "New"
-   }
+   },
+   "slice1_html": "<span class=\"badge bg-primary\">New</span>"
   },
   {
    "cls": "Badge",
    "csp_strict": false,
-   "html": "<span class=\"badge bg-primary fs-6 rounded-pill\">New</span>",
+   "html": "<span class=\"badge bg-primary rounded-pill\" id=\"badge\">New</span>",
    "kwargs": {
     "pill": true,
     "text": "New"
-   }
+   },
+   "slice1_html": "<span class=\"badge bg-primary fs-6 rounded-pill\">New</span>"
   },
   {
    "cls": "Button",
    "csp_strict": false,
-   "html": "<button type=\"button\" class=\"btn btn-primary\">Go</button>",
+   "html": "<button type=\"button\" class=\"btn btn-primary\" id=\"button\">Go</button>",
    "kwargs": {
     "text": "Go"
-   }
+   },
+   "slice1_html": "<button type=\"button\" class=\"btn btn-primary\">Go</button>"
   },
   {
    "cls": "Button",
    "csp_strict": false,
-   "html": "<button type=\"button\" class=\"btn btn-primary\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</button>",
+   "html": "<button type=\"button\" class=\"btn btn-primary\" id=\"button\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</button>",
    "kwargs": {
     "text": "<b>x</b> & \"q\" 'a'"
-   }
+   },
+   "slice1_html": "<button type=\"button\" class=\"btn btn-primary\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</button>"
   },
   {
    "cls": "Button",
    "csp_strict": false,
-   "html": "<button type=\"button\" class=\"btn btn-primary\">&lt;em&gt;safe&lt;/em&gt;</button>",
+   "html": "<button type=\"button\" class=\"btn btn-primary\" id=\"button\">&lt;em&gt;safe&lt;/em&gt;</button>",
    "kwargs": {
     "text": {
      "safe": "<em>safe</em>"
     }
-   }
+   },
+   "slice1_html": "<button type=\"button\" class=\"btn btn-primary\">&lt;em&gt;safe&lt;/em&gt;</button>"
   },
   {
    "cls": "Button",
    "csp_strict": false,
-   "html": "<button type=\"button\" class=\"btn btn-secondary\">Go</button>",
+   "html": "<button type=\"button\" class=\"btn btn-secondary\" id=\"button\">Go</button>",
    "kwargs": {
     "text": "Go",
     "variant": "secondary"
-   }
+   },
+   "slice1_html": "<button type=\"button\" class=\"btn btn-secondary\">Go</button>"
   },
   {
    "cls": "Button",
    "csp_strict": false,
-   "html": "<button type=\"button\" class=\"btn btn-x&quot;y\">Go</button>",
+   "html": "<button type=\"button\" class=\"btn btn-primary\" id=\"button\">Go</button>",
    "kwargs": {
     "text": "Go",
     "variant": "x\"y"
-   }
+   },
+   "slice1_html": "<button type=\"button\" class=\"btn btn-x&quot;y\">Go</button>"
   },
   {
    "cls": "Button",
    "csp_strict": false,
-   "html": "<button type=\"button\" class=\"btn btn-primary btn-sm\">Go</button>",
+   "html": "<button type=\"button\" class=\"btn btn-primary btn-sm\" id=\"button\">Go</button>",
    "kwargs": {
     "size": "sm",
     "text": "Go"
-   }
+   },
+   "slice1_html": "<button type=\"button\" class=\"btn btn-primary btn-sm\">Go</button>"
   },
   {
    "cls": "Button",
    "csp_strict": false,
-   "html": "<button type=\"button\" class=\"btn btn-primary btn-lg\">Go</button>",
+   "html": "<button type=\"button\" class=\"btn btn-primary btn-lg\" id=\"button\">Go</button>",
    "kwargs": {
     "size": "lg",
     "text": "Go"
-   }
+   },
+   "slice1_html": "<button type=\"button\" class=\"btn btn-primary btn-lg\">Go</button>"
   },
   {
    "cls": "Button",
    "csp_strict": false,
-   "html": "<button type=\"button\" class=\"btn btn-primary\">Go</button>",
+   "html": "<button type=\"button\" class=\"btn btn-primary\" id=\"button\">Go</button>",
    "kwargs": {
     "size": "zz",
     "text": "Go"
-   }
+   },
+   "slice1_html": "<button type=\"button\" class=\"btn btn-primary\">Go</button>"
   },
   {
    "cls": "Button",
    "csp_strict": false,
-   "html": "<button type=\"button\" class=\"btn btn-primary\" disabled>Go</button>",
+   "html": "<button type=\"button\" class=\"btn btn-primary\" id=\"button\" disabled>Go</button>",
    "kwargs": {
     "disabled": true,
     "text": "Go"
-   }
+   },
+   "slice1_html": "<button type=\"button\" class=\"btn btn-primary\" disabled>Go</button>"
   },
   {
    "cls": "Button",
    "csp_strict": false,
-   "html": "<button type=\"button\" class=\"btn btn-outline-primary\">Go</button>",
+   "html": "<button type=\"button\" class=\"btn btn-outline-primary\" id=\"button\">Go</button>",
    "kwargs": {
     "outline": true,
     "text": "Go"
-   }
+   },
+   "slice1_html": "<button type=\"button\" class=\"btn btn-outline-primary\">Go</button>"
   },
   {
    "cls": "Card",
    "csp_strict": false,
-   "html": "<div class=\"card\">\n    <div class=\"card-body\">Body</div>\n</div>",
+   "html": "<div class=\"card\" id=\"card\"><div class=\"card-body\"><p class=\"card-text\">Body</p></div></div>",
    "kwargs": {
     "body": "Body"
-   }
+   },
+   "slice1_html": "<div class=\"card\">\n    <div class=\"card-body\">Body</div>\n</div>"
   },
   {
    "cls": "Card",
    "csp_strict": false,
-   "html": "<div class=\"card\">\n    <div class=\"card-body\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</div>\n</div>",
+   "html": "<div class=\"card\" id=\"card\"><div class=\"card-body\"><p class=\"card-text\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</p></div></div>",
    "kwargs": {
     "body": "<b>x</b> & \"q\" 'a'"
-   }
+   },
+   "slice1_html": "<div class=\"card\">\n    <div class=\"card-body\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</div>\n</div>"
   },
   {
    "cls": "Card",
    "csp_strict": false,
-   "html": "<div class=\"card\">\n    <div class=\"card-body\">&lt;em&gt;safe&lt;/em&gt;</div>\n</div>",
+   "html": "<div class=\"card\" id=\"card\"><div class=\"card-body\"><p class=\"card-text\">&lt;em&gt;safe&lt;/em&gt;</p></div></div>",
    "kwargs": {
     "body": {
      "safe": "<em>safe</em>"
     }
-   }
+   },
+   "slice1_html": "<div class=\"card\">\n    <div class=\"card-body\">&lt;em&gt;safe&lt;/em&gt;</div>\n</div>"
   },
   {
    "cls": "Card",
    "csp_strict": false,
-   "html": "<div class=\"card\">\n    <div class=\"card-body\"></div>\n</div>",
+   "html": "<div class=\"card\" id=\"card\"><div class=\"card-body\"></div></div>",
    "kwargs": {
     "body": ""
-   }
+   },
+   "slice1_html": "<div class=\"card\">\n    <div class=\"card-body\"></div>\n</div>"
   },
   {
    "cls": "Card",
    "csp_strict": false,
-   "html": "<div class=\"card\">\n    <div class=\"card-header\">Head</div>\n    <div class=\"card-body\">Body</div>\n</div>",
+   "html": "<div class=\"card\" id=\"card\"><div class=\"card-body\"><h5 class=\"card-title\">Head</h5><p class=\"card-text\">Body</p></div></div>",
    "kwargs": {
     "body": "Body",
     "header": "Head"
-   }
+   },
+   "slice1_html": "<div class=\"card\">\n    <div class=\"card-header\">Head</div>\n    <div class=\"card-body\">Body</div>\n</div>"
   },
   {
    "cls": "Card",
    "csp_strict": false,
-   "html": "<div class=\"card\">\n    <div class=\"card-header\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</div>\n    <div class=\"card-body\">Body</div>\n</div>",
+   "html": "<div class=\"card\" id=\"card\"><div class=\"card-body\"><h5 class=\"card-title\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</h5><p class=\"card-text\">Body</p></div></div>",
    "kwargs": {
     "body": "Body",
     "header": "<b>x</b> & \"q\" 'a'"
-   }
+   },
+   "slice1_html": "<div class=\"card\">\n    <div class=\"card-header\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</div>\n    <div class=\"card-body\">Body</div>\n</div>"
   },
   {
    "cls": "Card",
    "csp_strict": false,
-   "html": "<div class=\"card\">\n    <div class=\"card-header\"></div>\n    <div class=\"card-body\">Body</div>\n</div>",
+   "html": "<div class=\"card\" id=\"card\"><div class=\"card-body\"><p class=\"card-text\">Body</p></div></div>",
    "kwargs": {
     "body": "Body",
     "header": ""
-   }
+   },
+   "slice1_html": "<div class=\"card\">\n    <div class=\"card-header\"></div>\n    <div class=\"card-body\">Body</div>\n</div>"
   },
   {
    "cls": "Card",
    "csp_strict": false,
-   "html": "<div class=\"card\">\n    <div class=\"card-body\">Body</div>\n    <div class=\"card-footer\">Foot</div>\n</div>",
+   "html": "<div class=\"card\" id=\"card\"><div class=\"card-body\"><p class=\"card-text\">Body</p></div><div class=\"card-footer text-muted\">Foot</div></div>",
    "kwargs": {
     "body": "Body",
     "footer": "Foot"
-   }
+   },
+   "slice1_html": "<div class=\"card\">\n    <div class=\"card-body\">Body</div>\n    <div class=\"card-footer\">Foot</div>\n</div>"
   },
   {
    "cls": "Card",
    "csp_strict": false,
-   "html": "<div class=\"card\">\n    <div class=\"card-body\">Body</div>\n    <div class=\"card-footer\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</div>\n</div>",
+   "html": "<div class=\"card\" id=\"card\"><div class=\"card-body\"><p class=\"card-text\">Body</p></div><div class=\"card-footer text-muted\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</div></div>",
    "kwargs": {
     "body": "Body",
     "footer": "<b>x</b> & \"q\" 'a'"
-   }
+   },
+   "slice1_html": "<div class=\"card\">\n    <div class=\"card-body\">Body</div>\n    <div class=\"card-footer\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</div>\n</div>"
   },
   {
    "cls": "Card",
    "csp_strict": false,
-   "html": "<div class=\"card\">\n    <div class=\"card-body\">Body</div>\n    <div class=\"card-footer\"></div>\n</div>",
+   "html": "<div class=\"card\" id=\"card\"><div class=\"card-body\"><p class=\"card-text\">Body</p></div></div>",
    "kwargs": {
     "body": "Body",
     "footer": ""
-   }
+   },
+   "slice1_html": "<div class=\"card\">\n    <div class=\"card-body\">Body</div>\n    <div class=\"card-footer\"></div>\n</div>"
   },
   {
    "cls": "Card",
    "csp_strict": false,
-   "html": "<div class=\"card border\">\n    <div class=\"card-body\">Body</div>\n</div>",
+   "html": "<div class=\"card\" id=\"card\"><div class=\"card-body\"><p class=\"card-text\">Body</p></div></div>",
    "kwargs": {
     "body": "Body",
     "variant": "outlined"
-   }
+   },
+   "slice1_html": "<div class=\"card border\">\n    <div class=\"card-body\">Body</div>\n</div>"
   },
   {
    "cls": "Card",
    "csp_strict": false,
-   "html": "<div class=\"card shadow\">\n    <div class=\"card-body\">Body</div>\n</div>",
+   "html": "<div class=\"card\" id=\"card\"><div class=\"card-body\"><p class=\"card-text\">Body</p></div></div>",
    "kwargs": {
     "body": "Body",
     "variant": "elevated"
-   }
+   },
+   "slice1_html": "<div class=\"card shadow\">\n    <div class=\"card-body\">Body</div>\n</div>"
   },
   {
    "cls": "Card",
    "csp_strict": false,
-   "html": "<div class=\"card\">\n    <div class=\"card-body\">Body</div>\n</div>",
+   "html": "<div class=\"card\" id=\"card\"><div class=\"card-body\"><p class=\"card-text\">Body</p></div></div>",
    "kwargs": {
     "body": "Body",
     "variant": "zz"
-   }
+   },
+   "slice1_html": "<div class=\"card\">\n    <div class=\"card-body\">Body</div>\n</div>"
   },
   {
    "cls": "Divider",
@@ -1025,578 +1066,659 @@
   {
    "cls": "Modal",
    "csp_strict": false,
-   "html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                Body\n            </div>\n        </div>\n    </div>\n</div>",
+   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" dj-click=\"dismiss\" data-component-id=\"m1\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" dj-click=\"dismiss\" data-component-id=\"m1\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
    "kwargs": {
     "body": "Body",
-    "id": "m1"
-   }
+    "id": "m1",
+    "show": true
+   },
+   "slice1_html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                Body\n            </div>\n        </div>\n    </div>\n</div>"
   },
   {
    "cls": "Modal",
    "csp_strict": false,
-   "html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                &lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;\n            </div>\n        </div>\n    </div>\n</div>",
+   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" dj-click=\"dismiss\" data-component-id=\"m1\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        &lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" dj-click=\"dismiss\" data-component-id=\"m1\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
    "kwargs": {
     "body": "<b>x</b> & \"q\" 'a'",
-    "id": "m1"
-   }
+    "id": "m1",
+    "show": true
+   },
+   "slice1_html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                &lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;\n            </div>\n        </div>\n    </div>\n</div>"
   },
   {
    "cls": "Modal",
    "csp_strict": false,
-   "html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                <em>safe</em>\n            </div>\n        </div>\n    </div>\n</div>",
+   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" dj-click=\"dismiss\" data-component-id=\"m1\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        <em>safe</em>\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" dj-click=\"dismiss\" data-component-id=\"m1\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
    "kwargs": {
     "body": {
      "safe": "<em>safe</em>"
     },
-    "id": "m1"
-   }
+    "id": "m1",
+    "show": true
+   },
+   "slice1_html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                <em>safe</em>\n            </div>\n        </div>\n    </div>\n</div>"
   },
   {
    "cls": "Modal",
    "csp_strict": false,
-   "html": "<div class=\"modal fade\" id=\"modal\" tabindex=\"-1\" aria-labelledby=\"modalLabel\" aria-hidden=\"true\">\n    <div class=\"modal-dialog\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                Body\n            </div>\n        </div>\n    </div>\n</div>",
+   "html": "\n        <div class=\"modal fade show d-block\" id=\"modal\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" dj-click=\"dismiss\" data-component-id=\"modal\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" dj-click=\"dismiss\" data-component-id=\"modal\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
    "kwargs": {
     "body": "Body",
-    "id": null
-   }
+    "id": null,
+    "show": true
+   },
+   "slice1_html": "<div class=\"modal fade\" id=\"modal\" tabindex=\"-1\" aria-labelledby=\"modalLabel\" aria-hidden=\"true\">\n    <div class=\"modal-dialog\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                Body\n            </div>\n        </div>\n    </div>\n</div>"
   },
   {
    "cls": "Modal",
    "csp_strict": false,
-   "html": "<div class=\"modal fade\" id=\"a&quot;b\" tabindex=\"-1\" aria-labelledby=\"a&quot;bLabel\" aria-hidden=\"true\">\n    <div class=\"modal-dialog\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                Body\n            </div>\n        </div>\n    </div>\n</div>",
+   "html": "\n        <div class=\"modal fade show d-block\" id=\"a&quot;b\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" dj-click=\"dismiss\" data-component-id=\"a&quot;b\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" dj-click=\"dismiss\" data-component-id=\"a&quot;b\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
    "kwargs": {
     "body": "Body",
-    "id": "a\"b"
-   }
+    "id": "a\"b",
+    "show": true
+   },
+   "slice1_html": "<div class=\"modal fade\" id=\"a&quot;b\" tabindex=\"-1\" aria-labelledby=\"a&quot;bLabel\" aria-hidden=\"true\">\n    <div class=\"modal-dialog\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                Body\n            </div>\n        </div>\n    </div>\n</div>"
   },
   {
    "cls": "Modal",
    "csp_strict": false,
-   "html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog\">\n        <div class=\"modal-content\">\n            <div class=\"modal-header\">\n                <h5 class=\"modal-title\" id=\"m1Label\">T</h5>\n                <button type=\"button\" class=\"btn-close\" data-bs-dismiss=\"modal\" aria-label=\"Close\"></button>\n            </div>\n            <div class=\"modal-body\">\n                Body\n            </div>\n        </div>\n    </div>\n</div>",
+   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\">T</h5>\n                        <button type=\"button\" class=\"btn-close\" dj-click=\"dismiss\" data-component-id=\"m1\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" dj-click=\"dismiss\" data-component-id=\"m1\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
    "kwargs": {
     "body": "Body",
     "id": "m1",
-    "title": "T"
-   }
+    "title": "T",
+    "show": true
+   },
+   "slice1_html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog\">\n        <div class=\"modal-content\">\n            <div class=\"modal-header\">\n                <h5 class=\"modal-title\" id=\"m1Label\">T</h5>\n                <button type=\"button\" class=\"btn-close\" data-bs-dismiss=\"modal\" aria-label=\"Close\"></button>\n            </div>\n            <div class=\"modal-body\">\n                Body\n            </div>\n        </div>\n    </div>\n</div>"
   },
   {
    "cls": "Modal",
    "csp_strict": false,
-   "html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog\">\n        <div class=\"modal-content\">\n            <div class=\"modal-header\">\n                <h5 class=\"modal-title\" id=\"m1Label\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</h5>\n                <button type=\"button\" class=\"btn-close\" data-bs-dismiss=\"modal\" aria-label=\"Close\"></button>\n            </div>\n            <div class=\"modal-body\">\n                Body\n            </div>\n        </div>\n    </div>\n</div>",
+   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</h5>\n                        <button type=\"button\" class=\"btn-close\" dj-click=\"dismiss\" data-component-id=\"m1\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" dj-click=\"dismiss\" data-component-id=\"m1\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
    "kwargs": {
     "body": "Body",
     "id": "m1",
-    "title": "<b>x</b> & \"q\" 'a'"
-   }
+    "title": "<b>x</b> & \"q\" 'a'",
+    "show": true
+   },
+   "slice1_html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog\">\n        <div class=\"modal-content\">\n            <div class=\"modal-header\">\n                <h5 class=\"modal-title\" id=\"m1Label\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</h5>\n                <button type=\"button\" class=\"btn-close\" data-bs-dismiss=\"modal\" aria-label=\"Close\"></button>\n            </div>\n            <div class=\"modal-body\">\n                Body\n            </div>\n        </div>\n    </div>\n</div>"
   },
   {
    "cls": "Modal",
    "csp_strict": false,
-   "html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                Body\n            </div>\n        </div>\n    </div>\n</div>",
+   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" dj-click=\"dismiss\" data-component-id=\"m1\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" dj-click=\"dismiss\" data-component-id=\"m1\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
    "kwargs": {
     "body": "Body",
     "id": "m1",
-    "title": ""
-   }
+    "title": "",
+    "show": true
+   },
+   "slice1_html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                Body\n            </div>\n        </div>\n    </div>\n</div>"
   },
   {
    "cls": "Modal",
    "csp_strict": false,
-   "html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                Body\n            </div>\n            <div class=\"modal-footer\">\n                F\n            </div>\n        </div>\n    </div>\n</div>",
+   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" dj-click=\"dismiss\" data-component-id=\"m1\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        F\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
    "kwargs": {
     "body": "Body",
     "footer": "F",
-    "id": "m1"
-   }
+    "id": "m1",
+    "show": true
+   },
+   "slice1_html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                Body\n            </div>\n            <div class=\"modal-footer\">\n                F\n            </div>\n        </div>\n    </div>\n</div>"
   },
   {
    "cls": "Modal",
    "csp_strict": false,
-   "html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                Body\n            </div>\n            <div class=\"modal-footer\">\n                &lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;\n            </div>\n        </div>\n    </div>\n</div>",
+   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" dj-click=\"dismiss\" data-component-id=\"m1\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        &lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
    "kwargs": {
     "body": "Body",
     "footer": "<b>x</b> & \"q\" 'a'",
-    "id": "m1"
-   }
+    "id": "m1",
+    "show": true
+   },
+   "slice1_html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                Body\n            </div>\n            <div class=\"modal-footer\">\n                &lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;\n            </div>\n        </div>\n    </div>\n</div>"
   },
   {
    "cls": "Modal",
    "csp_strict": false,
-   "html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                Body\n            </div>\n            <div class=\"modal-footer\">\n                <em>safe</em>\n            </div>\n        </div>\n    </div>\n</div>",
+   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" dj-click=\"dismiss\" data-component-id=\"m1\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <em>safe</em>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
    "kwargs": {
     "body": "Body",
     "footer": {
      "safe": "<em>safe</em>"
     },
-    "id": "m1"
-   }
+    "id": "m1",
+    "show": true
+   },
+   "slice1_html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                Body\n            </div>\n            <div class=\"modal-footer\">\n                <em>safe</em>\n            </div>\n        </div>\n    </div>\n</div>"
   },
   {
    "cls": "Modal",
    "csp_strict": false,
-   "html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                Body\n            </div>\n        </div>\n    </div>\n</div>",
+   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" dj-click=\"dismiss\" data-component-id=\"m1\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" dj-click=\"dismiss\" data-component-id=\"m1\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
    "kwargs": {
     "body": "Body",
     "footer": "",
-    "id": "m1"
-   }
+    "id": "m1",
+    "show": true
+   },
+   "slice1_html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                Body\n            </div>\n        </div>\n    </div>\n</div>"
   },
   {
    "cls": "Modal",
    "csp_strict": false,
-   "html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog modal-sm\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                Body\n            </div>\n        </div>\n    </div>\n</div>",
+   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog modal-sm\">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" dj-click=\"dismiss\" data-component-id=\"m1\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" dj-click=\"dismiss\" data-component-id=\"m1\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
    "kwargs": {
     "body": "Body",
     "id": "m1",
-    "size": "sm"
-   }
+    "size": "sm",
+    "show": true
+   },
+   "slice1_html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog modal-sm\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                Body\n            </div>\n        </div>\n    </div>\n</div>"
   },
   {
    "cls": "Modal",
    "csp_strict": false,
-   "html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog modal-lg\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                Body\n            </div>\n        </div>\n    </div>\n</div>",
+   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog modal-lg\">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" dj-click=\"dismiss\" data-component-id=\"m1\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" dj-click=\"dismiss\" data-component-id=\"m1\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
    "kwargs": {
     "body": "Body",
     "id": "m1",
-    "size": "lg"
-   }
+    "size": "lg",
+    "show": true
+   },
+   "slice1_html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog modal-lg\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                Body\n            </div>\n        </div>\n    </div>\n</div>"
   },
   {
    "cls": "Modal",
    "csp_strict": false,
-   "html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog modal-xl\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                Body\n            </div>\n        </div>\n    </div>\n</div>",
+   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog modal-xl\">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" dj-click=\"dismiss\" data-component-id=\"m1\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" dj-click=\"dismiss\" data-component-id=\"m1\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
    "kwargs": {
     "body": "Body",
     "id": "m1",
-    "size": "xl"
-   }
+    "size": "xl",
+    "show": true
+   },
+   "slice1_html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog modal-xl\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                Body\n            </div>\n        </div>\n    </div>\n</div>"
   },
   {
    "cls": "Modal",
    "csp_strict": false,
-   "html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog modal-zz\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                Body\n            </div>\n        </div>\n    </div>\n</div>",
+   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" dj-click=\"dismiss\" data-component-id=\"m1\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" dj-click=\"dismiss\" data-component-id=\"m1\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
    "kwargs": {
     "body": "Body",
     "id": "m1",
-    "size": "zz"
-   }
+    "size": "zz",
+    "show": true
+   },
+   "slice1_html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog modal-zz\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                Body\n            </div>\n        </div>\n    </div>\n</div>"
   },
   {
    "cls": "Modal",
    "csp_strict": false,
-   "html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog modal-dialog-centered\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                Body\n            </div>\n        </div>\n    </div>\n</div>",
+   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" dj-click=\"dismiss\" data-component-id=\"m1\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" dj-click=\"dismiss\" data-component-id=\"m1\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
    "kwargs": {
     "body": "Body",
     "centered": true,
-    "id": "m1"
-   }
+    "id": "m1",
+    "show": true
+   },
+   "slice1_html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog modal-dialog-centered\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                Body\n            </div>\n        </div>\n    </div>\n</div>"
   },
   {
    "cls": "Modal",
    "csp_strict": false,
-   "html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                Body\n            </div>\n        </div>\n    </div>\n</div>",
+   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" dj-click=\"dismiss\" data-component-id=\"m1\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" dj-click=\"dismiss\" data-component-id=\"m1\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
    "kwargs": {
     "body": "Body",
     "dismissable": false,
-    "id": "m1"
-   }
+    "id": "m1",
+    "show": true
+   },
+   "slice1_html": "<div class=\"modal fade\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                Body\n            </div>\n        </div>\n    </div>\n</div>"
   },
   {
    "cls": "Modal",
    "csp_strict": false,
-   "html": "<div class=\"modal fade show\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                Body\n            </div>\n        </div>\n    </div>\n</div>",
+   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog \">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\"></h5>\n                        <button type=\"button\" class=\"btn-close\" dj-click=\"dismiss\" data-component-id=\"m1\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        Body\n                    </div>\n                    <div class=\"modal-footer\">\n                        <button type=\"button\" class=\"btn btn-secondary\" dj-click=\"dismiss\" data-component-id=\"m1\">Close</button>\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
    "kwargs": {
     "body": "Body",
     "id": "m1",
     "show": true
-   }
+   },
+   "slice1_html": "<div class=\"modal fade show\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog\">\n        <div class=\"modal-content\">\n            <div class=\"modal-body\">\n                Body\n            </div>\n        </div>\n    </div>\n</div>"
   },
   {
    "cls": "Progress",
    "csp_strict": false,
-   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" style=\"width: 40.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" style=\"height: 1rem;\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" style=\"width: 40%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
    "kwargs": {
     "value": 40
-   }
+   },
+   "slice1_html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" style=\"width: 40.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>"
   },
   {
    "cls": "Progress",
    "csp_strict": true,
-   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" data-dj-style data-dj-style-height=\"1rem\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
    "kwargs": {
     "value": 40
-   }
+   },
+   "slice1_html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>"
   },
   {
    "cls": "Progress",
    "csp_strict": false,
-   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-0\" role=\"progressbar\" style=\"width: 0.0%\" aria-valuenow=\"0\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" style=\"height: 1rem;\"><div class=\"progress-bar bg-primary dj-progress-w-0\" role=\"progressbar\" style=\"width: 0%\" aria-valuenow=\"0\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
    "kwargs": {
     "value": 0
-   }
+   },
+   "slice1_html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-0\" role=\"progressbar\" style=\"width: 0.0%\" aria-valuenow=\"0\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>"
   },
   {
    "cls": "Progress",
    "csp_strict": true,
-   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-0\" role=\"progressbar\" aria-valuenow=\"0\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" data-dj-style data-dj-style-height=\"1rem\"><div class=\"progress-bar bg-primary dj-progress-w-0\" role=\"progressbar\" aria-valuenow=\"0\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
    "kwargs": {
     "value": 0
-   }
+   },
+   "slice1_html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-0\" role=\"progressbar\" aria-valuenow=\"0\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>"
   },
   {
    "cls": "Progress",
    "csp_strict": false,
-   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-100\" role=\"progressbar\" style=\"width: 100.0%\" aria-valuenow=\"100\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" style=\"height: 1rem;\"><div class=\"progress-bar bg-primary dj-progress-w-100\" role=\"progressbar\" style=\"width: 100%\" aria-valuenow=\"100\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
    "kwargs": {
     "value": 100
-   }
+   },
+   "slice1_html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-100\" role=\"progressbar\" style=\"width: 100.0%\" aria-valuenow=\"100\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>"
   },
   {
    "cls": "Progress",
    "csp_strict": true,
-   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-100\" role=\"progressbar\" aria-valuenow=\"100\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" data-dj-style data-dj-style-height=\"1rem\"><div class=\"progress-bar bg-primary dj-progress-w-100\" role=\"progressbar\" aria-valuenow=\"100\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
    "kwargs": {
     "value": 100
-   }
+   },
+   "slice1_html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-100\" role=\"progressbar\" aria-valuenow=\"100\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>"
   },
   {
    "cls": "Progress",
    "csp_strict": false,
-   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-100\" role=\"progressbar\" style=\"width: 100.0%\" aria-valuenow=\"100\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" style=\"height: 1rem;\"><div class=\"progress-bar bg-primary dj-progress-w-100\" role=\"progressbar\" style=\"width: 100%\" aria-valuenow=\"100\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
    "kwargs": {
     "value": 150
-   }
+   },
+   "slice1_html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-100\" role=\"progressbar\" style=\"width: 100.0%\" aria-valuenow=\"100\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>"
   },
   {
    "cls": "Progress",
    "csp_strict": true,
-   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-100\" role=\"progressbar\" aria-valuenow=\"100\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" data-dj-style data-dj-style-height=\"1rem\"><div class=\"progress-bar bg-primary dj-progress-w-100\" role=\"progressbar\" aria-valuenow=\"100\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
    "kwargs": {
     "value": 150
-   }
+   },
+   "slice1_html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-100\" role=\"progressbar\" aria-valuenow=\"100\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>"
   },
   {
    "cls": "Progress",
    "csp_strict": false,
-   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-0\" role=\"progressbar\" style=\"width: 0.0%\" aria-valuenow=\"0\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" style=\"height: 1rem;\"><div class=\"progress-bar bg-primary dj-progress-w-0\" role=\"progressbar\" style=\"width: 0%\" aria-valuenow=\"0\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
    "kwargs": {
     "value": -5
-   }
+   },
+   "slice1_html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-0\" role=\"progressbar\" style=\"width: 0.0%\" aria-valuenow=\"0\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>"
   },
   {
    "cls": "Progress",
    "csp_strict": true,
-   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-0\" role=\"progressbar\" aria-valuenow=\"0\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" data-dj-style data-dj-style-height=\"1rem\"><div class=\"progress-bar bg-primary dj-progress-w-0\" role=\"progressbar\" aria-valuenow=\"0\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
    "kwargs": {
     "value": -5
-   }
+   },
+   "slice1_html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-0\" role=\"progressbar\" aria-valuenow=\"0\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>"
   },
   {
    "cls": "Progress",
    "csp_strict": false,
-   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-33\" role=\"progressbar\" style=\"width: 33.3%\" aria-valuenow=\"33.333\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" style=\"height: 1rem;\"><div class=\"progress-bar bg-primary dj-progress-w-33\" role=\"progressbar\" style=\"width: 33%\" aria-valuenow=\"33.333\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
    "kwargs": {
     "value": 33.333
-   }
+   },
+   "slice1_html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-33\" role=\"progressbar\" style=\"width: 33.3%\" aria-valuenow=\"33.333\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>"
   },
   {
    "cls": "Progress",
    "csp_strict": true,
-   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-33\" role=\"progressbar\" aria-valuenow=\"33.333\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" data-dj-style data-dj-style-height=\"1rem\"><div class=\"progress-bar bg-primary dj-progress-w-33\" role=\"progressbar\" aria-valuenow=\"33.333\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
    "kwargs": {
     "value": 33.333
-   }
+   },
+   "slice1_html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-33\" role=\"progressbar\" aria-valuenow=\"33.333\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>"
   },
   {
    "cls": "Progress",
    "csp_strict": false,
-   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-43\" role=\"progressbar\" style=\"width: 42.5%\" aria-valuenow=\"42.5\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" style=\"height: 1rem;\"><div class=\"progress-bar bg-primary dj-progress-w-42\" role=\"progressbar\" style=\"width: 42%\" aria-valuenow=\"42.5\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
    "kwargs": {
     "value": 42.5
-   }
+   },
+   "slice1_html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-43\" role=\"progressbar\" style=\"width: 42.5%\" aria-valuenow=\"42.5\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>"
   },
   {
    "cls": "Progress",
    "csp_strict": true,
-   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-43\" role=\"progressbar\" aria-valuenow=\"42.5\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" data-dj-style data-dj-style-height=\"1rem\"><div class=\"progress-bar bg-primary dj-progress-w-42\" role=\"progressbar\" aria-valuenow=\"42.5\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
    "kwargs": {
     "value": 42.5
-   }
+   },
+   "slice1_html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-43\" role=\"progressbar\" aria-valuenow=\"42.5\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>"
   },
   {
    "cls": "Progress",
    "csp_strict": false,
-   "html": "<div class=\"progress\"><div class=\"progress-bar bg-success dj-progress-w-40\" role=\"progressbar\" style=\"width: 40.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" style=\"height: 1rem;\"><div class=\"progress-bar bg-success dj-progress-w-40\" role=\"progressbar\" style=\"width: 40%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
    "kwargs": {
     "value": 40,
     "variant": "success"
-   }
+   },
+   "slice1_html": "<div class=\"progress\"><div class=\"progress-bar bg-success dj-progress-w-40\" role=\"progressbar\" style=\"width: 40.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>"
   },
   {
    "cls": "Progress",
    "csp_strict": true,
-   "html": "<div class=\"progress\"><div class=\"progress-bar bg-success dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" data-dj-style data-dj-style-height=\"1rem\"><div class=\"progress-bar bg-success dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
    "kwargs": {
     "value": 40,
     "variant": "success"
-   }
+   },
+   "slice1_html": "<div class=\"progress\"><div class=\"progress-bar bg-success dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>"
   },
   {
    "cls": "Progress",
    "csp_strict": false,
-   "html": "<div class=\"progress\"><div class=\"progress-bar bg-x&quot;y dj-progress-w-40\" role=\"progressbar\" style=\"width: 40.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" style=\"height: 1rem;\"><div class=\"progress-bar bg-x&quot;y dj-progress-w-40\" role=\"progressbar\" style=\"width: 40%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
    "kwargs": {
     "value": 40,
     "variant": "x\"y"
-   }
+   },
+   "slice1_html": "<div class=\"progress\"><div class=\"progress-bar bg-x&quot;y dj-progress-w-40\" role=\"progressbar\" style=\"width: 40.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>"
   },
   {
    "cls": "Progress",
    "csp_strict": true,
-   "html": "<div class=\"progress\"><div class=\"progress-bar bg-x&quot;y dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" data-dj-style data-dj-style-height=\"1rem\"><div class=\"progress-bar bg-x&quot;y dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
    "kwargs": {
     "value": 40,
     "variant": "x\"y"
-   }
+   },
+   "slice1_html": "<div class=\"progress\"><div class=\"progress-bar bg-x&quot;y dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>"
   },
   {
    "cls": "Progress",
    "csp_strict": false,
-   "html": "<div class=\"progress\"><div class=\"progress-bar progress-bar-striped bg-primary dj-progress-w-40\" role=\"progressbar\" style=\"width: 40.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" style=\"height: 1rem;\"><div class=\"progress-bar bg-primary dj-progress-w-40 progress-bar-striped\" role=\"progressbar\" style=\"width: 40%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
    "kwargs": {
     "striped": true,
     "value": 40
-   }
+   },
+   "slice1_html": "<div class=\"progress\"><div class=\"progress-bar progress-bar-striped bg-primary dj-progress-w-40\" role=\"progressbar\" style=\"width: 40.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>"
   },
   {
    "cls": "Progress",
    "csp_strict": true,
-   "html": "<div class=\"progress\"><div class=\"progress-bar progress-bar-striped bg-primary dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" data-dj-style data-dj-style-height=\"1rem\"><div class=\"progress-bar bg-primary dj-progress-w-40 progress-bar-striped\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
    "kwargs": {
     "striped": true,
     "value": 40
-   }
+   },
+   "slice1_html": "<div class=\"progress\"><div class=\"progress-bar progress-bar-striped bg-primary dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>"
   },
   {
    "cls": "Progress",
    "csp_strict": false,
-   "html": "<div class=\"progress\"><div class=\"progress-bar progress-bar-animated bg-primary dj-progress-w-40\" role=\"progressbar\" style=\"width: 40.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" style=\"height: 1rem;\"><div class=\"progress-bar bg-primary dj-progress-w-40 progress-bar-animated\" role=\"progressbar\" style=\"width: 40%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
    "kwargs": {
     "animated": true,
     "value": 40
-   }
+   },
+   "slice1_html": "<div class=\"progress\"><div class=\"progress-bar progress-bar-animated bg-primary dj-progress-w-40\" role=\"progressbar\" style=\"width: 40.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>"
   },
   {
    "cls": "Progress",
    "csp_strict": true,
-   "html": "<div class=\"progress\"><div class=\"progress-bar progress-bar-animated bg-primary dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" data-dj-style data-dj-style-height=\"1rem\"><div class=\"progress-bar bg-primary dj-progress-w-40 progress-bar-animated\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
    "kwargs": {
     "animated": true,
     "value": 40
-   }
+   },
+   "slice1_html": "<div class=\"progress\"><div class=\"progress-bar progress-bar-animated bg-primary dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>"
   },
   {
    "cls": "Progress",
    "csp_strict": false,
-   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" style=\"width: 40.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\">40%</div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" style=\"height: 1rem;\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" style=\"width: 40%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\">40%</div></div>",
    "kwargs": {
     "show_label": true,
     "value": 40
-   }
+   },
+   "slice1_html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" style=\"width: 40.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\">40%</div></div>"
   },
   {
    "cls": "Progress",
    "csp_strict": true,
-   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\">40%</div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" data-dj-style data-dj-style-height=\"1rem\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\">40%</div></div>",
    "kwargs": {
     "show_label": true,
     "value": 40
-   }
+   },
+   "slice1_html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\">40%</div></div>"
   },
   {
    "cls": "Progress",
    "csp_strict": false,
-   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" style=\"width: 40.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\">Half</div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" style=\"height: 1rem;\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" style=\"width: 40%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\">Half</div></div>",
    "kwargs": {
     "label": "Half",
     "value": 40
-   }
+   },
+   "slice1_html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" style=\"width: 40.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\">Half</div></div>"
   },
   {
    "cls": "Progress",
    "csp_strict": true,
-   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\">Half</div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" data-dj-style data-dj-style-height=\"1rem\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\">Half</div></div>",
    "kwargs": {
     "label": "Half",
     "value": 40
-   }
+   },
+   "slice1_html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\">Half</div></div>"
   },
   {
    "cls": "Progress",
    "csp_strict": false,
-   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" style=\"width: 40.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" style=\"height: 1rem;\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" style=\"width: 40%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</div></div>",
    "kwargs": {
     "label": "<b>x</b> & \"q\" 'a'",
     "value": 40
-   }
+   },
+   "slice1_html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" style=\"width: 40.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</div></div>"
   },
   {
    "cls": "Progress",
    "csp_strict": true,
-   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" data-dj-style data-dj-style-height=\"1rem\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</div></div>",
    "kwargs": {
     "label": "<b>x</b> & \"q\" 'a'",
     "value": 40
-   }
+   },
+   "slice1_html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</div></div>"
   },
   {
    "cls": "Progress",
    "csp_strict": false,
-   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" style=\"width: 40.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" style=\"height: 1rem;\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" style=\"width: 40%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
    "kwargs": {
     "label": "",
     "value": 40
-   }
+   },
+   "slice1_html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" style=\"width: 40.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>"
   },
   {
    "cls": "Progress",
    "csp_strict": true,
-   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" data-dj-style data-dj-style-height=\"1rem\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
    "kwargs": {
     "label": "",
     "value": 40
-   }
+   },
+   "slice1_html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>"
   },
   {
    "cls": "Progress",
    "csp_strict": false,
-   "html": "<div class=\"progress\" style=\"height: 20px\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" style=\"width: 40.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" style=\"height: 20px;\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" style=\"width: 40%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
    "kwargs": {
     "height": "20px",
     "value": 40
-   }
+   },
+   "slice1_html": "<div class=\"progress\" style=\"height: 20px\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" style=\"width: 40.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>"
   },
   {
    "cls": "Progress",
    "csp_strict": true,
-   "html": "<div class=\"progress\" data-dj-style data-dj-style-height=\"20px\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" data-dj-style data-dj-style-height=\"20px\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
    "kwargs": {
     "height": "20px",
     "value": 40
-   }
+   },
+   "slice1_html": "<div class=\"progress\" data-dj-style data-dj-style-height=\"20px\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>"
   },
   {
    "cls": "Progress",
    "csp_strict": false,
-   "html": "<div class=\"progress\" style=\"height: 2rem\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" style=\"width: 40.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" style=\"height: 2rem;\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" style=\"width: 40%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
    "kwargs": {
     "height": "2rem",
     "value": 40
-   }
+   },
+   "slice1_html": "<div class=\"progress\" style=\"height: 2rem\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" style=\"width: 40.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>"
   },
   {
    "cls": "Progress",
    "csp_strict": true,
-   "html": "<div class=\"progress\" data-dj-style data-dj-style-height=\"2rem\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" data-dj-style data-dj-style-height=\"2rem\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
    "kwargs": {
     "height": "2rem",
     "value": 40
-   }
+   },
+   "slice1_html": "<div class=\"progress\" data-dj-style data-dj-style-height=\"2rem\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>"
   },
   {
    "cls": "Progress",
    "csp_strict": false,
-   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" style=\"width: 40.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" style=\"height: 1rem;\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" style=\"width: 40%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
    "kwargs": {
     "height": "bad;x",
     "value": 40
-   }
+   },
+   "slice1_html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" style=\"width: 40.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>"
   },
   {
    "cls": "Progress",
    "csp_strict": true,
-   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" data-dj-style data-dj-style-height=\"1rem\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
    "kwargs": {
     "height": "bad;x",
     "value": 40
-   }
+   },
+   "slice1_html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>"
   },
   {
    "cls": "Progress",
    "csp_strict": false,
-   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" style=\"width: 40.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" style=\"height: 1rem;\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" style=\"width: 40%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
    "kwargs": {
     "height": "",
     "value": 40
-   }
+   },
+   "slice1_html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" style=\"width: 40.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>"
   },
   {
    "cls": "Progress",
    "csp_strict": true,
-   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" data-dj-style data-dj-style-height=\"1rem\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>",
    "kwargs": {
     "height": "",
     "value": 40
-   }
+   },
+   "slice1_html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\"></div></div>"
   },
   {
    "cls": "Progress",
    "csp_strict": false,
-   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-33\" role=\"progressbar\" style=\"width: 33.3%\" aria-valuenow=\"40\" aria-valuemin=\"10\" aria-valuemax=\"100\"></div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" style=\"height: 1rem;\"><div class=\"progress-bar bg-primary dj-progress-w-33\" role=\"progressbar\" style=\"width: 33%\" aria-valuenow=\"40\" aria-valuemin=\"10\" aria-valuemax=\"100\"></div></div>",
    "kwargs": {
     "min_value": 10,
     "value": 40
-   }
+   },
+   "slice1_html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-33\" role=\"progressbar\" style=\"width: 33.3%\" aria-valuenow=\"40\" aria-valuemin=\"10\" aria-valuemax=\"100\"></div></div>"
   },
   {
    "cls": "Progress",
    "csp_strict": true,
-   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-33\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"10\" aria-valuemax=\"100\"></div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" data-dj-style data-dj-style-height=\"1rem\"><div class=\"progress-bar bg-primary dj-progress-w-33\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"10\" aria-valuemax=\"100\"></div></div>",
    "kwargs": {
     "min_value": 10,
     "value": 40
-   }
+   },
+   "slice1_html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-33\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"10\" aria-valuemax=\"100\"></div></div>"
   },
   {
    "cls": "Progress",
    "csp_strict": false,
-   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-80\" role=\"progressbar\" style=\"width: 80.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"50\"></div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" style=\"height: 1rem;\"><div class=\"progress-bar bg-primary dj-progress-w-80\" role=\"progressbar\" style=\"width: 80%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"50\"></div></div>",
    "kwargs": {
     "max_value": 50,
     "value": 40
-   }
+   },
+   "slice1_html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-80\" role=\"progressbar\" style=\"width: 80.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"50\"></div></div>"
   },
   {
    "cls": "Progress",
    "csp_strict": true,
-   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-80\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"50\"></div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" data-dj-style data-dj-style-height=\"1rem\"><div class=\"progress-bar bg-primary dj-progress-w-80\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"50\"></div></div>",
    "kwargs": {
     "max_value": 50,
     "value": 40
-   }
+   },
+   "slice1_html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-80\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"50\"></div></div>"
   },
   {
    "cls": "Progress",
    "csp_strict": false,
-   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-20\" role=\"progressbar\" style=\"width: 20.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"200\"></div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" style=\"height: 1rem;\"><div class=\"progress-bar bg-primary dj-progress-w-20\" role=\"progressbar\" style=\"width: 20%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"200\"></div></div>",
    "kwargs": {
     "max_value": 200,
     "value": 40
-   }
+   },
+   "slice1_html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-20\" role=\"progressbar\" style=\"width: 20.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"200\"></div></div>"
   },
   {
    "cls": "Progress",
    "csp_strict": true,
-   "html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-20\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"200\"></div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" data-dj-style data-dj-style-height=\"1rem\"><div class=\"progress-bar bg-primary dj-progress-w-20\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"200\"></div></div>",
    "kwargs": {
     "max_value": 200,
     "value": 40
-   }
+   },
+   "slice1_html": "<div class=\"progress\"><div class=\"progress-bar bg-primary dj-progress-w-20\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"200\"></div></div>"
   },
   {
    "cls": "Progress",
    "csp_strict": false,
-   "html": "<div class=\"progress\" style=\"height: 9px\"><div class=\"progress-bar progress-bar-striped progress-bar-animated bg-primary dj-progress-w-40\" role=\"progressbar\" style=\"width: 40.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\">L</div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" style=\"height: 9px;\"><div class=\"progress-bar bg-primary dj-progress-w-40 progress-bar-striped progress-bar-animated\" role=\"progressbar\" style=\"width: 40%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\">L</div></div>",
    "kwargs": {
     "animated": true,
     "height": "9px",
@@ -1604,12 +1726,13 @@
     "show_label": true,
     "striped": true,
     "value": 40
-   }
+   },
+   "slice1_html": "<div class=\"progress\" style=\"height: 9px\"><div class=\"progress-bar progress-bar-striped progress-bar-animated bg-primary dj-progress-w-40\" role=\"progressbar\" style=\"width: 40.0%\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\">L</div></div>"
   },
   {
    "cls": "Progress",
    "csp_strict": true,
-   "html": "<div class=\"progress\" data-dj-style data-dj-style-height=\"9px\"><div class=\"progress-bar progress-bar-striped progress-bar-animated bg-primary dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\">L</div></div>",
+   "html": "<div class=\"progress\" id=\"progress\" data-dj-style data-dj-style-height=\"9px\"><div class=\"progress-bar bg-primary dj-progress-w-40 progress-bar-striped progress-bar-animated\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\">L</div></div>",
    "kwargs": {
     "animated": true,
     "height": "9px",
@@ -1617,7 +1740,8 @@
     "show_label": true,
     "striped": true,
     "value": 40
-   }
+   },
+   "slice1_html": "<div class=\"progress\" data-dj-style data-dj-style-height=\"9px\"><div class=\"progress-bar progress-bar-striped progress-bar-animated bg-primary dj-progress-w-40\" role=\"progressbar\" aria-valuenow=\"40\" aria-valuemin=\"0\" aria-valuemax=\"100\">L</div></div>"
   },
   {
    "cls": "Range",
@@ -1820,88 +1944,99 @@
   {
    "cls": "Spinner",
    "csp_strict": false,
-   "html": "<div class=\"spinner-border text-primary\" role=\"status\">\n    <span class=\"visually-hidden\">Loading...</span>\n</div>",
-   "kwargs": {}
+   "html": "<div id=\"spinner\"><div class=\"spinner-border  text-primary\" role=\"status\"><span class=\"visually-hidden\">Loading...</span></div></div>",
+   "kwargs": {},
+   "slice1_html": "<div class=\"spinner-border text-primary\" role=\"status\">\n    <span class=\"visually-hidden\">Loading...</span>\n</div>"
   },
   {
    "cls": "Spinner",
    "csp_strict": false,
-   "html": "<div class=\"spinner-border text-success\" role=\"status\">\n    <span class=\"visually-hidden\">Loading...</span>\n</div>",
+   "html": "<div id=\"spinner\"><div class=\"spinner-border  text-success\" role=\"status\"><span class=\"visually-hidden\">Loading...</span></div></div>",
    "kwargs": {
     "variant": "success"
-   }
+   },
+   "slice1_html": "<div class=\"spinner-border text-success\" role=\"status\">\n    <span class=\"visually-hidden\">Loading...</span>\n</div>"
   },
   {
    "cls": "Spinner",
    "csp_strict": false,
-   "html": "<div class=\"spinner-border text-x&quot;y\" role=\"status\">\n    <span class=\"visually-hidden\">Loading...</span>\n</div>",
+   "html": "<div id=\"spinner\"><div class=\"spinner-border  text-x&quot;y\" role=\"status\"><span class=\"visually-hidden\">Loading...</span></div></div>",
    "kwargs": {
     "variant": "x\"y"
-   }
+   },
+   "slice1_html": "<div class=\"spinner-border text-x&quot;y\" role=\"status\">\n    <span class=\"visually-hidden\">Loading...</span>\n</div>"
   },
   {
    "cls": "Spinner",
    "csp_strict": false,
-   "html": "<div class=\"spinner-border text-primary spinner-border-sm\" role=\"status\">\n    <span class=\"visually-hidden\">Loading...</span>\n</div>",
+   "html": "<div id=\"spinner\"><div class=\"spinner-border spinner-border-sm text-primary\" role=\"status\"><span class=\"visually-hidden\">Loading...</span></div></div>",
    "kwargs": {
     "size": "sm"
-   }
+   },
+   "slice1_html": "<div class=\"spinner-border text-primary spinner-border-sm\" role=\"status\">\n    <span class=\"visually-hidden\">Loading...</span>\n</div>"
   },
   {
    "cls": "Spinner",
    "csp_strict": false,
-   "html": "<div class=\"spinner-border text-primary\" role=\"status\">\n    <span class=\"visually-hidden\">Loading...</span>\n</div>",
+   "html": "<div id=\"spinner\"><div class=\"spinner-border  text-primary\" role=\"status\" style=\"width: 3rem; height: 3rem;\"><span class=\"visually-hidden\">Loading...</span></div></div>",
    "kwargs": {
     "size": "lg"
-   }
+   },
+   "slice1_html": "<div class=\"spinner-border text-primary\" role=\"status\">\n    <span class=\"visually-hidden\">Loading...</span>\n</div>"
   },
   {
    "cls": "Spinner",
    "csp_strict": false,
-   "html": "<div class=\"spinner-border text-primary\" role=\"status\">\n    <span class=\"visually-hidden\">Loading...</span>\n</div>",
+   "html": "<div id=\"spinner\"><div class=\"spinner-border  text-primary\" role=\"status\"><span class=\"visually-hidden\">Loading...</span></div></div>",
    "kwargs": {
     "size": "zz"
-   }
+   },
+   "slice1_html": "<div class=\"spinner-border text-primary\" role=\"status\">\n    <span class=\"visually-hidden\">Loading...</span>\n</div>"
   },
   {
    "cls": "Spinner",
    "csp_strict": false,
-   "html": "<div class=\"spinner-grow text-primary\" role=\"status\">\n    <span class=\"visually-hidden\">Loading...</span>\n</div>",
+   "html": "<div id=\"spinner\"><div class=\"spinner-grow  text-primary\" role=\"status\"><span class=\"visually-hidden\">Loading...</span></div></div>",
    "kwargs": {
     "animation": "grow"
-   }
+   },
+   "slice1_html": "<div class=\"spinner-grow text-primary\" role=\"status\">\n    <span class=\"visually-hidden\">Loading...</span>\n</div>"
   },
   {
    "cls": "Spinner",
    "csp_strict": false,
-   "html": "<div class=\"spinner-zz text-primary\" role=\"status\">\n    <span class=\"visually-hidden\">Loading...</span>\n</div>",
+   "html": "<div id=\"spinner\"><div class=\"spinner-grow  text-primary\" role=\"status\"><span class=\"visually-hidden\">Loading...</span></div></div>",
    "kwargs": {
     "animation": "zz"
-   }
+   },
+   "slice1_html": "<div class=\"spinner-zz text-primary\" role=\"status\">\n    <span class=\"visually-hidden\">Loading...</span>\n</div>"
   },
   {
    "cls": "Spinner",
    "csp_strict": false,
-   "html": "<div class=\"spinner-border text-primary\" role=\"status\">\n    <span class=\"visually-hidden\">Wait</span>\n</div>",
+   "html": "<div id=\"spinner\"><div class=\"spinner-border  text-primary\" role=\"status\"><span class=\"visually-hidden\">Loading...</span></div></div>",
    "kwargs": {
     "sr_text": "Wait"
-   }
+   },
+   "slice1_html": "<div class=\"spinner-border text-primary\" role=\"status\">\n    <span class=\"visually-hidden\">Wait</span>\n</div>"
   },
   {
    "cls": "Spinner",
    "csp_strict": false,
-   "html": "<div class=\"spinner-border text-primary\" role=\"status\">\n    <span class=\"visually-hidden\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</span>\n</div>",
+   "html": "<div id=\"spinner\"><div class=\"spinner-border  text-primary\" role=\"status\"><span class=\"visually-hidden\">Loading...</span></div></div>",
    "kwargs": {
     "sr_text": "<b>x</b> & \"q\" 'a'"
-   }
+   },
+   "slice1_html": "<div class=\"spinner-border text-primary\" role=\"status\">\n    <span class=\"visually-hidden\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</span>\n</div>"
   },
   {
    "cls": "Spinner",
    "csp_strict": false,
-   "html": "<div class=\"spinner-border text-primary\" role=\"status\">\n    <span class=\"visually-hidden\"></span>\n</div>",
+   "html": "<div id=\"spinner\"><div class=\"spinner-border  text-primary\" role=\"status\"><span class=\"visually-hidden\">Loading...</span></div></div>",
    "kwargs": {
     "sr_text": ""
-   }
+   },
+   "slice1_html": "<div class=\"spinner-border text-primary\" role=\"status\">\n    <span class=\"visually-hidden\"></span>\n</div>"
   },
   {
    "cls": "Switch",
@@ -2571,7 +2706,7 @@
   {
    "cls": "Modal",
    "csp_strict": false,
-   "html": "<div class=\"modal fade show\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog modal-lg modal-dialog-centered\">\n        <div class=\"modal-content\">\n            <div class=\"modal-header\">\n                <h5 class=\"modal-title\" id=\"m1Label\">T</h5>\n                <button type=\"button\" class=\"btn-close\" data-bs-dismiss=\"modal\" aria-label=\"Close\"></button>\n            </div>\n            <div class=\"modal-body\">\n                B\n            </div>\n            <div class=\"modal-footer\">\n                F\n            </div>\n        </div>\n    </div>\n</div>",
+   "html": "\n        <div class=\"modal fade show d-block\" id=\"m1\" tabindex=\"-1\">\n            <div class=\"modal-dialog modal-lg\">\n                <div class=\"modal-content\">\n                    <div class=\"modal-header\">\n                        <h5 class=\"modal-title\">T</h5>\n                        <button type=\"button\" class=\"btn-close\" dj-click=\"dismiss\" data-component-id=\"m1\" aria-label=\"Close\"></button>\n                    </div>\n                    <div class=\"modal-body\">\n                        B\n                    </div>\n                    <div class=\"modal-footer\">\n                        F\n                    </div>\n                </div>\n            </div>\n        </div>\n        <div class=\"modal-backdrop fade show\"></div>\n        ",
    "kwargs": {
     "body": "B",
     "centered": true,
@@ -2580,7 +2715,8 @@
     "show": true,
     "size": "lg",
     "title": "T"
-   }
+   },
+   "slice1_html": "<div class=\"modal fade show\" id=\"m1\" tabindex=\"-1\" aria-labelledby=\"m1Label\" aria-hidden=\"true\">\n    <div class=\"modal-dialog modal-lg modal-dialog-centered\">\n        <div class=\"modal-content\">\n            <div class=\"modal-header\">\n                <h5 class=\"modal-title\" id=\"m1Label\">T</h5>\n                <button type=\"button\" class=\"btn-close\" data-bs-dismiss=\"modal\" aria-label=\"Close\"></button>\n            </div>\n            <div class=\"modal-body\">\n                B\n            </div>\n            <div class=\"modal-footer\">\n                F\n            </div>\n        </div>\n    </div>\n</div>"
   },
   {
    "cls": "Switch",
@@ -2654,6 +2790,131 @@
     "show_icon": false,
     "title": ""
    }
+  },
+  {
+   "cls": "Modal",
+   "kwargs": {
+    "body": "Body",
+    "id": "m1",
+    "show": false
+   },
+   "csp_strict": false,
+   "html": ""
+  },
+  {
+   "cls": "Dropdown",
+   "kwargs": {
+    "label": "Menu",
+    "items": [
+     {
+      "label": "A",
+      "action": "pick"
+     },
+     {
+      "divider": true
+     },
+     {
+      "label": "B",
+      "variant": "danger",
+      "icon": "*"
+     }
+    ]
+   },
+   "csp_strict": false,
+   "html": "<div class=\"btn-group dropdown\" id=\"dropdown\"><button type=\"button\" class=\"btn btn-primary dropdown-toggle\" data-bs-toggle=\"dropdown\" aria-expanded=\"false\">Menu</button><ul class=\"dropdown-menu\"><li><a class=\"dropdown-item\" href=\"#\" dj-click=\"pick\">A</a></li><li><hr class=\"dropdown-divider\"></li><li><a class=\"dropdown-item text-danger\" href=\"#\">* B</a></li></ul></div>"
+  },
+  {
+   "cls": "Dropdown",
+   "kwargs": {
+    "label": "<b>x</b> & \"q\" 'a'",
+    "items": [
+     {
+      "label": "<b>x</b> & \"q\" 'a'"
+     }
+    ],
+    "id": "a\"b"
+   },
+   "csp_strict": false,
+   "html": "<div class=\"btn-group dropdown\" id=\"a&quot;b\"><button type=\"button\" class=\"btn btn-primary dropdown-toggle\" data-bs-toggle=\"dropdown\" aria-expanded=\"false\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</button><ul class=\"dropdown-menu\"><li><a class=\"dropdown-item\" href=\"#\">&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot; &#x27;a&#x27;</a></li></ul></div>"
+  },
+  {
+   "cls": "Dropdown",
+   "kwargs": {
+    "label": {
+     "safe": "<em>safe</em>"
+    },
+    "items": [
+     {
+      "label": {
+       "safe": "<em>safe</em>"
+      }
+     }
+    ]
+   },
+   "csp_strict": false,
+   "html": "<div class=\"btn-group dropdown\" id=\"dropdown\"><button type=\"button\" class=\"btn btn-primary dropdown-toggle\" data-bs-toggle=\"dropdown\" aria-expanded=\"false\">&lt;em&gt;safe&lt;/em&gt;</button><ul class=\"dropdown-menu\"><li><a class=\"dropdown-item\" href=\"#\">{&#x27;safe&#x27;: &#x27;&lt;em&gt;safe&lt;/em&gt;&#x27;}</a></li></ul></div>"
+  },
+  {
+   "cls": "Dropdown",
+   "kwargs": {
+    "label": "M",
+    "items": [
+     {
+      "label": "A",
+      "url": "/a"
+     },
+     {
+      "label": "B",
+      "disabled": true
+     }
+    ],
+    "id": "dd"
+   },
+   "csp_strict": false,
+   "html": "<div class=\"btn-group dropdown\" id=\"dd\"><button type=\"button\" class=\"btn btn-primary dropdown-toggle\" data-bs-toggle=\"dropdown\" aria-expanded=\"false\">M</button><ul class=\"dropdown-menu\"><li><a class=\"dropdown-item\" href=\"#\">A</a></li><li><a class=\"dropdown-item\" href=\"#\">B</a></li></ul></div>"
+  },
+  {
+   "cls": "Dropdown",
+   "kwargs": {
+    "label": "M",
+    "items": [
+     {
+      "label": "A",
+      "action": "go",
+      "data": {
+       "item_id": 4
+      }
+     }
+    ],
+    "split": true,
+    "size": "sm",
+    "variant": "danger",
+    "direction": "up"
+   },
+   "csp_strict": false,
+   "html": "<div class=\"btn-group dropup\" id=\"dropdown\"><button type=\"button\" class=\"btn btn-danger btn-sm\">M</button><button type=\"button\" class=\"btn btn-danger btn-sm dropdown-toggle dropdown-toggle-split\" data-bs-toggle=\"dropdown\" aria-expanded=\"false\"><span class=\"visually-hidden\">Toggle Dropdown</span></button><ul class=\"dropdown-menu\"><li><a class=\"dropdown-item\" href=\"#\" dj-click=\"go\" dj-value-item_id=\"4\">A</a></li></ul></div>"
+  },
+  {
+   "cls": "Dropdown",
+   "kwargs": {
+    "label": "M",
+    "items": [],
+    "size": "lg",
+    "direction": "start"
+   },
+   "csp_strict": false,
+   "html": "<div class=\"btn-group dropstart\" id=\"dropdown\"><button type=\"button\" class=\"btn btn-primary btn-lg dropdown-toggle\" data-bs-toggle=\"dropdown\" aria-expanded=\"false\">M</button><ul class=\"dropdown-menu\"></ul></div>"
+  },
+  {
+   "cls": "Dropdown",
+   "kwargs": {
+    "label": "M",
+    "items": [],
+    "direction": "end",
+    "variant": "a\"b"
+   },
+   "csp_strict": false,
+   "html": "<div class=\"btn-group dropend\" id=\"dropdown\"><button type=\"button\" class=\"btn btn-a&quot;b dropdown-toggle\" data-bs-toggle=\"dropdown\" aria-expanded=\"false\">M</button><ul class=\"dropdown-menu\"></ul></div>"
   }
  ]
 }

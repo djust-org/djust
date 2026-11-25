@@ -16,25 +16,32 @@ Example:
         dismissable=True
     )
 
-One renderer (#4002): ``_render_custom`` draws the Bootstrap 5 markup the retired Rust
-``RustAlert`` drew, pinned byte for byte by ``python/tests/test_ui_simple_golden_4002.py``.
+One renderer (#4002): ``_render_custom`` returns the markup of ``AlertComponent``, built from this
+class's arguments (the mapping is in the class docstring), so the widget has one renderer.
 """
 
-from ..base import Component
+from djust.components._alias_deprecation import warn_alias
 
-from djust.components.utils import attr_text
+from ..base import Component
+from ._twin import plain_text, render_twin
+from .alert import AlertComponent
+
+#: The alert types ``AlertComponent`` draws; it draws any other as ``info``.
+_TYPES = frozenset({"info", "success", "warning", "danger", "error"})
 
 
 class Alert(Component):
     """
-    Simple stateless Alert component (Bootstrap 5).
+    Simple stateless Alert component, drawn by ``AlertComponent``.
 
     Every value is HTML-escaped, whatever it is marked as.
 
     Args:
-        text: Alert message text
-        variant: Color variant (success, danger, warning, info, primary, secondary)
-        dismissable: Whether alert can be dismissed
+        text: Alert message text (``AlertComponent``'s ``message``)
+        variant: Alert type (``type``): info, success, warning, danger or error. Any other
+            value (primary, secondary, light, dark) draws as ``info`` and warns
+            (deprecated, #4002).
+        dismissable: Whether alert can be dismissed (``dismissible``)
     """
 
     def __init__(
@@ -50,14 +57,18 @@ class Alert(Component):
         self.variant = variant
         self.dismissable = dismissable
 
-    def _render_custom(self) -> str:
-        classes = f"alert alert-{attr_text(self.variant)}"
-        if self.dismissable:
-            classes += " alert-dismissible fade show"
-        html = f'<div class="{classes}" role="alert">\n    {attr_text(self.text)}'
-        if self.dismissable:
-            html += (
-                '\n    <button type="button" class="btn-close" data-bs-dismiss="alert"'
-                ' aria-label="Close"></button>'
+        if variant not in _TYPES:
+            warn_alias(
+                "Alert",
+                "variant outside info/success/warning/danger/error",
+                "one of those types (any other draws as info)",
             )
-        return html + "\n</div>"
+
+    def _render_custom(self) -> str:
+        return render_twin(
+            AlertComponent,
+            self.id,
+            message=plain_text(self.text),
+            type=self.variant,
+            dismissible=bool(self.dismissable),
+        )

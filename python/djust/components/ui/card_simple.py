@@ -7,30 +7,33 @@ Features:
 - Footer (optional)
 - Variants (default, outlined, elevated)
 
-One renderer (#4002): ``_render_custom`` draws the Bootstrap 5 markup the retired Rust
-``RustCard`` drew, pinned byte for byte by ``python/tests/test_ui_simple_golden_4002.py``.
+One renderer (#4002): ``_render_custom`` returns the markup of ``CardComponent``, built from this
+class's arguments (the mapping is in the class docstring), so the widget has one renderer.
 """
 
 from typing import Optional
 
+from djust.components._alias_deprecation import warn_alias
+
 from ..base import Component
-
-from djust.components.utils import attr_text
-
-_VARIANT_CLASS = {"outlined": " border", "elevated": " shadow"}
+from ._twin import plain_text, render_twin
+from .card import CardComponent
 
 
 class Card(Component):
     """
-    Simple stateless Card component (Bootstrap 5).
+    Simple stateless Card component, drawn by ``CardComponent``.
 
     Args:
-        body: Body text (required, escaped)
-        header: Optional header text (escaped)
-        footer: Optional footer text (escaped)
-        variant: Style variant (default, outlined, elevated)
+        body: Body text (required, escaped; ``CardComponent``'s ``body``)
+        header: Optional header text (escaped). ``CardComponent`` has no header section: it
+            draws as the card title (``title``) at the top of the body.
+        footer: Optional footer text (escaped; ``footer``)
+        variant: Deprecated (#4002): ``CardComponent`` has no variant, so any value draws the
+            default card; a value other than ``default`` warns. Add ``border`` / ``shadow``
+            on the container instead.
 
-    A header or footer of ``""`` still draws its (empty) section; ``None`` leaves it out.
+    An empty header or footer draws no section.
     """
 
     def __init__(
@@ -48,11 +51,16 @@ class Card(Component):
         self.footer = footer
         self.variant = variant
 
+        if variant != "default":
+            warn_alias(
+                "Card", "variant", "a border/shadow class on the container (it draws no variant)"
+            )
+
     def _render_custom(self) -> str:
-        html = f'<div class="card{_VARIANT_CLASS.get(str(self.variant), "")}">'
-        if self.header is not None:
-            html += f'\n    <div class="card-header">{attr_text(self.header)}</div>'
-        html += f'\n    <div class="card-body">{attr_text(self.body)}</div>'
-        if self.footer is not None:
-            html += f'\n    <div class="card-footer">{attr_text(self.footer)}</div>'
-        return html + "\n</div>"
+        return render_twin(
+            CardComponent,
+            self.id,
+            title=plain_text(self.header),
+            body=plain_text(self.body),
+            footer=plain_text(self.footer),
+        )

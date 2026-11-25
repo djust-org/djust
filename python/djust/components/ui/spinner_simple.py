@@ -16,24 +16,28 @@ Example:
     spinner = Spinner(variant="primary", size="sm")
     spinner = Spinner(animation="grow", variant="success")
 
-One renderer (#4002): ``_render_custom`` draws the Bootstrap 5 markup the retired Rust
-``RustSpinner`` drew, pinned byte for byte by ``python/tests/test_ui_simple_golden_4002.py``.
+One renderer (#4002): ``_render_custom`` returns the markup of ``SpinnerComponent``, built from this
+class's arguments (the mapping is in the class docstring), so the widget has one renderer.
 """
 
-from ..base import Component
+from djust.components._alias_deprecation import warn_alias
 
-from djust.components.utils import attr_text
+from ..base import Component
+from ._twin import render_twin
+from .spinner import SpinnerComponent
 
 
 class Spinner(Component):
     """
-    Simple stateless Spinner component (Bootstrap 5).
+    Simple stateless Spinner component, drawn by ``SpinnerComponent``.
 
     Args:
         variant: Color variant (primary, secondary, success, danger, warning, info, light, dark)
-        size: Size variant (sm draws the small spinner; any other value the default one)
-        animation: Animation type (border, grow)
-        sr_text: Screen reader text for accessibility
+        size: Size variant (sm, md, lg, xl)
+        animation: Animation type (``SpinnerComponent``'s ``type``): border, or grow for any
+            other value
+        sr_text: Deprecated (#4002): ``SpinnerComponent`` always reads "Loading..." to a
+            screen reader; another value warns and is not drawn.
     """
 
     def __init__(
@@ -56,12 +60,10 @@ class Spinner(Component):
         self.animation = animation
         self.sr_text = sr_text
 
+        if sr_text != "Loading...":
+            warn_alias("Spinner", "sr_text", "the default screen-reader text (it draws no other)")
+
     def _render_custom(self) -> str:
-        animation = attr_text(self.animation)
-        size_class = f" spinner-{animation}-sm" if self.size == "sm" else ""
-        return (
-            f'<div class="spinner-{animation} text-{attr_text(self.variant)}{size_class}"'
-            ' role="status">'
-            f'\n    <span class="visually-hidden">{attr_text(self.sr_text)}</span>'
-            "\n</div>"
+        return render_twin(
+            SpinnerComponent, self.id, variant=self.variant, size=self.size, type=self.animation
         )

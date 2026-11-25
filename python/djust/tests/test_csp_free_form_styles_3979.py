@@ -310,7 +310,7 @@ def _ui_progress(framework: str, **kw: Any) -> Callable[[], str]:
 
 
 def _progress_simple() -> str:
-    """``ui.Progress`` has one renderer since #4002 (the crate and the template are gone)."""
+    """``ui.Progress`` has one renderer since #4002: ``ProgressComponent``'s (slice 3)."""
     from djust.components.ui.progress_simple import Progress
 
     return str(Progress(value=40, height="12px").render())
@@ -464,7 +464,7 @@ SITES: dict[
     ),
     "progress_simple": (
         _progress_simple,
-        ['style="height: 12px"', 'style="width: 40.0%"'],
+        ['style="height: 12px;"', 'style="width: 40%"'],
         [("height", "12px")],
         {"both": ["dj-progress-w-40"]},
     ),

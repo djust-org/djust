@@ -65,7 +65,34 @@ The same bytes the crate drew, pinned by `python/tests/test_ui_simple_golden_400
 
 Every text slot is escaped whatever it is marked as, as the crate did; `Modal.body` /
 `Modal.footer` and `Tooltip.content` are markup slots the constructor escapes itself unless
-they are marked safe. The output does not depend on `css_framework` (the crate's never did).
+they are marked safe.
+
+## Slice 3: the ui `*Component` markup wins
+
+Eight of the simple classes have a twin in `djust.components.ui`: `Alert` (`AlertComponent`),
+`Badge`, `Button`, `Card`, `Dropdown`, `Modal`, `Progress` and `Spinner`. Each now maps its
+arguments onto its twin's and returns the twin's markup, so the widget has one renderer and
+the output follows `css_framework` the way the twin's does. Each class docstring gives its
+argument mapping; an argument the twin has no equivalent for still works and raises a
+`DeprecationWarning`. What the markup change means for a page (the component `id`, the
+dismiss buttons, the variant and size classes, a hidden `Modal` rendering nothing) is under
+"Markup that changed" in the [2.0 migration guide](../website/guides/migrating-to-2.0.md).
+Text is still escaped whatever it is marked as: the simple class hands the twin plain strings.
+
+Building the twin costs a construct per render. Build+render, same script and shapes:
+
+| class | slice 1 (own markup) | slice 3 (twin) |
+|---|---|---|
+| Alert | 7.39 | 13.04 |
+| Badge | 7.74 | 13.64 |
+| Button | 8.06 | 15.96 |
+| Card | 6.80 | 13.28 |
+| Modal | 10.13 | 12.79 (hidden: renders nothing) |
+| Progress | 14.73 | 33.87 |
+| Spinner | 8.41 | 12.94 |
+
+Each is still at or below the retired crate's build+render. The other simple classes have no
+twin in `djust.components.ui` and keep drawing their own markup.
 
 `Component._rust_impl_class` remains for a project's own native renderer; no djust class
 sets it.

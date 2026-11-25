@@ -4,20 +4,18 @@ Simple Button component for djust - stateless.
 Provides buttons for display purposes.
 For interactive buttons with event handlers, use them in LiveView event handlers.
 
-One renderer (#4002): ``_render_custom`` draws the Bootstrap 5 markup the retired Rust
-``RustButton`` drew, pinned byte for byte by ``python/tests/test_ui_simple_golden_4002.py``.
+One renderer (#4002): ``_render_custom`` returns the markup of ``ButtonComponent``, built from this
+class's arguments (the mapping is in the class docstring), so the widget has one renderer.
 """
 
 from ..base import Component
-
-from djust.components.utils import attr_text
-
-_SIZE_CLASS = {"sm": " btn-sm", "lg": " btn-lg"}
+from ._twin import plain_text, render_twin
+from .button import ButtonComponent
 
 
 class Button(Component):
     """
-    Simple, stateless button component (Bootstrap 5).
+    Simple, stateless button component, drawn by ``ButtonComponent``.
 
     Use Cases:
         - Display-only buttons (rendered but @click handled by parent)
@@ -28,8 +26,10 @@ class Button(Component):
     attached in the template using dj-click directives.
 
     Args:
-        text: Button text content (escaped, whatever it is marked as)
-        variant: Color variant (primary, secondary, success, danger, warning, info, light, dark, link)
+        text: Button text content (``ButtonComponent``'s ``label``; escaped, whatever it
+            is marked as)
+        variant: Color variant (primary, secondary, success, danger, warning, info, light,
+            dark; any other value draws as primary)
         size: Button size (sm, md, lg)
         disabled: Whether button is disabled
         outline: Use outline style instead of filled
@@ -71,7 +71,12 @@ class Button(Component):
         self.outline = outline
 
     def _render_custom(self) -> str:
-        kind = "btn-outline-" if self.outline else "btn-"
-        classes = f"btn {kind}{attr_text(self.variant)}{_SIZE_CLASS.get(str(self.size), '')}"
-        disabled = " disabled" if self.disabled else ""
-        return f'<button type="button" class="{classes}"{disabled}>{attr_text(self.text)}</button>'
+        return render_twin(
+            ButtonComponent,
+            self.id,
+            label=plain_text(self.text),
+            variant=self.variant,
+            size=self.size,
+            disabled=bool(self.disabled),
+            outline=bool(self.outline),
+        )

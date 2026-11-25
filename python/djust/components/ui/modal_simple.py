@@ -3,10 +3,8 @@ Modal component for djust.
 
 Simple stateless modal dialog (Bootstrap 5).
 
-One renderer (#4002): ``_render_custom`` draws the markup this class's inline template drew
-(the retired Rust ``RustModal`` was never reached: its required ``id`` is the base class's own
-argument, so the constructor always fell back), pinned byte for byte by
-``python/tests/test_ui_simple_golden_4002.py``.
+One renderer (#4002): ``_render_custom`` returns the markup of ``ModalComponent``, built from
+this class's arguments (the mapping is in the class docstring), so the widget has one renderer.
 """
 
 from typing import Optional
@@ -14,31 +12,40 @@ from typing import Optional
 from ..base import Component
 
 from django.utils.html import conditional_escape
-from djust.components.utils import attr_text
+from djust.components._alias_deprecation import warn_alias
+
+from ._twin import plain_text, render_twin
+from .modal import ModalComponent
 
 
 class Modal(Component):
     """
-    Modal dialog component (Bootstrap 5).
+    Modal dialog component, drawn by ``ModalComponent``.
 
     Args:
         title: Modal title text (escaped)
         body: Modal body content (markup: escaped unless marked safe)
-        footer: Optional footer content (markup: escaped unless marked safe)
+        footer: Optional footer content (markup: escaped unless marked safe). Without one,
+            ``ModalComponent`` draws its default "Close" button.
         size: Modal size (sm, md, lg, xl)
-        centered: Whether to vertically center the modal
-        dismissable: Whether to show close button in header
-        id: Modal ID for JavaScript control (defaults to ``"modal"``)
-        show: Whether modal should be shown on page load
+        centered: Deprecated (#4002): ``ModalComponent`` has no centred dialog; ``True`` warns
+            and draws the default dialog.
+        dismissable: Deprecated (#4002): ``ModalComponent`` always draws its close button;
+            ``False`` warns and the button is still drawn.
+        id: Modal ID (``ModalComponent``'s ``component_id``; defaults to ``"modal"``)
+        show: Whether the modal is drawn. ``ModalComponent`` draws nothing while it is
+            hidden, so ``show=False`` (the default) renders ``""``; render the modal when it
+            is to be shown.
 
     Example:
         >>> modal = Modal(
         ...     title="Confirm Action",
         ...     body="Are you sure you want to continue?",
         ...     footer=mark_safe('<button class="btn btn-primary">Confirm</button>'),
+        ...     show=True,
         ... )
         >>> modal.render()
-        '<div class="modal fade" ...'
+        '... <div class="modal fade show d-block" id="modal" tabindex="-1"> ...'
     """
 
     # #3932: parameters the constructor already ``conditional_escape``s (a plain string is
@@ -81,39 +88,18 @@ class Modal(Component):
         self.dismissable = dismissable
         self.show = show
 
+        if centered:
+            warn_alias("Modal", "centered", "the default dialog (it draws no centred one)")
+        if not dismissable:
+            warn_alias("Modal", "dismissable", "the close button (it is always drawn)")
+
     def _render_custom(self) -> str:
-        modal_id = attr_text(self.id)
-        size = str(self.size)
-        if size == "md":
-            dialog = "modal-dialog"
-        else:
-            dialog = f"modal-dialog modal-{attr_text(size)}"
-        if self.centered:
-            dialog += " modal-dialog-centered"
-        parts = [
-            f'<div class="modal fade{" show" if self.show else ""}" id="{modal_id}" tabindex="-1"'
-            f' aria-labelledby="{modal_id}Label" aria-hidden="true">',
-            f'    <div class="{dialog}">',
-            '        <div class="modal-content">',
-        ]
-        if self.title:
-            parts.append('            <div class="modal-header">')
-            parts.append(
-                f'                <h5 class="modal-title" id="{modal_id}Label">'
-                f"{attr_text(self.title)}</h5>"
-            )
-            if self.dismissable:
-                parts.append(
-                    '                <button type="button" class="btn-close"'
-                    ' data-bs-dismiss="modal" aria-label="Close"></button>'
-                )
-            parts.append("            </div>")
-        parts.append('            <div class="modal-body">')
-        parts.append(f"                {self.body}")
-        parts.append("            </div>")
-        if self.footer:
-            parts.append('            <div class="modal-footer">')
-            parts.append(f"                {self.footer}")
-            parts.append("            </div>")
-        parts += ["        </div>", "    </div>", "</div>"]
-        return "\n".join(parts)
+        return render_twin(
+            ModalComponent,
+            self.id,
+            title=plain_text(self.title),
+            body=self.body,
+            footer=self.footer or "",
+            size=self.size,
+            show=bool(self.show),
+        )

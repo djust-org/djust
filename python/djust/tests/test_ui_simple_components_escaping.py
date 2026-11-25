@@ -2,13 +2,15 @@
 
 Every ``*_simple.py`` component has ONE renderer (#4002): its ``template`` string where it has
 one (``Checkbox``, ``Input``, ``ButtonGroup``, ``Offcanvas``), else ``_render_custom()``. The
-fifteen the retired Rust crate backed draw its markup in ``_render_custom()``; the rest choose
-their markup there by ``css_framework``. These tests render through that one renderer under
-each CSS framework.
+eight with a ui ``*Component`` twin (``Alert``, ``Badge``, ``Button``, ``Card``, ``Dropdown``,
+``Modal``, ``Progress``, ``Spinner``) return the twin's markup, which follows ``css_framework``;
+the other crate-backed ones draw its markup; the rest choose their markup by ``css_framework``.
+These tests render through that one renderer under each CSS framework.
 
 A value in an ATTRIBUTE, and every URL (``data_url_attr``: non-navigation schemes become ``#``),
 is checked and escaped whatever it is marked as (#3898). A TEXT slot of a template, and every
-text slot of the fifteen, is escaped whatever it is marked as too, except a declared
+text slot of the fifteen and of the twin-drawn ``Dropdown``, is escaped whatever it is marked
+as too (the twin classes hand their twin plain strings), except a declared
 ``markup_slots`` parameter the constructor escapes itself (#3932). The remaining
 ``_render_custom`` components escape text with ``conditional_escape``, so a marked-safe value
 keeps its markup there.
@@ -114,7 +116,7 @@ CASES: Dict[str, Tuple[Factory, Tuple[str, ...]]] = {
     "divider": (lambda v: Divider(text=v, style=v, margin=v), ALL_FRAMEWORKS),
     "dropdown": (
         lambda v: Dropdown(
-            label=v, items=[{"label": v, "url": "/a"}], variant=v, size=v, id=v, split=True
+            label=v, items=[{"label": v, "action": "pick"}], variant=v, size=v, id=v, split=True
         ),
         ALL_FRAMEWORKS,
     ),
@@ -143,7 +145,10 @@ CASES: Dict[str, Tuple[Factory, Tuple[str, ...]]] = {
         ),
         ALL_FRAMEWORKS,
     ),
-    "modal": (lambda v: Modal(body=v, id=v, title=v, footer=v, size=v), ONE_FRAMEWORK),
+    "modal": (
+        lambda v: Modal(body=v, id=v, title=v, footer=v, size=v, show=True),
+        ALL_FRAMEWORKS,
+    ),
     "navbar": (
         lambda v: NavBar(
             items=[
@@ -166,7 +171,7 @@ CASES: Dict[str, Tuple[Factory, Tuple[str, ...]]] = {
     "pagination": (lambda v: Pagination(current_page=2, total_pages=3, size=v), ONE_FRAMEWORK),
     "progress": (
         lambda v: Progress(value=40, variant=v, label=v, height=v),
-        ONE_FRAMEWORK,
+        ALL_FRAMEWORKS,
     ),
     "radio": (
         lambda v: Radio(name=v, options=[{"value": v, "label": v}], label=v, value=v, help_text=v),
@@ -223,8 +228,20 @@ PARAMS: List[Tuple[str, str]] = [
     (name, framework) for name, (_, frameworks) in CASES.items() for framework in frameworks
 ]
 
+#: Renders that draw none of the value: ``SpinnerComponent``'s Tailwind spinner maps the
+#: variant onto a fixed class and draws no text (``sr_text`` has no twin equivalent, #4002).
+VALUE_NOT_DRAWN = {("spinner", "tailwind")}
+DRAWN_PARAMS = [p for p in PARAMS if p not in VALUE_NOT_DRAWN]
 
-@pytest.mark.parametrize("name,framework", PARAMS)
+
+@pytest.mark.parametrize("name,framework", sorted(VALUE_NOT_DRAWN))
+def test_a_render_that_draws_no_value_draws_none_of_it(name: str, framework: str) -> None:
+    factory, _ = CASES[name]
+    html = _python_render(factory(MARKUP), framework)
+    assert "img" not in html and "onerror" not in html
+
+
+@pytest.mark.parametrize("name,framework", DRAWN_PARAMS)
 def test_html_like_value_is_html_escaped(name: str, framework: str) -> None:
     factory, _ = CASES[name]
     html = _python_render(factory(MARKUP), framework)
@@ -233,7 +250,7 @@ def test_html_like_value_is_html_escaped(name: str, framework: str) -> None:
     assert "&lt;img src=x onerror=alert(1)&gt;" in html
 
 
-@pytest.mark.parametrize("name,framework", PARAMS)
+@pytest.mark.parametrize("name,framework", DRAWN_PARAMS)
 def test_quoted_value_cannot_leave_its_attribute(name: str, framework: str) -> None:
     factory, _ = CASES[name]
     html = _python_render(factory(QUOTE), framework)
@@ -244,7 +261,8 @@ def test_quoted_value_cannot_leave_its_attribute(name: str, framework: str) -> N
 # These print every text slot escaped, marked safe or not: what the retired Rust crate drew
 # for the fifteen it backed (pinned by ``python/tests/test_ui_simple_golden_4002.py``), and what
 # a ``template`` draws for a slot outside ``markup_slots`` (#3932). Since #4002 that is the one
-# renderer; the ``_render_custom`` f-strings that kept the markup were never reached.
+# renderer; the ``_render_custom`` f-strings that kept the markup were never reached. The twin
+# classes (#4002 slice 3) hand their twin plain strings, so the twin escapes them too.
 ALWAYS_ESCAPED = {
     "alert",
     "badge",
@@ -253,6 +271,7 @@ ALWAYS_ESCAPED = {
     "card",
     "checkbox",
     "divider",
+    "dropdown",
     "input",
     "progress",
     "range",
@@ -320,7 +339,7 @@ def test_marked_safe_tooltip_content_passes_through(framework: str) -> None:
     assert f">{SAFE}<" in html
 
 
-@pytest.mark.parametrize("name,framework", PARAMS)
+@pytest.mark.parametrize("name,framework", DRAWN_PARAMS)
 def test_plain_words_render_unchanged(name: str, framework: str) -> None:
     factory, _ = CASES[name]
     html = _python_render(factory("hello"), framework)
@@ -333,11 +352,6 @@ def test_plain_words_render_unchanged(name: str, framework: str) -> None:
 URL_CASES: Dict[str, Tuple[Callable[[str], Any], Tuple[str, ...], str]] = {
     "breadcrumb": (
         lambda u: Breadcrumb(items=[{"label": "a", "url": u}, {"label": "b"}]),
-        ALL_FRAMEWORKS,
-        "href",
-    ),
-    "dropdown": (
-        lambda u: Dropdown(label="m", items=[{"label": "a", "url": u}]),
         ALL_FRAMEWORKS,
         "href",
     ),
@@ -501,10 +515,20 @@ def test_tooltip_marked_safe_content_passes_through_on_the_default_render_path()
     assert "<b>ok</b>" in str(Tooltip(mark_safe("<b>ok</b>"), "tip").render())
 
 
+def test_dropdown_item_url_is_not_drawn():
+    """``DropdownItem`` has no URL (#4002 slice 3): a simple item's ``url`` warns and the item
+    links to ``#``, whatever the URL."""
+    html = _python_render(
+        Dropdown(label="m", items=[{"label": "a", "url": "javascript:alert(1)"}]), "bootstrap5"
+    )
+    assert "javascript:" not in html
+    assert 'href="#"' in html
+
+
 def test_modal_body_and_footer_are_escaped_on_the_default_render_path():
     from djust.components.ui.modal_simple import Modal
 
-    html = str(Modal("<img src=x>", id="m", footer="<i>f</i>").render())
+    html = str(Modal("<img src=x>", id="m", footer="<i>f</i>", show=True).render())
     assert "<img src=x>" not in html and "&lt;img src=x&gt;" in html
     assert "<i>f</i>" not in html and "&lt;i&gt;f&lt;/i&gt;" in html
 
@@ -512,7 +536,9 @@ def test_modal_body_and_footer_are_escaped_on_the_default_render_path():
 def test_modal_marked_safe_body_and_footer_pass_through_on_the_default_render_path():
     from djust.components.ui.modal_simple import Modal
 
-    html = str(Modal(mark_safe("<p>b</p>"), id="m", footer=mark_safe("<b>f</b>")).render())
+    html = str(
+        Modal(mark_safe("<p>b</p>"), id="m", footer=mark_safe("<b>f</b>"), show=True).render()
+    )
     assert "<p>b</p>" in html and "<b>f</b>" in html
 
 
