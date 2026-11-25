@@ -56,7 +56,7 @@ describe('wire v2 install', () => {
             expect(lookup('row-0', 'select').parameters[0].name).toBe('value');
             expect(lookup('row-499', 'toggle').parameters[0].type).toBe('bool');
             expect(lookup(null, 'note').parameters[0].name).toBe('kwargs');
-            expect(transport._parameterContractDigest.get('app.Page')).toBe(manifest.digest);
+            expect(transport._parameterContractHeld.get('app.Page')).toBe(manifest);
         } finally { dom.window.close(); }
     });
 
@@ -85,7 +85,7 @@ describe('wire v2 install', () => {
         try {
             expect(() => t.install(transport, bad[label](), 'app.Page')).toThrow('Invalid public parameter contracts');
             expect(() => lookup(null, 'note')).toThrow('Invalid public parameter contracts');
-            expect(transport._parameterContractDigest.has('app.Page')).toBe(false);
+            expect(transport._parameterContractHeld.has('app.Page')).toBe(false);
         } finally { dom.window.close(); }
     });
 });
@@ -113,7 +113,7 @@ describe('a manifest sent as its digest', () => {
             expect(unknown.parameter_contracts).toBe(false);
             t.refresh(transport, unknown);
             expect(() => lookup('row-0', 'select')).toThrow('Invalid public parameter contracts');
-            expect(transport._parameterContractDigest.has('app.Page')).toBe(false);
+            expect(transport._parameterContractHeld.has('app.Page')).toBe(false);
         } finally { dom.window.close(); }
     });
 
@@ -210,6 +210,49 @@ describe('HTTP fallback names the manifest it holds', () => {
             await send();
             expect(header(0)).toBe(manifest.digest);
             expect(resolve().contract.parameters[0].name).toBe('kwargs');
+        } finally { dom.window.close(); }
+    });
+});
+
+describe('a mount_batch cannot evict the page manifest the server elides to', () => {
+    it('keeps the page scope valid after a batch of five lazy views', async () => {
+        const slots = [1, 2, 3, 4, 5];
+        const dom = new JSDOM('<div dj-root dj-view="app.Page"><span>old</span>' +
+            slots.map(i => `<div dj-view="app.W${i}" data-djust-target="s${i}"></div>`).join('') + '</div>',
+            {runScripts: 'dangerously', url: 'http://localhost/'});
+        try {
+            dom.window.CSS ??= {};
+            dom.window.CSS.escape ??= value => value;
+            dom.window.eval(source.replace(seam, seam + '\nwindow.lookupContract = _lookupParameterContract;'));
+            const transport = new dom.window.djust.LiveViewWebSocket();
+            transport.primaryViewPath = 'app.Page';
+            const lookup = (path, event) => dom.window.lookupContract(transport, path, null, null, event);
+            const page = rows(2);
+            await transport.handleMessage({type: 'mount', view: 'app.Page', version: 1, parameter_contracts: page});
+            await transport.handleMessage({type: 'mount_batch', views: slots.map(i => ({
+                target_id: `s${i}`, view: `app.W${i}`, version: 1, html: '<p></p>',
+                parameter_contracts: packManifest({version: 1, owners: [
+                    {view_id: null, component_id: null, handlers: {[`go${i}`]: contract('value')}}]}),
+            }))});
+            expect(lookup('app.W5', 'go5').parameters[0].name).toBe('value');
+            // Five distinct manifests passed through the client's cache; the
+            // server's last top-level manifest is still the page's.
+            await transport.handleMessage({type: 'patch', patches: [], version: 2,
+                parameter_contracts: page.digest, parameter_contract_view: 'app.Page'});
+            expect(lookup('app.Page', 'note').parameters[0].name).toBe('kwargs');
+        } finally { dom.window.close(); }
+    });
+
+    it('resolves an HTTP digest answer from the installed page scope', () => {
+        const {dom, t, transport, lookup, receive} = setup();
+        try {
+            const page = rows(2);
+            t.install(transport, page, 'app.Page');
+            for (const n of [3, 4, 5, 6, 7]) t.install(transport, rows(n), `app.W${n}`, false);
+            const answer = receive({patches: [], parameter_contracts: page.digest, parameter_contract_view: 'app.Page'});
+            expect(answer.parameter_contracts).toBe(page);
+            t.refresh(transport, answer);
+            expect(lookup('row-1', 'select').parameters[0].name).toBe('value');
         } finally { dom.window.close(); }
     });
 });

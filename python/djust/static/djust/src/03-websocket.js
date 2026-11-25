@@ -371,7 +371,7 @@ class LiveViewWebSocket {
     disconnect() {
         this._parameterContracts = new Map();
         this._parameterContractApplied = new Map();
-        this._parameterContractDigest = new Map();
+        this._parameterContractHeld = new Map();
         this._parameterContractFrames = new WeakMap();
         this._parameterContractSequence = 0;
         // TurboNav may already have replaced the URL/DOM. Cancel immediately,
@@ -667,13 +667,18 @@ class LiveViewWebSocket {
                 if (simLatency > 0) {
                     const jitter = (window.djust._simulatedJitter || 0);
                     const actual = Math.max(0, simLatency + (Math.random() * 2 - 1) * simLatency * jitter);
+                    // Jitter never reorders frames: a frame is released no
+                    // earlier than the one before it, as a socket delivers
+                    // them (a digest frame follows its full manifest, #4307).
+                    const now = Date.now();
+                    this._simReleaseAt = Math.max(now + actual, this._simReleaseAt || 0);
                     // ``handleMessage`` is the queue-wrapper (#1098); its
                     // returned promise is the chain-tail with an internal
                     // ``.catch`` that already logs and swallows. The
                     // returned promise never rejects, so we just ignore it.
                     setTimeout(() => {
                         this.handleMessage(data, socket);
-                    }, actual);
+                    }, this._simReleaseAt - now);
                 } else {
                     this.handleMessage(data, socket);
                 }

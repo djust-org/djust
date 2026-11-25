@@ -1584,7 +1584,7 @@ class LiveViewWebSocket {
     disconnect() {
         this._parameterContracts = new Map();
         this._parameterContractApplied = new Map();
-        this._parameterContractDigest = new Map();
+        this._parameterContractHeld = new Map();
         this._parameterContractFrames = new WeakMap();
         this._parameterContractSequence = 0;
         // TurboNav may already have replaced the URL/DOM. Cancel immediately,
@@ -1880,13 +1880,18 @@ class LiveViewWebSocket {
                 if (simLatency > 0) {
                     const jitter = (window.djust._simulatedJitter || 0);
                     const actual = Math.max(0, simLatency + (Math.random() * 2 - 1) * simLatency * jitter);
+                    // Jitter never reorders frames: a frame is released no
+                    // earlier than the one before it, as a socket delivers
+                    // them (a digest frame follows its full manifest, #4307).
+                    const now = Date.now();
+                    this._simReleaseAt = Math.max(now + actual, this._simReleaseAt || 0);
                     // ``handleMessage`` is the queue-wrapper (#1098); its
                     // returned promise is the chain-tail with an internal
                     // ``.catch`` that already logs and swallows. The
                     // returned promise never rejects, so we just ignore it.
                     setTimeout(() => {
                         this.handleMessage(data, socket);
-                    }, actual);
+                    }, this._simReleaseAt - now);
                 } else {
                     this.handleMessage(data, socket);
                 }
@@ -3209,7 +3214,7 @@ class LiveViewSSE {
     disconnect() {
         this._parameterContracts = new Map();
         this._parameterContractApplied = new Map();
-        this._parameterContractDigest = new Map();
+        this._parameterContractHeld = new Map();
         this._parameterContractFrames = new WeakMap();
         this._parameterContractSequence = 0;
         cancelEventRequests(this);
@@ -5103,11 +5108,11 @@ function _installParameterContracts(transport, manifest, viewPath, resetPrimary 
     if (!transport._parameterContracts || (resetPrimary && viewPath === transport.primaryViewPath)) {
         transport._parameterContracts = new Map();
         transport._parameterContractApplied = new Map();
-        transport._parameterContractDigest = new Map();
+        transport._parameterContractHeld = new Map();
     }
     if (resetPrimary) transport._parameterContractApplied.set(viewPath, receiptOrder);
     transport._parameterContracts.set(viewPath, null);
-    (transport._parameterContractDigest ??= new Map()).delete(viewPath);
+    (transport._parameterContractHeld ??= new Map()).delete(viewPath);
     if (manifest === undefined || manifest === null) return;
     const reject = () => { throw new Error('Invalid public parameter contracts'); };
     // Keep invalid metadata distinguishable from a tree with no handlers.
@@ -5150,7 +5155,7 @@ function _installParameterContracts(transport, manifest, viewPath, resetPrimary 
     }
     if (!owners.has('[null,null]')) reject();
     transport._parameterContracts.set(viewPath, owners);
-    transport._parameterContractDigest.set(viewPath, manifest.digest);
+    transport._parameterContractHeld.set(viewPath, manifest);
     _cacheParameterManifest(transport, manifest);
 }
 
@@ -5170,11 +5175,19 @@ function _recordParameterContractFrame(transport, data) {
     if (!data || typeof data !== 'object') return;
     // An unchanged manifest arrives as its digest (#4307). Resolve it here, at
     // receipt and before any buffering: frames are FIFO, so the full manifest
-    // for a digest is always received first. A miss installs as invalid and
-    // fails closed.
+    // for a digest is always received first. The server elides against the
+    // last manifest it sent at top level, which is kept outside the cache (a
+    // mount_batch's nested manifests cannot evict it); an HTTP answer names
+    // the scope's installed one. A miss installs as invalid and fails closed.
     const m = data.parameter_contracts;
-    if (typeof m === 'string') data.parameter_contracts = transport._parameterManifests?.get(m) || false;
-    else if (m && typeof m === 'object') _cacheParameterManifest(transport, m);
+    if (typeof m === 'string') {
+        const held = transport._parameterContractHeld?.get(data.parameter_contract_view);
+        data.parameter_contracts = transport._parameterManifest?.digest === m ? transport._parameterManifest
+            : held?.digest === m ? held : transport._parameterManifests?.get(m) || false;
+    } else if (m && typeof m.digest === 'string') {
+        transport._parameterManifest = m;
+        _cacheParameterManifest(transport, m);
+    }
     transport._parameterContractFrames ??= new WeakMap();
     transport._parameterContractSequence = (transport._parameterContractSequence || 0) + 1;
     transport._parameterContractFrames.set(data, transport._parameterContractSequence);
@@ -5193,7 +5206,7 @@ function _invalidateRenderParameterContracts(transport, data) {
     const mounts = transport?._parameterContracts;
     if (mounts?.has(path) && (mounts.get(path) !== null || Object.hasOwn(data, 'parameter_contracts'))) {
         mounts.set(path, false);
-        transport._parameterContractDigest?.delete(path);
+        transport._parameterContractHeld?.delete(path);
         const order = transport._parameterContractFrames?.get(data);
         if (order !== undefined) transport._parameterContractApplied.set(path,
             Math.max(order, transport._parameterContractApplied.get(path) || 0));
@@ -8382,7 +8395,7 @@ function _noteRenderDigest(data, sent) {
 // so an unchanged manifest is answered with the digest alone (#4307).
 function _parameterContractHeader() {
     const t = _localEventTransport, p = t.primaryViewPath;
-    const d = t._parameterContractDigest?.get(p);
+    const d = t._parameterContractHeld?.get(p)?.digest;
     return d ? {'X-Djust-Parameter-Contracts': d}
         : (t._parameterContracts?.get(p) != null ? {'X-Djust-Parameter-Contracts': '1'} : {});
 }
@@ -8450,7 +8463,7 @@ function _installPageParameterContracts() {
     _localEventTransport.primaryViewPath = path || null;
     _localEventTransport._parameterContracts = new Map();
     _localEventTransport._parameterContractApplied = new Map();
-    _localEventTransport._parameterContractDigest = new Map();
+    _localEventTransport._parameterContractHeld = new Map();
     if (!path) return;
     const block = document.querySelector('script[data-djust-parameter-contracts]');
     let manifest = null;

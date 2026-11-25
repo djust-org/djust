@@ -99,8 +99,12 @@ over from another loop goes out in full and resets it). On the HTTP fallback
 the client names the digest of its scope in `X-Djust-Parameter-Contracts`
 (`1` when its scope is invalid), and an answer whose manifest has that digest
 carries the digest alone. The client resolves a digest at receipt, before any
-buffering, from a four-entry content-addressed cache of manifests it received;
-frames are FIFO, so the full manifest is always received first. A digest it
+buffering: first against the last manifest it received at top level (the one
+the server elides to, kept outside the cache so a `mount_batch`'s nested
+manifests cannot evict it), then the manifest installed for the frame's
+`parameter_contract_view` (what the HTTP header names), then a four-entry
+content-addressed cache. Frames are FIFO, so the full manifest is always
+received first; the debug latency simulator keeps that order too. A digest it
 does not hold installs an invalid scope, which fails closed. `null` still
 clears and an omitted field still invalidates.
 

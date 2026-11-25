@@ -99,7 +99,7 @@ function _noteRenderDigest(data, sent) {
 // so an unchanged manifest is answered with the digest alone (#4307).
 function _parameterContractHeader() {
     const t = _localEventTransport, p = t.primaryViewPath;
-    const d = t._parameterContractDigest?.get(p);
+    const d = t._parameterContractHeld?.get(p)?.digest;
     return d ? {'X-Djust-Parameter-Contracts': d}
         : (t._parameterContracts?.get(p) != null ? {'X-Djust-Parameter-Contracts': '1'} : {});
 }
@@ -167,7 +167,7 @@ function _installPageParameterContracts() {
     _localEventTransport.primaryViewPath = path || null;
     _localEventTransport._parameterContracts = new Map();
     _localEventTransport._parameterContractApplied = new Map();
-    _localEventTransport._parameterContractDigest = new Map();
+    _localEventTransport._parameterContractHeld = new Map();
     if (!path) return;
     const block = document.querySelector('script[data-djust-parameter-contracts]');
     let manifest = null;
