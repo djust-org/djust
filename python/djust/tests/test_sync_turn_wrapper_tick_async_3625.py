@@ -457,13 +457,10 @@ async def test_an_explicit_childs_result_hook_runs_inside_the_wrapper(
 
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
-async def test_a_legacy_sticky_childs_result_hook_runs_inside_the_wrapper(
-    probe, staged, monkeypatch
-):
+async def test_a_sticky_childs_result_hook_runs_inside_the_wrapper(probe, staged, monkeypatch):
     from djust.tests.test_runtime_child_routing_1892 import (
         _StickyChildView,
-        _make_runtime_with_view,
-        _make_sticky_parent,
+        _mounted_sticky_parent,
     )
 
     @event_handler(parameter_policy="strict")
@@ -474,11 +471,10 @@ async def test_a_legacy_sticky_childs_result_hook_runs_inside_the_wrapper(
     monkeypatch.setattr(
         _StickyChildView, "handle_async_result", _result_probe("sticky_result"), raising=False
     )
-    parent, child = _make_sticky_parent()
-    runtime, _transport = _make_runtime_with_view(parent)
+    parent, child, runtime, _transport = await _mounted_sticky_parent()
     runtime._parameter_contract_view = "tests.Parent"
     try:
-        await runtime.dispatch_event({"event": "begin", "params": {"view_id": "child-1"}, "ref": 1})
+        await runtime.dispatch_event({"event": "begin", "params": {"view_id": "child"}, "ref": 1})
         handles = tuple(getattr(child, "_async_task_handles", ()))
         assert handles, "the routed child must own its dispatched background task"
         await asyncio.wait_for(asyncio.gather(*handles), 5)

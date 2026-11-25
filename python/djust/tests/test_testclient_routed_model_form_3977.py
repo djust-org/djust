@@ -33,7 +33,7 @@ class GroupForm(forms.ModelForm):
 
 
 class EditGroupView(ModelFormMixin[Group], LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root><h1>{{ object.name }}</h1><input name="name"></div>'
     model = Group
     form_class = GroupForm
@@ -106,7 +106,7 @@ def test_a_revoked_object_permission_is_denied():
 
 def test_a_view_without_an_object_is_unaffected():
     class Plain(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
         template = "<div dj-root></div>"
 
         def mount(self, request, **kwargs):

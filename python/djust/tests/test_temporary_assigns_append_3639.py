@@ -34,7 +34,7 @@ from dataclasses import dataclass
 import pytest
 
 from djust import LiveView
-from djust.decorators import event_handler
+from djust.decorators import event_handler, state
 
 from .test_stream_only_handlers_3639 import drive as _drive_over_a_real_socket
 
@@ -62,9 +62,11 @@ def _tpl(view, mode="append", extra="|{{ k }}"):
 
 
 class Temp(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     temporary_assigns = {"rows": []}
     template = _tpl("Temp")
+    rows = state(default_factory=list)
+    k = state(0)
 
     def mount(self, request, **kwargs):
         self.rows = list(ROWS)
@@ -121,7 +123,7 @@ class TempStream(LiveView):
     (``_reset_temporary_assigns`` -> ``_reset_streams``), so the stream container
     needs ``dj-update="append"`` for the stored rows to stay."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     temporary_assigns = {"unused": []}
     template = (
         f'<div dj-view="{MODULE}.TempStream" dj-id="0">'
@@ -147,8 +149,10 @@ class AppendNoTemp(LiveView):
     the full list is re-rendered every time, so a removal must still reach the
     page as before."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = _tpl("AppendNoTemp")
+    rows = state(default_factory=list)
+    k = state(0)
 
     def mount(self, request, **kwargs):
         self.rows = list(ROWS)
@@ -287,6 +291,8 @@ class TestStreamsOnAViewWithTemporaryAssigns:
 class TempBanner(Temp):
     """A block before the list appears in the same event that appends a row."""
 
+    banner = state(False)
+
     template = (
         f'<div dj-view="{MODULE}.TempBanner" dj-id="0">{{% if banner %}}<p>notice</p>{{% endif %}}'
         '<div id="list" dj-update="append">'
@@ -309,13 +315,15 @@ class MixedList(LiveView):
     """``temporary_assigns`` for something else; the ``dj-update`` list is an
     ordinary attribute and is re-rendered whole."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     temporary_assigns = {"flash": []}
     template = (
         f'<div dj-view="{MODULE}.MixedList" dj-id="0"><div id="list" dj-update="append">'
         '{% for r in items %}<div id="rows-{{ r.id }}">{{ r.body }}</div>{% endfor %}'
         "</div>|{{ flash }}</div>"
     )
+    items = state(default_factory=list)
+    flash = state(default_factory=list)
 
     def mount(self, request, **kwargs):
         self.items = list(ROWS)

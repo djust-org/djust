@@ -42,7 +42,7 @@ MOD = "djust.tests.test_sse_push_groups_3885."
 
 
 class GroupPage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><b>{{ n }}</b></div>"
 
     def mount(self, request, **kwargs):
@@ -78,7 +78,7 @@ class LoginPage(GroupPage):
 
 
 class NotifyPage(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><b>{{ n }}</b></div>"
     # Class-level: ``listen()`` needs PostgreSQL, the group join does not.
     _listen_channels = {"orders_3885"}
@@ -954,10 +954,13 @@ async def test_a_db_notify_waits_for_a_held_lock_and_then_runs(monkeypatch):
     try:
         assert await view.server_push("handle_bump") is True  # queued behind the lock
         await _notify("orders_3885", {"id": 1})
+        # An explicit view's NOTIFY runs after the queued push's drain, which is
+        # the one waiter on the lock: the turn order is the contract here.
         await wait_until(
-            lambda: len([w for w in (lock._waiters or ()) if not w.cancelled()]) >= 2,
-            what="the drain and the NOTIFY to wait for the lock",
+            lambda: len([w for w in (lock._waiters or ()) if not w.cancelled()]) >= 1,
+            what="the drain to wait for the lock",
         )
+        await asyncio.sleep(0.2)
         assert view.seen == []
     finally:
         lock.release()

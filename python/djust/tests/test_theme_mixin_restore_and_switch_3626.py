@@ -23,7 +23,7 @@ from django.conf import settings
 from django.test import override_settings
 
 from djust import LiveView
-from djust.decorators import event_handler
+from djust.decorators import event_handler, state
 from djust.runtime import ViewRuntime
 from djust.theming import ThemeMixin
 
@@ -49,12 +49,10 @@ _ROOT = (
 class Themed(ThemeMixin, LiveView):
     """A legacy ``ThemeMixin`` view."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = _ROOT.format(path=__name__ + ".Themed")
 
-    def mount(self, request, **kwargs):
-        super().mount(request, **kwargs)
-        self.count = 0
+    count = state(0)
 
     @event_handler()
     def bump(self, **kwargs):
@@ -128,7 +126,7 @@ class TestTheDerivedNames:
         from django.test import RequestFactory
 
         class Shell(ThemeMixin, LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = (
                 "<html><head>[{{ theme_presets_count }}]</head><body>"
                 "<div dj-root>{{ theme_presets_count }}</div></body></html>"
@@ -159,9 +157,13 @@ class TestTheDerivedNames:
             view = Plain()
             view.setup(request)
             view.mount(request)
-            keys = set(view.get_context_data())
+            context = view.get_context_data()
+            keys = set(context)
+            supplied = set(view._apply_context_processors(dict(context), request))
         assert not keys & set(_RENDERED_THEME_NAMES)
-        assert {"theme_preset", "theme_mode", "theme_resolved_mode"} <= keys
+        # Render time supplies them, with the three small values, beside the view's own.
+        assert {"theme_preset", "theme_mode", "theme_resolved_mode"} <= supplied
+        assert set(_RENDERED_THEME_NAMES) <= supplied
 
 
 class TestAThemeSwitch:
@@ -174,11 +176,15 @@ class TestAThemeSwitch:
     )
     async def test_the_next_render_after_a_switch_shows_the_new_values(self, switch, params):
         with _without_the_processor():
+            from djust.tests._live_session import amount_on_runtime
+
             runtime, transport = await _runtime(Plain)
-            await _mount(runtime, Plain)
+            # Explicit turns need a view mounted on a saved session.
+            await amount_on_runtime(runtime, Plain())
             view = runtime.view_instance
             before = _expected(view)
             await _event(runtime, switch, **params)
+            view = runtime.view_instance  # an explicit turn works on its own restored view
             after = _expected(view)
             assert after != before, "the switch must change what the page would show"
             transport.sent.clear()
@@ -235,8 +241,10 @@ class TestTheLeftovers:
             view.mount(request)
             with patch.object(Plain, "_render_theme_head", side_effect=AssertionError("rendered")):
                 info = view.get_debug_info()
-        assert "theme_head" in info["variables"]
-        assert "not evaluated" in info["variables"]["theme_head"]["value"]
+        # An explicit view's panel lists only its declared fields (redacted), and
+        # never evaluates a derived theme value to do it.
+        assert "theme_head" not in info["variables"]
+        assert "theme_head" not in str(info)
 
 
 # What a GET of a mounted ThemeMixin view saves in the session: the small

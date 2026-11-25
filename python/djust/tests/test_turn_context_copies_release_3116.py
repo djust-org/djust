@@ -169,16 +169,21 @@ def test_the_explicit_child_render_scope_releases_the_view():
     assert probe() is None, "the child-render scope in the copy kept the view alive"
 
 
-def test_sql_params_are_redacted_once_the_scope_owner_is_gone():
+def test_sql_params_are_redacted_for_an_explicit_owner_and_the_scope_does_not_keep_it():
+    """An explicit owner's SQL params are redacted, and a context copy that outlives
+    the turn holds the owner weakly (a collected owner cannot prove it is explicit-safe
+    to show either, so it is redacted too)."""
     from djust.observability.sql import _active, _params_allowed, capture_for_event
 
-    class Legacy:
-        exposure_policy = "legacy"
+    class Explicit:
+        exposure_policy = "explicit"
 
-    owner = Legacy()
+    owner = Explicit()
+    probe = weakref.ref(owner)
     with capture_for_event(owner=owner):
         scope = _active.get()
-        assert _params_allowed(scope) is True
+        assert _params_allowed(scope) is False
     del owner
     gc.collect()
+    assert probe() is None, "the scope kept the owner alive"
     assert _params_allowed(scope) is False

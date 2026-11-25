@@ -307,8 +307,7 @@ def test_a_liveview_re_render_patches_the_block_body():
             "{% end_theme_card_block %}</div>"
         )
 
-        def mount(self, request, **kwargs):
-            self.count = 1
+        count = state(1)
 
     view = CardView()
     view.mount(None)
@@ -371,17 +370,14 @@ class _TemplateDir:
 def _extending_view(name: str):
     from djust import LiveView
 
-    def mount(self, request, **kwargs):
-        self.count = 1
-
     return type(
         f"Extends2894_{name}",
         (LiveView,),
         {
-            "exposure_policy": "legacy",
+            "exposure_policy": "explicit",
             "template_name": f"child_{name}.html",
             "__module__": __name__,
-            "mount": mount,
+            "count": state(1),
         },
     )
 
