@@ -219,6 +219,29 @@ With `data-key` or `dj-key`, the diff algorithm uses keyed diffing: it maps old 
 
 Keys must be unique within the parent element. Use the item's primary key or a stable string identifier.
 
+An element's `id` is **not** a diff key by default: `<li id="item-1">` is diffed by position like any other unkeyed element. djust's own render path does not need it, because the Rust template engine wraps every `{% if %}` block in `dj-if` boundary markers and the differ matches the block by its marker.
+
+### Opt-in: `id` as a fallback key (HTML without `dj-if` markers)
+
+HTML that reaches the differ **without** `dj-if` markers has no such anchor: `render_template` output passed to `diff_html`, or a host that renders with another template engine and uses `djust_vdom` directly. There, an unkeyed conditional block that appears is paired by position with the sibling that used to be in its place, and every sibling after it is rewritten (`Replace` / `SetText`), which wipes text typed into form fields (#4228).
+
+Such a host can opt in to keying by `id`:
+
+- Python: `djust.diff_html(old_html, new_html, id_keys=True)` (keyword-only; the default `False` gives exactly the patches it always did).
+- Rust: call `djust_vdom::key_by_id(&mut tree)` on **both** parsed trees before `diff` / `diff_in`.
+
+With the opt-in, per element:
+
+1. An explicit non-empty `dj-key` / `data-key` always wins; the `id` is ignored.
+2. Otherwise a non-empty `id` becomes the key `#` + id (`ID_KEY_PREFIX`), so `id="a"` and a sibling's `dj-key="a"` are different keys. Avoid explicit keys that themselves start with `#`.
+3. The direct children of a `dj-update` container (any value) and of a `dj-virtual` container are never keyed by `id`: accumulating `dj-update` rows are already paired by `id` on their own, and the client finds `dj-virtual` rows by their `dj-key` attribute. Their descendants are keyed as usual.
+4. Two siblings with the same `id` (invalid HTML) get the same key; the differ treats a repeated key as ambiguous, logs DJE-051, and pairs those siblings by position, as without the opt-in.
+5. An `id` that encodes position (`id="row-{{ forloop.counter }}"`) pairs rows by position, which is what unkeyed diffing does anyway. Key such rows by a stable value with `dj-key` instead.
+
+For the cheapest patches, give the conditional element an `id` as well as its siblings: showing it is then a single `InsertChild` and hiding it a single `RemoveChild`. A conditional without a key among `id`-keyed siblings still leaves the siblings intact, but each shifted sibling gets a `MoveChild`, because a list that mixes keyed and unkeyed children is reconciled without the longest-increasing-subsequence shortcut.
+
+Without the opt-in, the equivalent rule for marker-less HTML is to wrap the conditional in a permanent element, or to put `dj-key` on the conditional and on every sibling. Keying only one side does not help.
+
 ### Opting Out of VDOM Patching
 
 For subtrees managed by external JavaScript (chart libraries, rich text editors, map widgets), use `dj-update="ignore"` to prevent djust from patching them:

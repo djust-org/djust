@@ -4434,14 +4434,23 @@ fn strip_html_comments_and_whitespace(py: Python<'_>, html: &str) -> PyResult<Op
     })
 }
 
-/// Compute diff between two HTML strings
+/// Compute diff between two HTML strings.
+///
+/// `id_keys=True` opts in to keying every element that has no `dj-key` /
+/// `data-key` by its `id` (`djust_vdom::key_by_id`, #4228) — for HTML rendered
+/// without `dj-if` boundary markers. The default leaves the output unchanged.
 #[pyfunction]
-fn diff_html(old_html: String, new_html: String) -> PyResult<String> {
+#[pyo3(signature = (old_html, new_html, *, id_keys = false))]
+fn diff_html(old_html: String, new_html: String, id_keys: bool) -> PyResult<String> {
     guard_panic("diff_html", move || {
-        let (old, _) = parse_html_with_namespace(&old_html)
+        let (mut old, _) = parse_html_with_namespace(&old_html)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
-        let (new, new_ns) = parse_html_with_namespace(&new_html)
+        let (mut new, new_ns) = parse_html_with_namespace(&new_html)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+        if id_keys {
+            djust_vdom::key_by_id(&mut old);
+            djust_vdom::key_by_id(&mut new);
+        }
 
         let patches = diff_in(&old, &new, new_ns);
         serde_json::to_string(&patches)

@@ -375,7 +375,7 @@ def dj_root_stamp_offsets(html: str) -> List[int]:
     without ``dj-view``, outside other views' containers (#2981, #3155)."""
     ...
 
-def diff_html(old_html: str, new_html: str) -> str:
+def diff_html(old_html: str, new_html: str, *, id_keys: bool = False) -> str:
     """
     Compute diff between two HTML strings.
 
@@ -385,6 +385,10 @@ def diff_html(old_html: str, new_html: str) -> str:
     Args:
         old_html: The old HTML string
         new_html: The new HTML string
+        id_keys: Opt in to keying every element that has no ``dj-key`` /
+            ``data-key`` by its ``id`` (#4228), for HTML rendered without
+            ``dj-if`` boundary markers. ``False`` (the default) leaves the
+            output unchanged. See ``docs/website/advanced/vdom-architecture.md``.
 
     Returns:
         JSON string containing the patches

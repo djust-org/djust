@@ -909,6 +909,61 @@ fn splice_accumulating_into(
     }
 }
 
+/// Prefix of a diff key derived from an element's `id` by [`key_by_id`]. It
+/// keeps an `id`-derived key from colliding with an explicit `dj-key` of the
+/// same text (`dj-key="a"` and `id="a"` on siblings are different keys).
+pub const ID_KEY_PREFIX: &str = "#";
+
+/// OPT-IN: key every element that has no `dj-key` / `data-key` by its `id`
+/// (#4228). Call it on BOTH trees, after parsing and before [`diff`].
+///
+/// djust's own render path never calls this: the Rust template engine emits
+/// `dj-if` boundary markers, and the differ matches a conditional block by its
+/// marker, so the siblings after it keep their identity. HTML that reaches the
+/// differ WITHOUT those markers (a host that renders with another template
+/// engine, `render_template` output fed to `diff_html`) has no such anchor: an
+/// unkeyed `{% if %}` block that appears is paired by position with the
+/// sibling that used to be there, and every following sibling is rewritten
+/// (`Replace` / `SetText`), which wipes typed form input. With the siblings
+/// keyed by `id`, the same change is one `InsertChild`.
+///
+/// The rule, per element node:
+/// - an explicit non-empty `dj-key` / `data-key` (already in [`VNode::key`])
+///   always wins; the `id` is not looked at;
+/// - otherwise a non-empty `id` becomes the key [`ID_KEY_PREFIX`]`+ id`;
+/// - the direct children of a `dj-update` container (any value) and of a
+///   `dj-virtual` container are left alone: `dj-update="append"/"prepend"`
+///   rows are keyed by `id` by [`splice_accumulating_subtrees`] (#3639), and
+///   the client resolves `dj-virtual` rows by their `dj-key` attribute, which
+///   an `id`-derived key does not have. Their descendants are still keyed.
+///
+/// Two siblings sharing an `id` (invalid HTML) get the same key; the differ
+/// treats a repeated key as ambiguous (DJE-051 warning) and pairs those
+/// siblings by position, as it does without this pass. An `id` that encodes
+/// position (`row-{{ forloop.counter }}`) pairs rows by position too, which is
+/// what unkeyed diffing does anyway.
+///
+/// Idempotent: a node that already has a key is never re-keyed.
+pub fn key_by_id(root: &mut VNode) {
+    key_by_id_inner(root, false);
+}
+
+fn key_by_id_inner(node: &mut VNode, exempt: bool) {
+    if node.tag.starts_with('#') {
+        return;
+    }
+    if !exempt && node.key.is_none() {
+        if let Some(id) = node.attrs.get("id").filter(|id| !id.is_empty()) {
+            node.key = Some(format!("{ID_KEY_PREFIX}{id}"));
+        }
+    }
+    let exempt_children =
+        node.attrs.contains_key("dj-update") || node.attrs.contains_key("dj-virtual");
+    for child in &mut node.children {
+        key_by_id_inner(child, exempt_children);
+    }
+}
+
 /// Cache the HTML serialization for all `dj-update="ignore"` subtrees in a VDOM tree.
 /// Call this after the first render so subsequent `to_html()` calls can skip
 /// serialization for these static sections.
