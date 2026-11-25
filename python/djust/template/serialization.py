@@ -18,7 +18,7 @@ from django.db.models import Model
 from django.db.models.fields.files import FieldFile
 
 from djust._mapping import mapping_items
-from djust.serialization import django_json_datetime
+from djust.serialization import _crosses_as_encoded, django_json_datetime
 
 logger = logging.getLogger(__name__)
 
@@ -260,6 +260,14 @@ def serialize_value(
     # renders for ``{{ errors }}`` (#3755). See ``_spells_itself`` for why this is narrower
     # than the engine's own rule.
     if for_render and _spells_itself(value):
+        return value
+
+    # A dict subclass with a spelling of its own (``OrderedDict`` prints ``OrderedDict({...})``)
+    # crosses as itself too, so ``{{ v }}`` renders ``str(o)`` as Django does (#4313). The
+    # LiveView path already carries it (#2899); this is the same rule for the backend path,
+    # asked of the same authority. Key lookup, iteration and ``|dictsort`` go through the
+    # carrier's live object, and a subclass that inherits ``dict``'s spelling stays a map.
+    if for_render and isinstance(value, dict) and _crosses_as_encoded(value):
         return value
 
     # Handle dict - recursively serialize

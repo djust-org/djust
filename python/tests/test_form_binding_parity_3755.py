@@ -384,9 +384,8 @@ class TestTheLayers:
             assert django[0] == "ok" and rust == django, (body, django, rust)
 
     def test_serialize_value_passes_only_markup_rendering_containers_through(self):
-        """Narrower than the engine's rule on purpose (see ``_spells_itself``): a top-level
-        ``OrderedDict`` or a ``str``-overriding list WITHOUT ``__html__`` is rebuilt as before,
-        and its values are still converted (a ``FieldFile`` becomes its URL)."""
+        """Narrower than the engine's rule on purpose (see ``_spells_itself``): a ``str``-overriding list WITHOUT ``__html__`` or a
+        plain ``dict`` subclass is rebuilt as before, and its values are still converted."""
         import collections
 
         from djust.request_scoped import RequestScopedList
@@ -407,7 +406,10 @@ class TestTheLayers:
         assert type(serialize_value(Plain(a=1), for_render=True)) is dict
         assert type(serialize_value(RequestScopedList([1, 2]), for_render=True)) is list
         assert type(serialize_value(Spelt([1]), for_render=True)) is list
-        assert type(serialize_value(collections.OrderedDict(a=1), for_render=True)) is dict
+        # An ``OrderedDict`` has its own spelling, so it crosses as itself (#4313).
+        assert type(serialize_value(collections.OrderedDict(a=1), for_render=True)) is (
+            collections.OrderedDict
+        )
 
     def test_list_subclasses_that_do_not_respell_stay_lists(self):
         """The rule is the dict one (#2899): override ``__str__`` / ``__repr__`` or be a list.
