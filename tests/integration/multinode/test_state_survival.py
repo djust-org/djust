@@ -1081,11 +1081,7 @@ def _reconnect_plain(browser: Browser, socket_a, cluster: Cluster):
     socket_b = browser.socket("B")
     mounted = socket_b.mount(PLAIN, "/plain/", reconnect_from=socket_a)
     probe = probe_from(mounted)
-    notices = [
-        frame.get("code")
-        for frame in socket_b.drain(1.0)
-        if frame.get("type") == "error"
-    ]
+    notices = [frame.get("code") for frame in socket_b.drain(1.0) if frame.get("type") == "error"]
     socket_b.close()
     assert probe["mounted_pid"] == cluster["B"].pid
     return probe["plain_attr"], notices

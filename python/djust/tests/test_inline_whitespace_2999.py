@@ -87,7 +87,9 @@ def test_patch_after_a_kept_space_targets_the_right_path():
     view.update_state({"b": "C"})
     _html, patches, _v = view.render_with_diff()
     patches = json.loads(patches)
-    assert patches == [{"type": "SetText", "path": [0, 2, 0], "text": "C", "parent_d": "3", "index": 0}]
+    assert patches == [
+        {"type": "SetText", "path": [0, 2, 0], "text": "C", "parent_d": "3", "index": 0}
+    ]
 
 
 def test_text_fast_paths_still_fire_on_a_page_with_kept_spaces():
