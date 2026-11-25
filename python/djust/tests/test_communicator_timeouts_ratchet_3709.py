@@ -813,8 +813,8 @@ def uncovered_counts() -> Dict[str, int]:
 #: too: a class cannot grow quietly just because the per-file count above cannot see it.
 UNCOVERED_BASELINE: Dict[str, int] = {
     "absence_raises": 2,
-    "variable_timeouts": 52,
-    "wait_for_short": 100,
+    "variable_timeouts": 51,
+    "wait_for_short": 99,
 }
 
 
