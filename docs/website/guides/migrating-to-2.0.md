@@ -666,7 +666,7 @@ For each handler:
 | 1.3 | 2.0 | Reported by | `--fix` |
 | --- | --- | --- | --- |
 | An unannotated parameter | An annotation (`Any` for unchecked input) | `djust.V016` | Yes: it writes `Any`; the real type is your choice |
-| A `data-item-id="3"` argument | `dj-value-item-id="3"` | `djust.T020` (templates, only when the parameter is required), `djust.T029` (Python) | Yes in a template when the handler declares it; No for markup that Python builds (reported) |
+| A `data-item-id="3"` argument | `dj-value-item-id="3"` | `djust.T020` (templates), `djust.T029` (Python) | Yes in a template when the handler declares it; No for markup that Python builds (reported) |
 | A `_target` parameter, or `kwargs.get("_target")` | A declared `field: str = ""` | `djust.V034` (and `djust.V016` for a declared `_target`) | No: reported |
 | Blank text becomes `0` for `count: int` | `count: Optional[int] = None`, and handle `None` | No check: dispatch rejects the event | No |
 | `parameter_policy="legacy"` on a handler | Delete it | `ImproperlyConfigured` when the decorator applies | No: reported, delete it once the templates send `dj-value-*` |
@@ -805,11 +805,13 @@ legacy handlers, are retired (#4205); `djust.V016` and `djust.T020` cover the
 same code now.
 
 **`check` does not catch every dropped argument.** `djust.T020` reports a
-`data-*` attribute only when the parameter it fed is required. When the
-parameter has a default, the handler is called with the default, the click
-does the wrong thing, and nothing is reported
-([#4033](https://github.com/djust-org/djust/issues/4033)). Search the
-templates yourself:
+`data-*` attribute that names a declared parameter, whether the parameter is
+required or has a default
+([#4033](https://github.com/djust-org/djust/issues/4033)). It does not see a
+binding whose handler name the template computes, a `data-*` attribute that
+names no declared parameter (a `**kwargs` handler that read it), or markup
+that Python builds (`djust.T029` covers some of that). Search the templates
+yourself:
 
 ```bash
 grep -rnE 'dj-(click|change|input|submit|blur|keydown)[^>]*data-[a-z]' --include='*.html' .
@@ -1478,4 +1480,4 @@ removed setting at startup, and `exposure_policy = "legacy"`,
 module that states it is imported. `djust_exposure_inventory` lists any view
 still on `[policy: legacy]`; run `--fix` on it.
 
-<!-- generated-doc prose-sha256: c88d8c02ca76 -->
+<!-- generated-doc prose-sha256: 443311bd20b1 -->
