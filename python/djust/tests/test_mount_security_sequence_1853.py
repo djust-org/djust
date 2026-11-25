@@ -310,6 +310,8 @@ class TestRunPreMountAuthHelper:
         """The explicit sequence resolves and binds the tenant FIRST, so the
         denial's own queries run in the view's tenant (the legacy sequence
         skipped tenant resolution on a denial)."""
+        from djust.tenants.middleware import tenant_context
+
         ensure_calls = []
 
         class _TenantLoginView(LiveView):
@@ -323,7 +325,8 @@ class TestRunPreMountAuthHelper:
         request = RequestFactory().get("/")
         request.user = _AnonUser()
 
-        verdict = run_pre_mount_auth(_TenantLoginView(), request)
+        with tenant_context(None):
+            verdict = run_pre_mount_auth(_TenantLoginView(), request)
         assert verdict is not None  # redirect
         assert ensure_calls == [request], (
             "the explicit sequence must resolve the tenant before authorizing, "
@@ -372,7 +375,7 @@ class TestRunPreMountAuthHelper:
             core._bind_current_tenant = real_bind
         assert get_current_tenant() is None, "the tenant bound here leaked out of the test"
 
-        assert order[:2] == ["resolve", "bind"], (
+        assert order == ["resolve", "bind"], (
             f"pre-mount sequence ran out of order: {order!r} (must resolve tenant "
             f"before binding it)"
         )
@@ -508,7 +511,7 @@ class TestWebSocketMountSequence:
 
     async def test_a_mount_carrying_a_state_snapshot_still_mounts(self):
         """A mount that echoes a ``state_snapshot`` the server does not accept
-        (this legacy view holds no declared client state) still passes the
+        (this view declares no client state) still passes the
         pre-mount sequence and mounts fresh."""
         from channels.testing import WebsocketCommunicator
 

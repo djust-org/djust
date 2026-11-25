@@ -44,12 +44,11 @@ def _assert_names_the_replacement(message: str) -> None:
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("policy", ["legacy", "explicit"])
-def test_a_view_that_sets_the_flag_is_refused_at_class_creation(policy):
+def test_a_view_that_sets_the_flag_is_refused_at_class_creation():
     with pytest.raises(ImproperlyConfigured) as refused:
 
         class SnapshotView(LiveView):
-            exposure_policy = policy
+            exposure_policy = "explicit"
             template = "<div dj-root></div>"
             enable_state_snapshot = True
 

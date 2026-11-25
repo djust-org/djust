@@ -8,7 +8,6 @@ handler write shows in every other user's render and in every later mount.
 * Explicit views refuse the declaration when the class is created, and again on
   the mount path (a component assigned to the class afterwards, a policy changed
   since). The gate-off sibling below proves the refused shape really leaks.
-* Legacy views keep running and get the ``djust.V026`` system check.
 * Each form the error message recommends is isolated per session.
 
 Sessions here are real ``WebsocketCommunicator`` connections with different
@@ -30,7 +29,6 @@ from django.test import override_settings
 from djust import LiveView, event_handler
 from djust import _exposure_providers
 from djust._exposure import ExposureConfigurationError
-from djust.checks.components import check_shared_class_level_components
 from djust.components.components.badge import Badge
 from djust.components.descriptors.base import LiveComponent, TypedState
 from djust.decorators import state
@@ -358,23 +356,3 @@ def test_instance_assigned_live_component_message_says_class_body():
     assert "'badge'" in message
     assert "declare it in the class body" in message
     assert "own copy" in message
-
-
-# ------------------------------------------------------------------ #
-# djust.V026 (legacy)
-# ------------------------------------------------------------------ #
-
-
-def _v026() -> list:
-    return [m for m in check_shared_class_level_components(None) if m.id == "djust.V026"]
-
-
-def test_v026_skips_explicit_views_and_live_components():
-    text = " ".join(m.msg for m in _v026())
-    for name in ("FieldView", "PrivateView", "BuiltView", "DescriptorView", "LateView"):
-        assert name not in text
-
-
-def test_v026_can_be_suppressed(settings):
-    settings.DJUST_CONFIG = {"suppress_checks": ["V026"]}
-    assert _v026() == []

@@ -2196,6 +2196,9 @@ def run_pre_mount_auth(view_instance: Any, request: Any) -> Optional[str]:
         # Auth denied via redirect — skip tenant resolve/bind, mirroring the
         # pre-existing per-transport early return on denial.
         return redirect_url
+    if not uses_legacy_exposure(view_instance):
+        # The tenant was resolved and bound above; do it once.
+        return None
 
     # 3. Resolve tenancy (TenantMixin views only; no-op otherwise).
     if hasattr(view_instance, "_ensure_tenant"):
