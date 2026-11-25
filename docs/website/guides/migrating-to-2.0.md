@@ -675,10 +675,12 @@ time can set the old policy temporarily, which djust 2.0.0 refuses
 LIVEVIEW_CONFIG = {"event_parameter_policy": "legacy"}
 ```
 
-A handler that still has `**kwargs` keeps working under the strict default,
-because the catch-all takes whatever the browser sends, so the switch itself is
-usually small. The catch-all also keeps the handler from being checked; remove
-it handler by handler afterwards.
+A handler whose named parameters are all annotated keeps working under the
+strict default when it also has `**kwargs`: the catch-all takes whatever else
+the browser sends, so the switch is usually small. An unannotated named
+parameter fails the page (`djust.V016` reports it), with or without
+`**kwargs`. The catch-all also keeps the handler from being checked; remove it
+handler by handler afterwards.
 
 `@event_handler(parameter_policy="legacy")` keeps one handler on the old
 behaviour until you get to it. `manage.py check` reports what strict dispatch
@@ -1139,7 +1141,9 @@ of looking for a replacement.
   rendered a placeholder that only a demo Counter hydrated. A capitalized tag
   such as `<Button />` is now a template error (an uppercase spelling of an
   ordinary HTML element, `<DIV>`, is still HTML; write tags in lowercase
-  anyway). Mount a widget with a [JavaScript hook](hooks.md) instead.
+  anyway). `<Name` inside an HTML comment (`<!-- <Header /> -->`) or inside
+  `<script>` / `<style>` text (`if (a<MAX && b)`) is not a tag and renders as
+  before. Mount a widget with a [JavaScript hook](hooks.md) instead.
 
 ## 6. Finish
 
@@ -1158,3 +1162,4 @@ Then install 2.0, and start the server once: a removed setting you missed
 stops it with the name of its replacement.
 
 <!-- generated-doc prose-sha256: e73b1c2141e4 -->
+<!-- generated-doc prose-sha256: 63bd97b6a486 -->

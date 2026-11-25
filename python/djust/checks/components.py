@@ -2452,7 +2452,7 @@ def check_undeclared_handler_state(app_configs: Any, **kwargs: Any) -> list[Chec
 
 
 _SW_TEMPLATE_USER_RE = re.compile(
-    r"\{[{%][^}]*?\b(request\.user|request\.session|user\.is_authenticated|user\.is_anonymous|perms\.)"
+    r"\{[{%][^}]*?(?<![\w.])((?:user|request\.\w+|perms|csrf_token|messages)(?!\w)[\w.]*)"
 )
 
 
@@ -2507,20 +2507,34 @@ def _sw_code_reasons(cls: type) -> list[str]:
 
 
 def _sw_template_reason(cls: type) -> Optional[str]:
-    """The user-reading expression in the view's template source, if any (V037)."""
-    source = getattr(cls, "template", None)
-    if not isinstance(source, str) or not source:
-        name = getattr(cls, "template_name", None)
-        if not isinstance(name, str) or not name:
-            return None
-        try:
-            from django.template.loader import get_template
+    """The per-visitor expression in the view's template, if any (V037).
 
-            source = get_template(name).template.source
-        except Exception:  # noqa: BLE001 — an unloadable template cannot be scanned
-            return None
-    match = _SW_TEMPLATE_USER_RE.search(source)
-    return "its template reads %s" % match.group(1) if match else None
+    Reads the template and every ``{% extends %}`` / ``{% include %}`` it
+    reaches, through the ADR-037 binding scan; a template that cannot be loaded
+    is not reported.
+    """
+    sources: list[str] = []
+    try:
+        from djust._template_bindings import TemplateScan, django_engine, scan_class_template
+
+        engine = django_engine()
+        if engine is not None:
+            cache: dict[Any, Any] = {}
+            _label, key = scan_class_template(cls, engine, cache)
+            scan = cache.get(key) if key is not None else None
+            if isinstance(scan, TemplateScan):
+                sources = list(scan.files.values())
+    except Exception:  # noqa: BLE001 — an unscannable template cannot be reported
+        sources = []
+    if not sources:
+        inline = getattr(cls, "template", None)
+        if isinstance(inline, str) and inline:
+            sources = [inline]
+    for source in sources:
+        match = _SW_TEMPLATE_USER_RE.search(source)
+        if match:
+            return "its template reads %s" % match.group(1)
+    return None
 
 
 @register("djust")

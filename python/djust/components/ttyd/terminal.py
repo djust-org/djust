@@ -171,10 +171,12 @@ class TtydTerminalView(LiveView):
     Lifecycle callbacks::
 
         class MyTerminalView(TtydTerminalView):
-            def on_ttyd_connect(self, timestamp="", user_agent="", **kwargs):
+            def on_ttyd_connect(self, timestamp: str = "", user_agent: str = "", **kwargs):
                 self.session_log.append(f"Connected at {timestamp}")
 
-            def on_ttyd_disconnect(self, timestamp="", code=0, reason="", **kwargs):
+            def on_ttyd_disconnect(
+                self, timestamp: str = "", code: int = 0, reason: str = "", **kwargs
+            ):
                 self.session_log.append(f"Disconnected at {timestamp} (code={code})")
 
     The view uses explicit exposure, like every djust view: a subclass's

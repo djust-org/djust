@@ -1182,18 +1182,17 @@ fn line_at(spans: &[Span], source: &str, i: usize) -> usize {
         + 1
 }
 
-/// Django's invalid-tag diagnostic, including the terminators accepted by
-/// the innermost parser body. Used for unknown tags and misplaced closers.
 /// The error for a capitalized `<Name ...>` tag (#4006).
-fn capitalized_tag_error(name: &str) -> DjangoRustError {
+fn capitalized_tag_error(name: &str, line: Option<usize>) -> DjangoRustError {
+    let at = line.map(|n| format!(" on line {n}")).unwrap_or_default();
     if name.starts_with("Rust") {
         return DjangoRustError::TemplateError(format!(
-            "<{name} /> component tags were removed in djust 2.0. \
+            "<{name} /> component tags were removed in djust 2.0{at}. \
              Use a djust component template tag or a Python component instead."
         ));
     }
     DjangoRustError::TemplateError(format!(
-        "<{name}> is a capitalized (JSX-style) component tag. React component tags were removed in \
+        "<{name}>{at} is a capitalized (JSX-style) component tag. React component tags were removed in \
          djust 2.0 with djust.react and ReactMixin (#4006). Mount the widget with a JavaScript hook \
          instead: dj-hook=\"{name}\" on an ordinary element, with the hook registered in \
          window.djust.hooks (https://docs.djust.org/guides/hooks/). Write HTML element names in \
@@ -1201,6 +1200,8 @@ fn capitalized_tag_error(name: &str) -> DjangoRustError {
     ))
 }
 
+/// Django's invalid-tag diagnostic, including the terminators accepted by
+/// the innermost parser body. Used for unknown tags and misplaced closers.
 fn invalid_block_tag_error(
     spans: &[Span],
     source: &str,
@@ -2490,7 +2491,10 @@ fn parse_token_inner(
             }
         }
 
-        Token::CapitalizedTag(name) => Err(capitalized_tag_error(name)),
+        Token::CapitalizedTag(name) => Err(capitalized_tag_error(
+            name,
+            Some(line_at(spans, source, *i)),
+        )),
 
         // Inline comments create no Django node. Block comments do, and
         // therefore count as content for the extends must-be-first rule.
@@ -2910,8 +2914,7 @@ fn collect_nested_raw_source(
                 content.push_str(text);
                 content.push_str("#}");
             }
-            Token::CapitalizedTag(name) => return Err(capitalized_tag_error(name)),
-            _ => {}
+            Token::CapitalizedTag(name) => return Err(capitalized_tag_error(name, None)),
         }
         j += 1;
     }

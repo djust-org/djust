@@ -16,6 +16,7 @@ session (the consumer's own security chain), ``LiveViewTestClient`` (its mirror 
 the HTTP POST fallback (a fresh view per request, which can never reuse anything).
 """
 
+from typing import Any
 import json
 import uuid
 
@@ -84,15 +85,15 @@ class Writes(_Recording):
         """Declared read-only: shows nothing but the authorized record."""
         EVENTS.append(("peek",))
 
-    @event_handler(parameter_policy="legacy")  # legacy params until #4192-#4198 (#4189)
-    def rename(self, name="", **kwargs):
+    @event_handler()
+    def rename(self, name: str = "", **kwargs):
         """A handler of the app's, not declared read-only: it writes, so it is a write."""
         EVENTS.append(("rename", self.object.pk))
         self.object.name = name
         self.object.save()
 
-    @event_handler(parameter_policy="legacy")  # legacy params until #4192-#4198 (#4189)
-    def mutate_in_memory(self, name="", **kwargs):
+    @event_handler()
+    def mutate_in_memory(self, name: str = "", **kwargs):
         """Changes the record without saving it, as an app handler might."""
         self.object.name = name
 
@@ -100,8 +101,8 @@ class Writes(_Recording):
 class WritesOverridden(Writes):
     """Overrides ``validate_field``: it is not the framework's read-only one any more."""
 
-    @event_handler(parameter_policy="legacy")  # legacy params until #4192-#4198 (#4189)
-    def validate_field(self, field="", field_name="", value=None, **kwargs):
+    @event_handler()
+    def validate_field(self, field: str = "", field_name: str = "", value: Any = None, **kwargs):
         EVENTS.append(("custom_validate", self.object.pk))
         self.object.name = value or ""
         self.object.save()
