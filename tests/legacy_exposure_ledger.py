@@ -364,47 +364,7 @@ MIGRATED_STEP3: tuple[str, ...] = (
 MIGRATED_4185: tuple[str, ...] = ("python/djust/tests/test_legacy_component_alias_3078.py",)
 
 #: The #4082 files that still state the legacy policy, each with its reason.
-REMAINING_4082: dict[str, str] = {
-    "python/djust/tests/test_async_check_permissions.py": (
-        "migrated; the reauth_on_event tests stay legacy: reauth_on_event re-checks legacy views only (turns.reauth)"
-    ),
-    "python/djust/tests/test_async_pending_flag_2963.py": (
-        "migrated; one case stays legacy: an unhandled async failure ends loading with a named source=async frame on legacy views only"
-    ),
-    "python/djust/tests/test_event_loop_offload_3074.py": (
-        "migrated; the one-hop push, tick and db_notify cases also run a legacy view: legacy subject, the one-hop server-originated turns serve both policies (#4152, #4166)"
-    ),
-    "python/djust/tests/test_event_reauth_1777.py": (
-        "legacy subject: reauth_on_event re-checks legacy views only (turns.reauth)"
-    ),
-    "python/djust/tests/test_live_auth_denials_and_wrappers.py": (
-        "migrated; the post()-only event refusal cases stay legacy: a legacy view refuses the event and stays mounted"
-    ),
-    "python/djust/tests/test_multi_view_refusal_3252.py": (
-        "migrated; the revocation cases stay legacy: reauth_on_event re-checks legacy views only (turns.reauth)"
-    ),
-    "python/djust/tests/test_reauth_reads_stored_session.py": (
-        "legacy subject: reauth_on_event re-checks legacy views only (turns.reauth)"
-    ),
-    "python/djust/tests/test_runtime_reauth_async_1905.py": (
-        "migrated; the reauth_on_event cases stay legacy: reauth_on_event re-checks legacy views only (turns.reauth)"
-    ),
-    "python/djust/tests/test_server_turn_reauth.py": (
-        "legacy subject: reauth_on_event on server-originated turns runs for legacy views only (turns.reauth)"
-    ),
-    "python/djust/tests/test_server_turn_reauth_slots.py": (
-        "legacy subject: reauth_on_event on server-originated turns runs for legacy views only (turns.reauth)"
-    ),
-    "python/djust/tests/test_stable_component_ids_4114.py": (
-        "migrated; the mount-built and instance-held component cases stay legacy: an explicit view declares its components at class level and refuses one assigned in mount() or a handler"
-    ),
-    "python/djust/tests/test_turn_middleware_core.py": (
-        "legacy subject: its legacy view drives the reauth built-in, which re-checks legacy views only (turns.reauth)"
-    ),
-    "tests/unit/test_layout_switching.py": (
-        "migrated; one case stays legacy: a production failure log names the error for legacy views only (D-a)"
-    ),
-}
+REMAINING_4082: dict[str, str] = {}
 
 #: Files that stated the legacy policy before #4082 and were not part of it,
 #: and later tests OF the legacy policy (each statement gives its reason inline).
@@ -446,18 +406,4 @@ OTHER_LEGACY_FILES: frozenset[str] = frozenset(
 
 #: Files with legacy statements kept on purpose, where each statement carries
 #: its reason as a same-line comment.
-REASONED_INLINE: tuple[str, ...] = (
-    "python/djust/tests/test_event_reauth_1777.py",
-    "python/djust/tests/test_reauth_reads_stored_session.py",
-    "python/djust/tests/test_runtime_reauth_async_1905.py",
-    "python/djust/tests/test_server_turn_reauth.py",
-    "python/djust/tests/test_server_turn_reauth_slots.py",
-    "python/djust/tests/test_async_pending_flag_2963.py",
-    "python/djust/tests/test_multi_view_refusal_3252.py",
-    "python/djust/tests/test_stable_component_ids_4114.py",
-    "python/djust/tests/test_turn_middleware_core.py",
-    "python/djust/tests/test_event_loop_offload_3074.py",
-    "python/djust/tests/test_async_check_permissions.py",
-    "python/djust/tests/test_live_auth_denials_and_wrappers.py",
-    "tests/unit/test_layout_switching.py",
-)
+REASONED_INLINE: tuple[str, ...] = ()
