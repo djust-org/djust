@@ -27,6 +27,7 @@ bytes to most objects, and the published numbers are stated for 3.12.
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Set, Tuple
 
@@ -240,7 +241,17 @@ CEILING_MARKUP_100KB = 2_000_000
 #: A ~100 KB page that is a dense table of rows held in state: the Rust tree
 #: and the Rust copy of the rows are most of it (the guide's table). This
 #: misses the 2 MB first proposed in #3998; it is the ceiling in force.
+#:
+#: The total is asserted on the reference interpreter only. Elsewhere (CI runs
+#: 3.11-3.14) the rows' own dicts are sized by that interpreter, and the state
+#: is the application's data, not what the framework adds, so the ceiling is
+#: held by its two framework parts instead, which do not move with the
+#: interpreter: the Rust side (``retained_bytes()``, the same everywhere) and
+#: the Python side less the state (a few fixed-size framework objects and the
+#: recovery HTML, measured as CPython 3.12 sizes them).
 CEILING_TABLE_100KB = 4_500_000
+CEILING_TABLE_100KB_RUST = 4_000_000
+CEILING_TABLE_100KB_PY_FRAMEWORK = 250_000
 #: What change detection keeps, whatever the size of the state.
 CEILING_FINGERPRINTS = 4 * KB
 
@@ -256,8 +267,12 @@ async def test_a_view_of_a_100_kb_table_retains_under_its_ceiling():
     holds, change detection keeps a constant."""
     report = await measured(scenarios.row_list(880), ("touch", None))
     assert 95_000 < report["page_bytes"] < 105_000, report["page_bytes"]
-    assert report["total"] < CEILING_TABLE_100KB, report["total"]
+    assert report["rust.total"] < CEILING_TABLE_100KB_RUST, report["rust.total"]
+    framework_py = report["py.total"] - report["py.state"]
+    assert framework_py < CEILING_TABLE_100KB_PY_FRAMEWORK, framework_py
     assert fingerprints(report) < CEILING_FINGERPRINTS, fingerprints(report)
+    if sys.version_info[:2] in ((3, 12), (3, 13)):  # sized the same (``_view_memory``)
+        assert report["total"] < CEILING_TABLE_100KB, report["total"]
 
 
 async def test_change_detection_keeps_a_constant_whatever_the_rows():

@@ -171,8 +171,10 @@ A page of markup costs what its tree costs, and nothing changed there. A table's
 **The ceilings** (`test_view_memory.py`, counted as above, and part of the 2.0 acceptance matrix):
 
 - a view of a ~100 KB page of markup holds **under 2 MB** (measured: 1.49 MB);
-- a view of a ~100 KB table whose rows are all in state holds **under 4.5 MB** (measured: 4.15 MB). This misses the 2 MB first proposed for every 100 KB page: the Rust tree (about 2 MB) and the Rust copy of the rows (about 1 MB) are most of it;
+- a view of a ~100 KB table whose rows are all in state holds **under 4.5 MB** (measured: 4.15 MB). This misses the 2 MB first proposed for every 100 KB page: the Rust tree (about 2 MB) and the Rust copy of the rows (about 1 MB) are most of it. Because the rows' own Python dicts are sized by the interpreter, the test asserts the total on CPython 3.12 and 3.13 and, on every interpreter, its two framework parts: the Rust side under 4.0 MB (measured 3.66 MB, the same everywhere) and the Python side less the state under 0.25 MB (measured 0.14 MB);
 - what change detection keeps is **under 4 KB** per view, whatever the size of the state (measured: 1.6 KB for 125 rows and for 1,000).
+
+What it costs in time: one digest per container attribute the sync compares, so one per turn for the table. For the 1,000 rows of this section's table it takes **0.47 ms**, against 1.6 ms for the fingerprint walk it follows (median of five `timeit` runs of `fingerprint_digest` on the rows' fingerprint, best of 5 × 20 calls each; CPython 3.12.3 on a 2.3 GHz Xeon, 4 vCPU). The comparisons it replaced (a tree equality and a rebuild of the changed rows from the baseline's) are gone, so a turn pays about 0.5 ms more per 1,000 rows. Reading `is_dirty` / `changed_fields` takes one more walk and digest.
 
 The same change measured on the Python heap alone (`tracemalloc`, five open pages after three turns, the method of `scripts/bench_turn_transports.py`): a 1,000-row table page went from 929 KB to 561 KB per page in this section's view, and from 3,089 KB to 2,752 KB (with the session save) and 1,452 KB to 1,116 KB (without) in that benchmark's table; small pages (a form, a dashboard, an editor) moved by 1–7 KB. The save's share of the first figure is the encoded state the session keeps, not change detection.
 
