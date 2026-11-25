@@ -97,15 +97,7 @@ def setup(monkeypatch):
     MOUNT_GATE["reached"].clear()
     _sse_sessions.clear()
     sse._sse_mounting.clear()
-    # Saves before each reply (#4164: unset, the interval is 2): a gated mount
-    # holds the one sync thread, and a deferred view's close would wait on it
-    # to flush, so the old stream could not finish closing while the gate holds.
-    with override_settings(
-        ROOT_URLCONF=__name__,
-        LIVEVIEW_ALLOWED_MODULES=["djust"],
-        DEBUG=False,
-        DJUST_STATE_SAVE_INTERVAL=0,
-    ):
+    with override_settings(ROOT_URLCONF=__name__, LIVEVIEW_ALLOWED_MODULES=["djust"], DEBUG=False):
         yield
     _sse_sessions.clear()
     sse._sse_mounting.clear()
@@ -205,20 +197,36 @@ async def test_a_reconnect_keeps_the_user_present_when_the_old_stream_closes():
     assert await _members() == []
 
 
-async def test_a_reconnect_still_mounting_when_the_old_stream_closes():
+@pytest.mark.parametrize("interval", [0, None], ids=["saved_per_turn", "default_interval"])
+async def test_a_reconnect_still_mounting_when_the_old_stream_closes(interval):
     """The reconnect joins presence before it registers: the old session's
-    close, landing between the two, must not delete the fresh record."""
-    old, old_stream, sid, key = await _open(PresentPage, "/present/")
-    MOUNT_GATE["gate"] = gate = threading.Event()
-    reconnect = asyncio.ensure_future(_open(PresentPage, "/present/", sid, key))
-    await _until(MOUNT_GATE["reached"].is_set, "the reconnect to join presence")
-    assert _sse_sessions[sid] is old  # not registered yet
+    close, landing between the two, must not delete the fresh record.
 
-    await old_stream.aclose()
-    await _until(lambda: old.view_instance is None, "the old session to drop its view")
-    await asyncio.sleep(0.2)
-    gate.set()
-    new, new_stream, _, _ = await reconnect
+    With the default save interval (#4164) the reconnect's presence join is a
+    deferred change of the old view, so the old stream's close flushes it, and
+    that save needs the sync thread the gated mount holds. The close untracks
+    presence BEFORE that flush: the untrack is scheduled at once, and the view
+    is released once the gate opens."""
+    from django.test import override_settings
+
+    pinned = {} if interval is None else {"DJUST_STATE_SAVE_INTERVAL": interval}
+    with override_settings(**pinned):
+        old, old_stream, sid, key = await _open(PresentPage, "/present/")
+        MOUNT_GATE["gate"] = gate = threading.Event()
+        reconnect = asyncio.ensure_future(_open(PresentPage, "/present/", sid, key))
+        await _until(MOUNT_GATE["reached"].is_set, "the reconnect to join presence")
+        assert _sse_sessions[sid] is old  # not registered yet
+
+        closing = asyncio.ensure_future(old_stream.aclose())
+        # The untrack is scheduled before anything the close waits for.
+        await _until(lambda: old._presence_untracked, "the old close to untrack presence")
+        if interval == 0:
+            await _until(lambda: old.view_instance is None, "the old session to drop its view")
+        await asyncio.sleep(0.2)
+        gate.set()
+        new, new_stream, _, _ = await reconnect
+        await closing
+        await _until(lambda: old.view_instance is None, "the old session to drop its view")
 
     assert [p["id"] for p in await _members()] == ["user-3254"]
     assert LEFT == []

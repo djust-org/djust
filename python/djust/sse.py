@@ -513,6 +513,9 @@ class SSESession:
         # Presence untracks scheduled by shutdown() (#3254): held so a task is
         # not garbage-collected before it finishes, dropped when it does.
         self._presence_untrack_tasks: set[asyncio.Task] = set()
+        # Views whose presence the stream's close already untracked (before its
+        # flush, #4164): ``shutdown`` does not untrack them again.
+        self._presence_untracked: set[int] = set()
         # In-flight ``disconnected()`` hook runs (#3007), held until they finish.
         self._disconnected_tasks: set[asyncio.Task] = set()
         # The views mounted beside the page view (#3252), by ``target_id``. Empty
@@ -1030,6 +1033,17 @@ class SSESession:
         self._put(None)  # None is the sentinel value
         self._closed_sentinel_queued = True
 
+    def untrack_presence_at_close(self) -> None:
+        """The stream closed: untrack every view's presence now, before the
+        close's state flush (#4164), which can wait for the turn locks and a
+        save; ``shutdown`` then skips them."""
+        views = [self.view_instance, *(slot.view for slot in list(self._slots.values()))]
+        for view in views:
+            if view is not None:
+                self._untrack_presence(view)
+                # Held by this session until ``shutdown``: the id stays its own.
+                self._presence_untracked.add(id(view))
+
     def _shutdown_slot(self, slot: Any) -> None:
         """The close of one view mounted beside the page view: ``shutdown``'s steps for it."""
         from ._child_lifecycle import release_root_view
@@ -1089,7 +1103,7 @@ class SSESession:
         session that a same-owner reconnect has replaced under its id, or that
         a reconnect is still mounting to, is not untracked.
         """
-        if not getattr(view, "_presence_tracked", False):
+        if not getattr(view, "_presence_tracked", False) or id(view) in self._presence_untracked:
             return
         from .presence import PresenceManager
 
@@ -1642,6 +1656,9 @@ class DjustSSEStreamView(View):
                 # Closing: another owner may now take this id (#3164).
                 session._stream_closed = True
                 if mounted:
+                    # Presence first: the flush below can wait for the turn
+                    # locks and a save, and peers should see the leave now.
+                    session.untrack_presence_at_close()
                     # Saved now, not after the linger: a reconnect in the
                     # linger reads the store (design: save frequency).
                     await _flush_session_states(session, "disconnect")
