@@ -6,7 +6,7 @@ the wrapper template pattern (Rust content + Django layout).
 """
 
 import pytest
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 from django.test import RequestFactory
 from django.contrib.sessions.middleware import SessionMiddleware
@@ -15,7 +15,7 @@ from django.contrib.sessions.middleware import SessionMiddleware
 class SimpleCounterView(LiveView):
     """Simple counter view for testing VDOM patching"""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = """<div dj-root>
     <div class="container">
         <h1>Counter Demo</h1>
@@ -24,8 +24,7 @@ class SimpleCounterView(LiveView):
     </div>
 </div>"""
 
-    def mount(self, request):
-        self.count = 0
+    count = state(0)
 
     @event_handler()
     def increment(self, **kwargs):
@@ -131,9 +130,8 @@ def test_vdom_patching_multiple_updates():
     )
     assert any(p.get("text") == "1" for p in patches_1 if p["type"] == "SetText")
 
-    # Second increment. 2.0 keeps no legacy view state between HTTP
-    # requests: the POST mounts the view again (count 0) before the event, so
-    # the count is 1 again and the render matches the previous one.
+    # Second increment. An explicit view's declared state is saved between
+    # HTTP requests, so the count carries on from 1 to 2.
     post_request_2 = factory.post(
         "/counter/", data='{"event":"increment","params":{}}', content_type="application/json"
     )
@@ -141,10 +139,10 @@ def test_vdom_patching_multiple_updates():
     response_2 = view.post(post_request_2)
     data_2 = json.loads(response_2.content.decode("utf-8"))
     assert response_2.status_code == 200, data_2
-    assert view.count == 1
+    assert view.count == 2
     patches_2 = data_2.get("patches") or []
     patches_2 = json.loads(patches_2) if isinstance(patches_2, str) else patches_2
-    assert not any(p.get("text") == "2" for p in patches_2 if p["type"] == "SetText")
+    assert any(p.get("text") == "2" for p in patches_2 if p["type"] == "SetText")
 
     print("\n[TEST] ✅ Multiple updates answer correctly!")
 

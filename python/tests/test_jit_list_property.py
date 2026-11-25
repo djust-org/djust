@@ -18,6 +18,7 @@ from djust import LiveView
 from djust.mixins.jit import JITMixin
 from djust.optimization.codegen import compile_serializer, generate_serializer_code
 from djust.session_utils import _jit_serializer_cache
+from djust.testing import LiveViewTestClient
 
 
 @dataclass
@@ -112,21 +113,24 @@ def test_generated_code_and_queryset_path_agree(agent):
 
 
 class AgentListView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         '<div dj-root dj-view="tests.AgentListView">'
         "{% for a in agents %}{% for tool in a.tools %}<b>{{ tool.name }}</b>{% endfor %}"
         "{% empty %}This agent answers without calling a tool{% endfor %}</div>"
     )
 
-    def mount(self, request, **kwargs):
-        self.agents = list(N32Agent.objects.all())
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["agents"] = list(N32Agent.objects.all())
+        return ctx
 
 
 def test_model_list_context_renders_the_tools(agent):
-    view = AgentListView()
-    view.mount(None)
+    client = LiveViewTestClient(AgentListView)
+    client.mount()
+    client.render()
 
-    rows = view.get_context_data()["agents"]
+    rows = client.rendered_state()["agents"]
 
     assert [tool["name"] for tool in rows[0]["tools"]] == ["search", "fetch"]

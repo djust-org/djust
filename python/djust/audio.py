@@ -104,6 +104,9 @@ class AudioMixin:
 
     audio_banks = {}
     _djust_context_providers = (AUDIO_PROVIDER,)
+    #: The ``_audio_`` namespace (scope, cursors, the manifest cache) is ephemeral:
+    #: automatic state never saves it, so a reconnect cannot restore a stale scope.
+    _djust_unsaved_prefixes = ("_audio_",)
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)

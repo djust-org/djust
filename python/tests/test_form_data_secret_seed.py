@@ -23,7 +23,7 @@ from django.test import RequestFactory, override_settings
 from djust import serialization
 from djust.forms import FormMixin
 from djust.live_view import LiveView
-from djust.testing import LiveViewTestClient
+from djust.testing import LiveViewTestClient, rendered_state, with_live_session
 
 pytestmark = [pytest.mark.django_db, pytest.mark.pr_tier]
 
@@ -38,7 +38,7 @@ class EditForm(forms.ModelForm):
 
 
 class EditView(FormMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     form_class = EditForm
     template = '<div dj-root><form dj-submit="submit_form">{{ form.as_live }}<button>go</button></form></div>'
 
@@ -56,7 +56,7 @@ class EditView(FormMixin, LiveView):
 
 
 class CreateView(FormMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     form_class = EditForm
     template = '<div dj-root><form dj-submit="submit_form">{{ form.as_live }}</form></div>'
 
@@ -90,6 +90,8 @@ def surfaces(view, client=None) -> dict:
     }
     if client is not None:
         out["render"] = client.render()
+        # What the template engine was handed: ``get_state()`` is only ``client=True`` fields.
+        out["rendered_state"] = json.dumps(rendered_state(view), default=str)
     return out
 
 
@@ -192,8 +194,11 @@ class TestSubmitKeepsTheColumn:
         )
         assert view.is_valid is True, view.field_errors
         assert User.objects.get(username="newbie").password == "correct horse"
-        # what was typed is not kept in the state the framework reports
-        assert json.dumps(view.get_state(), default=str).count("correct horse") == 0
+        # what was typed is not kept in the state the template engine is handed
+        client.render()
+        assert "form_data" in rendered_state(view)
+        handed = json.dumps(rendered_state(view), default=str)
+        assert handed.count("correct horse") == 0
         assert view.form_data["password"] == ""
 
 
@@ -230,7 +235,7 @@ class TestErrorsOfWithheldFields:
 
 
 class WsEditView(FormMixin, LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     form_class = EditForm
     template = (
         f'<div dj-view="{__name__}.WsEditView" dj-id="0"><form dj-submit="submit_form">'
@@ -264,7 +269,7 @@ class TestOverTheWebSocket:
 
             from djust.websocket import LiveViewConsumer
 
-            comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
+            comm = with_live_session(WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/"))
             connected, _ = await comm.connect()
             assert connected
             frames = [await comm.receive_json_from()]
@@ -327,24 +332,16 @@ class TestWizardStep:
     def _context(self):
         from djust.wizard import WizardMixin
 
-        class Stub:
-            exposure_policy = "legacy"
+        class W(WizardMixin, LiveView):
+            exposure_policy = "explicit"
+            template = "<div dj-root>{{ form_data.nick }}</div>"
+            wizard_steps = [{"name": "s", "form_class": WizardStepForm, "title": "S"}]
 
-            def get_context_data(self, **kwargs):
-                return dict(kwargs)
-
-        cls = type(
-            "W",
-            (WizardMixin, Stub),
-            {"wizard_steps": [{"name": "s", "form_class": WizardStepForm, "title": "S"}]},
-        )
-        view = cls()
-        view.wizard_step_index = 0
-        view.wizard_step_data = {}
-        view.wizard_step_errors = {}
-        view.wizard_completed_steps = []
-        view._pin_callable_initials()
-        return view, view.get_context_data()
+        client = LiveViewTestClient(W)
+        client.mount()
+        client.render()
+        view = client.view_instance
+        return view, rendered_state(view)
 
     def test_a_password_widget_initial_is_in_neither_form_data_nor_field_html(self):
         view, ctx = self._context()
@@ -369,7 +366,7 @@ class TestAdminFormView:
                 return form_class
 
         class View(AdminFormMixin, LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             _model = User
             _model_admin = Admin()
 
@@ -385,7 +382,7 @@ class TestAdminFormView:
         assert view.form_data["password"] == ""
         assert view.form_data["email"] == "alice@example.org"
         assert view.get_field_value("password") == ""
-        assert json.dumps(view.get_state(), default=str).count(STORED) == 0
+        assert json.dumps(view.form_data, default=str).count(STORED) == 0
         assert json.dumps(view.get_debug_info(), default=str).count(STORED) == 0
         assert str(view.as_live()).count(STORED) == 0
 
@@ -432,7 +429,7 @@ class TestOtherWithheldShapes:
             name = forms.CharField(initial="n")
 
         class V(FormMixin, LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             form_class = Plain
             template = "<div dj-root></div>"
 
@@ -450,7 +447,7 @@ class TestOtherWithheldShapes:
             pw = forms.CharField(widget=forms.PasswordInput(render_value=True), initial="hunter2")
 
         class V(FormMixin, LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             form_class = Plain
             template = "<div dj-root></div>"
 
@@ -458,7 +455,10 @@ class TestOtherWithheldShapes:
         client.mount()
         view = client.view_instance
         assert view.form_data == {"pw": ""}
-        assert json.dumps(view.get_state(), default=str).count("hunter2") == 0
+        client.render()
+        assert "form_data" in rendered_state(view)
+        handed = json.dumps(rendered_state(view), default=str)
+        assert handed.count("hunter2") == 0
         assert view.as_live().count("hunter2") == 0
 
     def test_the_stock_userchangeform_hash_field_is_withheld(self):
@@ -593,7 +593,10 @@ class TestAnEditFormKeepsAWithheldColumnWhenTheSubmissionIsBlank:
         )  # a required untouched withheld field is not invalid
         assert User.objects.get(pk=user.pk).username == "alice2"
         assert column(user) == STORED
-        assert json.dumps(view.get_state(), default=str).count(STORED) == 0
+        client.render()
+        handed = json.dumps(rendered_state(view), default=str)
+        assert handed.count(STORED) == 0
+        assert handed.count("alice2") >= 1  # the state really is what the template is handed
 
     @pytest.mark.parametrize("form_class", [PwWidgetForm, PwWidgetRequiredForm, PwRenderValueForm])
     def test_a_typed_value_still_writes(self, form_class):
@@ -720,7 +723,10 @@ class TestRestoredEarlierStateIsCleaned:
         restore_public_state(view, self.prefix_state(view))
         client.send_event("validate_field", field="username", value="alice9")
         assert_not_carried(view, client)
-        assert json.dumps(view.get_state(), default=str).count(STORED) == 0
+        client.render()
+        handed = json.dumps(rendered_state(view), default=str)
+        assert handed.count(STORED) == 0
+        assert handed.count("alice9") >= 1
 
     def test_the_admin_view_scrubs_it_too(self):
         from djust._state_restore import restore_public_state
@@ -728,13 +734,15 @@ class TestRestoredEarlierStateIsCleaned:
         view = TestAdminFormView()._view(make_user())
         restore_public_state(view, {"form_data": dict(view.form_data, password=STORED)})
         assert view.form_data["password"] == ""
-        assert json.dumps(view.get_state(), default=str).count(STORED) == 0
+        held = json.dumps(view.form_data, default=str)
+        assert held.count(STORED) == 0
+        assert held.count("alice@example.org") >= 1
 
     def test_a_view_whose_form_class_cannot_be_resolved_loses_only_keys_named_like_one(self):
         from djust._state_restore import restore_public_state
 
         class V(FormMixin, LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div dj-root></div>"
 
             def get_form_class(self):
@@ -1277,7 +1285,7 @@ class TestAFormRebuiltOverARowThatIsNotThere:
                 return EditForm
 
         class Add(AdminFormMixin, LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             _model = User
             _model_admin = Admin()
 
@@ -1612,7 +1620,7 @@ class TestThePinnedClassLivesOnTheClassAndIsCollectable:
                 return form_class
 
         class View(AdminFormMixin, LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             _model = User
             _model_admin = Admin()
 
@@ -1757,7 +1765,7 @@ def _messages(view):
 def _view_for_errors(form_class, **extra):
     attrs = {"form_class": form_class, "template": "<div dj-root></div>"}
     attrs.update(extra)
-    return type("ErrorsView", (FormMixin, LiveView), {"exposure_policy": "legacy", **attrs})
+    return type("ErrorsView", (FormMixin, LiveView), {"exposure_policy": "explicit", **attrs})
 
 
 class TestOrdinaryMessagesAreKept:

@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from djust import LiveView, event_handler, state
 from djust.push import push_to_view, apush_to_view
 
 
@@ -93,31 +94,53 @@ class TestPushToView:
 # ---------------------------------------------------------------------------
 
 
+class PushTarget(LiveView):
+    """The view a server push is applied to."""
+
+    exposure_policy = "explicit"
+    template = "<div dj-root>{{ count }} {{ label }} {{ x }}</div>"
+    count = state(0)
+    label = state("")
+    x = state(0)
+
+    @event_handler()
+    def on_msg(self, text: str):
+        self.log.append(text)
+
+    def handle_tick(self):
+        pass
+
+
+@pytest.fixture(autouse=True)
+def _allow_this_module(settings):
+    """The consumer mounts this module's view by dotted path."""
+    settings.LIVEVIEW_ALLOWED_MODULES = [__name__]
+
+
+@pytest.mark.django_db(transaction=True)
 class TestServerPushHandler:
     """Test LiveViewConsumer.server_push channel handler."""
 
-    def _make_consumer(self):
-        """Create a minimal mock consumer with the server_push method."""
+    async def _make_consumer(self):
+        """A consumer that really mounted ``PushTarget``, with its render and sends pinned."""
+        from djust.tests._live_session import amount_on_consumer
         from djust.websocket import LiveViewConsumer
 
         consumer = LiveViewConsumer()
-        consumer.view_instance = MagicMock()
-        # A real LiveView declares its policy; a Mock's auto-attribute would
-        # read as an invalid policy and fail closed (ADR-038).
-        consumer.view_instance.exposure_policy = "legacy"
-        consumer.view_instance._skip_render = False
-        consumer.view_instance._sync_state_to_rust = MagicMock()
-        consumer.view_instance.render_with_diff = MagicMock(
-            return_value=("<div>ok</div>", '[{"op":"replace"}]', 2)
-        )
         consumer.use_binary = False
         consumer.send = AsyncMock()
+        view = await amount_on_consumer(consumer, f"{__name__}.PushTarget")
+        # The mount advanced the wire version and armed recovery; start from none.
+        consumer._last_sent_version = 0
+        consumer._recovery_html = None
+        consumer._recovery_version = 0
+        view.render_with_diff = MagicMock(return_value=("<div>ok</div>", '[{"op":"replace"}]', 2))
         consumer._send_update = AsyncMock()
         return consumer
 
     @pytest.mark.asyncio
     async def test_applies_state(self):
-        consumer = self._make_consumer()
+        consumer = await self._make_consumer()
         event = {"state": {"count": 10, "label": "hi"}, "handler": None, "payload": None}
 
         await consumer.server_push(event)
@@ -128,7 +151,7 @@ class TestServerPushHandler:
 
     @pytest.mark.asyncio
     async def test_calls_handle_prefixed_handler(self):
-        consumer = self._make_consumer()
+        consumer = await self._make_consumer()
         consumer.view_instance.handle_msg = MagicMock()
         event = {"state": None, "handler": "handle_msg", "payload": {"text": "yo"}}
 
@@ -138,18 +161,10 @@ class TestServerPushHandler:
 
     @pytest.mark.asyncio
     async def test_calls_event_handler_decorated(self):
-        from djust.decorators import event_handler
 
-        consumer = self._make_consumer()
+        consumer = await self._make_consumer()
         call_log = []
-
-        # A selfless function set on the instance: strict treats its first parameter as
-        # ``self``, so it stays on the legacy binding (#4189).
-        @event_handler(parameter_policy="legacy")
-        def on_msg(text):
-            call_log.append(text)
-
-        consumer.view_instance.on_msg = on_msg
+        consumer.view_instance.log = call_log
         event = {"state": None, "handler": "on_msg", "payload": {"text": "yo"}}
 
         await consumer.server_push(event)
@@ -159,8 +174,8 @@ class TestServerPushHandler:
 
     @pytest.mark.asyncio
     async def test_blocks_arbitrary_handler(self):
-        consumer = self._make_consumer()
-        # Use a plain function (no _djust_decorators) to avoid MagicMock auto-attr
+        consumer = await self._make_consumer()
+        # A plain function (no _djust_decorators)
         call_log = []
 
         def dangerous_method():
@@ -178,7 +193,7 @@ class TestServerPushHandler:
 
     @pytest.mark.asyncio
     async def test_no_view_instance(self):
-        consumer = self._make_consumer()
+        consumer = await self._make_consumer()
         consumer.view_instance = None
 
         # Should not raise
@@ -196,7 +211,7 @@ class TestServerPushHandler:
         stayed None, request_html returned `recoverable=false`, and the
         client force-reloaded the page.
         """
-        consumer = self._make_consumer()
+        consumer = await self._make_consumer()
         consumer.view_instance.render_with_diff = MagicMock(
             return_value=("<div>rendered-after-push</div>", '[{"op":"replace"}]', 42)
         )
@@ -212,7 +227,7 @@ class TestServerPushHandler:
     async def test_recovery_html_refreshed_across_multiple_pushes(self):
         """Consecutive pushes must each refresh _recovery_html so a stale
         render from an earlier broadcast isn't served on a later recovery."""
-        consumer = self._make_consumer()
+        consumer = await self._make_consumer()
         # #1788: NON-sequential Rust versions (10, 20, 30) prove the recovery
         # version tracks the CONSUMER counter (1, 2, 3 across three pushes).
         consumer.view_instance.render_with_diff = MagicMock(
@@ -233,12 +248,12 @@ class TestServerPushHandler:
     @pytest.mark.asyncio
     async def test_full_html_fallback_refreshes_recovery_html(self):
         """None means baseline loss, not a no-op (which returns an empty list)."""
-        consumer = self._make_consumer()
+        consumer = await self._make_consumer()
         consumer._recovery_html = "<div>previously-good</div>"
         consumer._recovery_version = 7
         consumer._last_sent_version = 7
-        consumer.view_instance._strip_comments_and_whitespace.side_effect = lambda html: html
-        consumer.view_instance._extract_liveview_content.side_effect = lambda html: html
+        consumer.view_instance._strip_comments_and_whitespace = lambda html: html
+        consumer.view_instance._extract_liveview_content = lambda html: html
 
         # The differ cannot produce patches without its previous baseline.
         consumer.view_instance.render_with_diff = MagicMock(
@@ -249,8 +264,13 @@ class TestServerPushHandler:
 
         assert consumer._recovery_html == "<div>fresh</div>"
         assert consumer._recovery_version == 8
-        consumer._send_update.assert_awaited_once_with(
-            html="<div>fresh</div>", version=8, broadcast=True, source="broadcast"
+        consumer._send_update.assert_awaited_once()
+        sent = consumer._send_update.await_args.kwargs
+        assert (sent["html"], sent["version"], sent["broadcast"], sent["source"]) == (
+            "<div>fresh</div>",
+            8,
+            True,
+            "broadcast",
         )
 
 
@@ -312,19 +332,18 @@ class TestTick:
     """Test the _run_tick loop."""
 
     @pytest.mark.asyncio
+    @pytest.mark.django_db(transaction=True)
     async def test_tick_calls_handle_tick(self):
+        from djust.tests._live_session import amount_on_consumer
         from djust.websocket import LiveViewConsumer
 
         consumer = LiveViewConsumer()
-        consumer.view_instance = MagicMock()
-        # A real LiveView declares its policy; a Mock's auto-attribute would
-        # read as an invalid policy and fail closed (ADR-038).
-        consumer.view_instance.exposure_policy = "legacy"
-        consumer.view_instance.handle_tick = MagicMock()
-        consumer.view_instance._sync_state_to_rust = MagicMock()
-        consumer.view_instance.render_with_diff = MagicMock(return_value=("<div/>", "[]", 1))
-        consumer._send_update = AsyncMock()
         consumer.use_binary = False
+        consumer.send = AsyncMock()
+        view = await amount_on_consumer(consumer, f"{__name__}.PushTarget")
+        view.handle_tick = MagicMock()
+        view.render_with_diff = MagicMock(return_value=("<div/>", "[]", 1))
+        consumer._send_update = AsyncMock()
 
         # Run tick once then cancel
         call_count = 0
@@ -340,4 +359,4 @@ class TestTick:
         with patch("asyncio.sleep", side_effect=fake_sleep):
             await consumer._run_tick(100)
 
-        consumer.view_instance.handle_tick.assert_called_once()
+        view.handle_tick.assert_called_once()

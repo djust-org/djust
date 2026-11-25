@@ -16,7 +16,8 @@ from django.utils.html import conditional_escape
 from django.template.base import TextNode
 from django.test import override_settings
 
-from djust import LiveView
+from djust import LiveView, state
+from djust.testing import live_session
 from payload_sweep_3774 import PAYLOAD, URL_PAYLOAD
 
 
@@ -186,8 +187,9 @@ def model_table(mode):
 class Child(LiveView):
     """A non-sticky child view for ``{% live_render %}`` (resolved by dotted path)."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<button dj-click='go'>{{ v }}</button>"
+    v = state("x")
 
     def mount(self, request, **kwargs):
         self.v = kwargs.get("v", "x")
@@ -199,11 +201,13 @@ class StickyChild(Child):
 
 
 class Parent(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div></div>"
 
 
 def live_render(mode):
+    from django.contrib.auth.models import AnonymousUser
+    from django.contrib.sessions.backends.cache import SessionStore
     from django.http import HttpRequest
 
     from djust.templatetags.live_tags import live_render as tag
@@ -226,11 +230,16 @@ def live_render(mode):
         {"lazy": {"placeholder": PAYLOAD}},
     ):
         request = HttpRequest()
+        # An explicit child is reused for a saved session and a user; the cache store needs no database.
+        request.session = live_session(store=SessionStore)
+        request.user = AnonymousUser()
         request.method = "GET"
+        request.path = "/page/"
         request.csp_nonce = PAYLOAD
         parent = Parent()
         parent.request = request
         context = Context({"view": parent, "request": request})
+        kwargs = dict(kwargs)
         path = "payload_drivers_3774." + ("StickyChild" if kwargs.get("sticky") else "Child")
         out.append(tag(context, path, v=PAYLOAD, view_id=PAYLOAD, **kwargs))
     return out

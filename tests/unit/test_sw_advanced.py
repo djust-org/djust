@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Tuple
 import pytest
 
 from djust.live_view import LiveView
+from djust.testing import with_live_session
 
 
 # ---------------------------------------------------------------------------
@@ -55,7 +56,7 @@ def _parse(html: str) -> _AttrCollector:
 
 
 class _SimpleCounter(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><span>count={{ count }}</span></div>"
 
     def mount(self, request, **kwargs):
@@ -68,7 +69,7 @@ class _SimpleCounter(LiveView):
 class _SnapshotCounter(LiveView):
     """A legacy counter with the default ``_should_restore_snapshot``."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><span>count={{ count }}</span></div>"
 
     def mount(self, request, **kwargs):
@@ -81,7 +82,7 @@ class _SnapshotCounter(LiveView):
 class _SnapshotRejecting(LiveView):
     """Rejects every client snapshot via a _should_restore_snapshot override."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><span>count={{ count }}</span></div>"
 
     def mount(self, request, **kwargs):
@@ -98,7 +99,7 @@ class _SnapshotRejecting(LiveView):
 class _PushEventOnMount(LiveView):
     """View that calls push_event() during mount() — exercises #1295."""
 
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root><span>Hello</span></div>"
 
     def mount(self, request, **kwargs):
@@ -167,7 +168,8 @@ def _make_fake_consumer():
             self._db_notify_channels = set()
             self.sent_frames: List[Dict[str, Any]] = []
             self.session_id = "test-session"
-            self.scope = {"path": "/", "query_string": b"", "session": None}
+            # An explicit mount binds to a saved session (and a user), as a socket's is.
+            self.scope = with_live_session({"path": "/", "query_string": b"", "headers": []})
             self.channel_name = "test-channel"
             # Wire-version counter attrs the runtime mount path reads via the
             # next_mount_version hook (#1919 THE MOUNT FLIP: handle_mount is now a
@@ -246,6 +248,7 @@ def _allow_test_module(settings):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.django_db(transaction=True)  # the mount session is saved, then read on a worker thread
 @pytest.mark.usefixtures("_allow_test_module")
 class TestMountBatch:
     def test_mount_batch_emitted_for_multiple_views(self):
@@ -516,6 +519,7 @@ class TestConfigAliases:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.django_db(transaction=True)  # the mount session is saved, then read on a worker thread
 @pytest.mark.usefixtures("_allow_test_module")
 class TestMountBatchNavigatePassthrough:
     """Fix #4 — redirect frames from on_mount hooks must propagate."""

@@ -45,7 +45,7 @@ def test_the_documented_order_tracks_presence(mixin):
     src = textwrap.dedent(
         """
         class DocumentView(Mixin, LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             presence_key = "document:{doc_id}"
             template = "<div></div>"
         """

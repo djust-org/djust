@@ -268,31 +268,41 @@ def test_init_comment_no_longer_cites_the_fixed_admin_bug_as_a_blocker():
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("enabled, jit_called", [(True, True), (False, False)])
-def test_jit_serialization_setting_is_honoured(enabled, jit_called):
+def test_jit_serialization_setting_is_honoured(enabled, jit_called, monkeypatch):
     from django.contrib.auth.models import User
 
     from djust.config import config
     from djust.live_view import LiveView
+    from djust.testing import LiveViewTestClient
 
     class ModelView(LiveView):
-        exposure_policy = "legacy"
-        template = "<div>{{ profile.username }}</div>"
+        exposure_policy = "explicit"
+        template = "<div dj-root>{% for u in users %}{{ u.username }}:{{ u.groups.all.count }},{% endfor %}</div>"
 
-    view = ModelView()
-    view.profile = User(username="alice", pk=1)
+        def get_context_data(self, **kwargs):
+            ctx = super().get_context_data(**kwargs)
+            ctx["users"] = User.objects.filter(username="alice")
+            return ctx
+
+    User.objects.create(username="alice")
+    calls = []
+    real = ModelView._jit_serialize_context
+
+    def counting(self, *args, **kwargs):
+        calls.append(1)
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(ModelView, "_jit_serialize_context", counting)
     old = config.get("jit_serialization")
     config.set("jit_serialization", enabled)
     try:
-        with (
-            patch.object(view, "_get_template_content", return_value=view.template) as gtc,
-        ):
-            ctx = view.get_context_data()
+        client = LiveViewTestClient(ModelView)
+        client.mount()
+        html = client.render()
     finally:
         config.set("jit_serialization", old)
-    assert gtc.called is jit_called
-    assert ctx["profile"]["username"] == "alice"
-    if not enabled:
-        assert view._jit_serialized_keys == set()
+    assert bool(calls) is jit_called
+    assert "alice:0," in html
 
 
 # --- #3006 ----------------------------------------------------------------------

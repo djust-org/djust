@@ -67,14 +67,12 @@ class TestTheKeptRowsAreOnlyWhatTheSidecarCanUse3867:
         thing = _Thing()
 
         class _V(LiveView):
-            exposure_policy = "legacy"
-
-            def mount(self, request, **kwargs):
-                self.thing = thing
+            exposure_policy = "explicit"
 
             def get_context_data(self, **kwargs):
                 ctx = super().get_context_data(**kwargs)
-                self.__dict__["_all_method_rows"]["thing"] = _KEPT_ROWS
+                ctx["thing"] = thing
+                self.__dict__.setdefault("_all_method_rows", {})["thing"] = _KEPT_ROWS
                 return ctx
 
         _V.template = "<div dj-root>{{ thing }}</div>"
@@ -89,14 +87,12 @@ class TestTheKeptRowsAreOnlyWhatTheSidecarCanUse3867:
         read. Rows kept under any other name (``ghost``) are not handed to the engine."""
 
         class _V(LiveView):
-            exposure_policy = "legacy"
-
-            def mount(self, request, **kwargs):
-                self.users = _users()
+            exposure_policy = "explicit"
 
             def get_context_data(self, **kwargs):
                 ctx = super().get_context_data(**kwargs)
-                self.__dict__["_all_method_rows"]["ghost"] = _GHOST_ROWS
+                ctx["users"] = _users()
+                self.__dict__.setdefault("_all_method_rows", {})["ghost"] = _GHOST_ROWS
                 return ctx
 
         _V.template = f"<div dj-root>{MIXED['count-then-loop']}</div>"
@@ -114,10 +110,12 @@ class TestTheKeptRowsAreOnlyWhatTheSidecarCanUse3867:
 
         def kept(source: str, attr: str, value) -> dict:
             class _V(LiveView):
-                exposure_policy = "legacy"
+                exposure_policy = "explicit"
 
-                def mount(self, request, **kwargs):
-                    setattr(self, attr, value())
+                def get_context_data(self, **kwargs):
+                    ctx = super().get_context_data(**kwargs)
+                    ctx[attr] = value()
+                    return ctx
 
             _V.template = f"<div dj-root>{source}</div>"
             client = LiveViewTestClient(_V)

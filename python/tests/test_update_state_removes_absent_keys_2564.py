@@ -40,7 +40,7 @@ pytest.importorskip("django")
 from django.utils.safestring import mark_safe  # noqa: E402
 
 from djust.decorators import event_handler
-from djust import _rust  # noqa: E402
+from djust import _rust, state  # noqa: E402
 from djust.live_view import LiveView  # noqa: E402
 from djust.serialization import normalize_django_value  # noqa: E402
 from djust.testing import LiveViewTestClient  # noqa: E402
@@ -73,21 +73,21 @@ SHAPES = [
 
 def _make_delete_view(make_value: Any, source: str) -> type:
     class _V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
         def mount(self, request, **kwargs):
-            self.k = make_value()
+            self._k = make_value()
 
         def get_context_data(self, **kwargs):
             ctx = super().get_context_data(**kwargs)
             ctx.pop("k", None)
-            if hasattr(self, "k"):
-                ctx["k"] = self.k
+            if hasattr(self, "_k"):
+                ctx["k"] = self._k
             return ctx
 
         @event_handler
         def forget(self):
-            del self.k
+            del self._k
 
     _V.template = f"<div dj-root>{source}</div>"
     return _V
@@ -111,25 +111,25 @@ class TestDeleteThenRenderOnTheLiveViewEntry2564:
         """Removal is not a tombstone: re-adding the key re-renders it."""
 
         class _V(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
 
             def mount(self, request, **kwargs):
-                self.k = SECRET
+                self._k = SECRET
 
             def get_context_data(self, **kwargs):
                 ctx = super().get_context_data(**kwargs)
                 ctx.pop("k", None)
-                if hasattr(self, "k"):
-                    ctx["k"] = self.k
+                if hasattr(self, "_k"):
+                    ctx["k"] = self._k
                 return ctx
 
             @event_handler
             def forget(self):
-                del self.k
+                del self._k
 
             @event_handler
             def restore(self):
-                self.k = "SECRET-B"
+                self._k = "SECRET-B"
 
         _V.template = "<div dj-root>{{ k }}</div>"
         client = LiveViewTestClient(_V)
@@ -146,11 +146,10 @@ class TestDeleteThenRenderOnTheLiveViewEntry2564:
 # ---------------------------------------------------------------------------
 def _make_gated_view(source: str) -> type:
     class _V(LiveView):
-        exposure_policy = "legacy"
+        exposure_policy = "explicit"
 
-        def mount(self, request, **kwargs):
-            self.show = True
-            self.n = 0
+        show = state(True)
+        n = state(0)
 
         def get_context_data(self, **kwargs):
             ctx = super().get_context_data(**kwargs)
@@ -226,7 +225,7 @@ class TestRestoreThenDeleteThenRender2564:
         clone = _rust.RustLiveView.deserialize_msgpack(view._rust_view.serialize_msgpack())
         view._rust_view = clone
         view._force_full_html = True
-        del view.k
+        del view._k
         out = _root(client.render())
         assert SECRET not in out, f"the restored clone kept the deleted key: {out!r}"
         assert out == ""
@@ -295,12 +294,11 @@ class TestRetainStateKeys2564:
 class TestFrameworkKeysAreRetained2564:
     def test_static_assigns_and_processor_keys_survive_a_second_render(self) -> None:
         class _V(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             static_assigns = ["title"]
 
-            def mount(self, request, **kwargs):
-                self.title = "Static"
-                self.n = 0
+            title = state("Static")
+            n = state(0)
 
             @event_handler
             def bump(self):

@@ -109,7 +109,8 @@ class TestPerViewBudget:
 
     def test_zero_budget_means_no_queries(self):
         no_queries = _with_budget(
-            type("Quiet", (LiveView,), {"exposure_policy": "legacy", "template": "<div>q</div>"}), 0
+            type("Quiet", (LiveView,), {"exposure_policy": "explicit", "template": "<div>q</div>"}),
+            0,
         )
         _run([no_queries], max_queries=100)
         _fails([_with_budget(FewMountQueries, 0)], max_queries=100)
@@ -213,18 +214,20 @@ class TestAttribute:
         assert LiveView.query_budget is None
         assert FewMountQueries.query_budget is None
 
-    # Stays legacy (split from the explicit migration): it asserts on the legacy get_state() projection (deletion step 7).
     def test_a_query_budget_assigned_in_mount_is_not_reactive_state(self):
         """``self.query_budget = n`` in mount() is config, like ``self.tick_interval``."""
+        from djust import state
+        from djust.testing import persisted_state
 
         class Budgeted(LiveView):
-            exposure_policy = "legacy"
+            exposure_policy = "explicit"
             template = "<div dj-root>{{ count }}</div>"
+            count = state(1, client=True)
 
             def mount(self, request, **kwargs):
-                self.count = 1
                 self.query_budget = 4
 
         view = Budgeted()
         view.mount(None)
         assert view.get_state() == {"count": 1}
+        assert "query_budget" not in persisted_state(view).names

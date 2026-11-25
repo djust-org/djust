@@ -73,7 +73,7 @@ SYNCED = "[class-level][in-dict]"
 
 
 class _RoundTripView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div dj-root dj-id="0">[{{ obj.cls_attr }}][{{ obj.inst_attr }}]</div>'
 
     def mount(self, request, **kwargs):

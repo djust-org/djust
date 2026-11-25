@@ -41,21 +41,19 @@ from .views import Page
 urlpatterns = [path("", Page.as_view())]
 """,
     "lazyfixture/views.py": """
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 class Child(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<div><span class="count">{{ count }}</span><button dj-click="inc">Increment</button></div>'
-    def mount(self, request, **kwargs):
-        self.count = 0
+    count = state(0, client=True)
     @event_handler
     def inc(self, **kwargs):
         self.count += 1
 class Page(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = '<!DOCTYPE html><html><head></head><body><main dj-root><div id="one" dj-view="lazyfixture.views.Child" dj-lazy="click">Load first</div><div id="two" class="{{ extra }}" dj-view="lazyfixture.views.Child" dj-lazy="click">Load second</div></main></body></html>'
-    def mount(self, request, **kwargs):
-        self.extra = "unrelated-dynamic-class"
+    extra = state("unrelated-dynamic-class")
 """,
     "lazyfixture/asgi.py": """
 import os

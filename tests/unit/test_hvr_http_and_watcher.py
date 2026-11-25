@@ -38,7 +38,7 @@ from djust import LiveView
 
 
 class PageView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = "<div dj-root>{{ label }}</div>"
 
     def get_context_data(self, **kwargs):
@@ -197,7 +197,7 @@ from djust import LiveView
 
 
 class TemplatePageView(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template_name = "hvr_tpl_page.html"
 """
 

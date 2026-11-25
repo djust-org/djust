@@ -152,23 +152,6 @@ class SwitchedOffView(_Probed, LiveView):
         self._private_attr += 1
 
 
-class LegacyCounterView(_Probed, LiveView):
-    """A view still on the 1.x policy (``exposure_policy = "legacy"``)."""
-
-    exposure_policy = "legacy"
-    template = "<div dj-root>" + PROBE + "</div>"
-
-    def mount(self, request, **kwargs):
-        self.count = 0
-
-    def snapshot(self):
-        return {"count": self.count}
-
-    @event_handler()
-    def increment(self, **kwargs):
-        self.count += 1
-
-
 class ItemView(_Probed, LiveView):
     """URL kwargs, the query string through ``handle_params``, and a persisted
     field the URL does not carry."""

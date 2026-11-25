@@ -17,6 +17,9 @@ from django.core.exceptions import PermissionDenied
 from django.template import Context, Template, TemplateSyntaxError
 
 from djust.live_view import LiveView
+from djust.testing import with_live_session
+
+pytestmark = pytest.mark.django_db  # the sessions are saved
 
 _MOD = "tests.unit.test_sticky_child_reuse_authorization"
 
@@ -28,21 +31,22 @@ class _Doc:
     body = "DOC-BODY-42"
 
 
-class _FakeUser:
-    is_authenticated = True
+def _user(name="sticky-user", perms=()):
+    """A saved user holding ``perms`` (``app_label.codename``), fresh from the database."""
+    from django.contrib.auth import get_user_model
+    from django.contrib.auth.models import Permission
 
-    def __init__(self, perms: set[str] | None = None):
-        self._perms = set(perms or ())
-
-    def has_perm(self, perm):
-        return perm in self._perms
-
-    def has_perms(self, perms):
-        return all(p in self._perms for p in perms)
+    user = get_user_model().objects.create_user(name, password="pw")
+    for perm in perms:
+        app_label, codename = perm.split(".")
+        user.user_permissions.add(
+            Permission.objects.get(content_type__app_label=app_label, codename=codename)
+        )
+    return get_user_model().objects.get(pk=user.pk)
 
 
 class _ObjectScopedSticky(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     sticky = True
     sticky_id = "doc-panel"
     template = "<div><p>{{ body }}</p><span>{{ clicks }}</span></div>"
@@ -58,7 +62,7 @@ class _ObjectScopedSticky(LiveView):
         return _OBJECT_ALLOWED["value"]
 
     def get_context_data(self, **kwargs):
-        return {"body": _Doc.body, "clicks": self.clicks, "view": self}
+        return {"body": _Doc.body, "clicks": self.clicks}
 
     def _on_sticky_unmount(self):
         self.unmount_calls += 1
@@ -66,10 +70,10 @@ class _ObjectScopedSticky(LiveView):
 
 
 class _PermissionSticky(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     sticky = True
     sticky_id = "perm-panel"
-    permission_required = "auth.view_doc"
+    permission_required = "auth.view_user"
     template = "<div>perm panel</div>"
 
     def mount(self, request, **kwargs):
@@ -77,7 +81,7 @@ class _PermissionSticky(LiveView):
 
 
 class _LoginSticky(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     sticky = True
     sticky_id = "login-panel"
     login_required = True
@@ -88,7 +92,7 @@ class _LoginSticky(LiveView):
 
 
 class _ParentObject(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         "{% load live_tags %}<div dj-root>"
         '{% live_render "' + _MOD + '._ObjectScopedSticky" sticky=True %}'
@@ -100,7 +104,7 @@ class _ParentObject(LiveView):
 
 
 class _ParentPermission(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         "{% load live_tags %}<div dj-root>"
         '{% live_render "' + _MOD + '._PermissionSticky" sticky=True %}'
@@ -112,7 +116,7 @@ class _ParentPermission(LiveView):
 
 
 class _ParentLogin(LiveView):
-    exposure_policy = "legacy"
+    exposure_policy = "explicit"
     template = (
         "{% load live_tags %}<div dj-root>"
         '{% live_render "' + _MOD + '._LoginSticky" sticky=True %}'
@@ -131,8 +135,7 @@ def _reset_object_toggle():
 
 
 def _make_parent(rf, parent_cls, user):
-    request = rf.get("/")
-    request.user = user
+    request = with_live_session(rf.get("/"), user)
     parent = parent_cls()
     parent.request = request
     parent.mount(request)
@@ -204,18 +207,20 @@ class TestReuseObjectPermission:
 
 class TestReuseViewLevelAuth:
     def test_reuse_after_permission_removed_raises_permission_denied(self, rf):
-        user = _FakeUser(perms={"auth.view_doc"})
+        user = _user(perms={"auth.view_user"})
         parent = _make_parent(rf, _ParentPermission, user)
         _render(parent)
         assert "perm-panel" in parent._child_views
 
-        user._perms.clear()
+        user.user_permissions.clear()
+        # A fresh read of the user: Django caches a user's permissions on the instance.
+        parent.request.user = type(user).objects.get(pk=user.pk)
         with pytest.raises(PermissionDenied):
             _render(parent)
         assert "perm-panel" not in parent._child_views
 
     def test_reuse_with_permission_retained_renders(self, rf):
-        user = _FakeUser(perms={"auth.view_doc"})
+        user = _user(perms={"auth.view_user"})
         parent = _make_parent(rf, _ParentPermission, user)
         _render(parent)
         child = parent._child_views["perm-panel"]
@@ -225,7 +230,7 @@ class TestReuseViewLevelAuth:
         assert parent._child_views["perm-panel"] is child
 
     def test_reuse_after_logout_refuses_embed(self, rf):
-        parent = _make_parent(rf, _ParentLogin, _FakeUser())
+        parent = _make_parent(rf, _ParentLogin, _user())
         _render(parent)
         assert "login-panel" in parent._child_views
 

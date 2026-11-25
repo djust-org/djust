@@ -30,8 +30,7 @@ Engine path: the Rust extractor (``crates/djust_templates/src/parser.rs``), the 
 row serializers (``serialize_queryset``, ``optimization/codegen.py``), the Python JIT
 (``mixins/jit.py``, ``template/rendering.py``) and the Rust ``dictsort``.
 
-The LiveView entry is the explicit default (#4264); ``liveview-legacy`` keeps the deprecated legacy
-exposure policy covered (through the shared legacy render helper).
+The LiveView entry is the explicit default (#4264).
 
 Refs #3911, #3910, #3912, #3918, #3919, #3920, #3862, #4264.
 """
@@ -52,7 +51,6 @@ from djust import _rust
 from python.tests.test_queryset_all_traversal_3777 import (  # noqa: F401
     _backend_render,
     _django_render,
-    _legacy_liveview_render,
     _liveview_render,
     _raw_render,
 )
@@ -100,7 +98,6 @@ def _pk_order_is_not_any_sort_order() -> None:
 ENTRIES = [
     pytest.param(_backend_render, id="backend"),
     pytest.param(_liveview_render, id="liveview"),
-    pytest.param(_legacy_liveview_render, id="liveview-legacy"),
     pytest.param(_raw_render, id="render_template"),
 ]
 
@@ -640,30 +637,6 @@ class TestAVariableKeyCarriesOneColumn:
             got, want = _agrees(render, self.SOURCE, context)
             assert got == want, key
 
-    def test_the_expected_key_count_follows_the_resolved_sort_key(self, world, monkeypatch) -> None:
-        """The JIT's expected-key count decides whether a row the Rust serializer built short
-        (a path it could not read) is rebuilt through the Python codegen. The path set depends
-        on the resolved sort key, so the count does too: once cached per template alone, the
-        count from ``key="pk"`` (a field the template already reads) stood for ``key="email"``
-        too, one short, and a missing path there went unnoticed. It is computed from the paths
-        now (#4272 review).
-
-        Legacy entry: an explicit view JITs a variable key only when its value names a method
-        or is dotted (#4264), so a plain-column key never reaches the JIT there."""
-        from djust.mixins import jit
-
-        seen = []
-        real = jit.expected_row_keys
-        monkeypatch.setattr(
-            jit, "expected_row_keys", lambda paths: seen.append(real(paths)) or real(paths)
-        )
-        source = "{% for u in users|dictsort:key %}{{ u.pk }}:{{ u.is_authenticated }},{% endfor %}"
-        for key in ("pk", "email"):
-            context = {"users": _users("QuerySet"), "key": key}
-            got, want = _agrees(_legacy_liveview_render, source, context)
-            assert got == want, key
-        assert seen == [2, 3]
-
     @pytest.mark.parametrize("render", [_backend_render, _liveview_render])
     def test_a_floored_column_renders_empty_where_django_sorts(self, world, render) -> None:
         """The documented difference: the serialization floor keeps ``password`` off the
@@ -757,7 +730,6 @@ METHOD_KEY_CASES = [
 
 LIVEVIEW_ENTRIES = [
     pytest.param(_liveview_render, id="liveview"),
-    pytest.param(_legacy_liveview_render, id="liveview-legacy"),
 ]
 
 
@@ -806,22 +778,6 @@ class TestVariableKeyValueKinds4264:
         context = {"users": _users(shape), "key": "get_username"}
         got, want = _agrees(_liveview_render, source, context)
         assert got == want == ""
-
-    def test_the_legacy_policy_keeps_its_documented_property_key_difference(self, world) -> None:
-        """Legacy's JIT row carries a column only for a variable key (#3910), so a property
-        value renders the empty loop where Django sorts. A recorded difference, not a goal --
-        and since 2.0 only with the handle overlay switched off (``state_models_as_handles:
-        False``): by default the overlay hands the QuerySet's rows as floored handles
-        (#3936), which ``dictsort`` sorts by the property as Django does."""
-        from django.test import override_settings
-
-        source = "{% for u in users|dictsort:key %}{{ u.pk }},{% endfor %}"
-        context = {"users": _users("QuerySet"), "key": "is_authenticated"}
-        with override_settings(LIVEVIEW_CONFIG={"state_models_as_handles": False}):
-            got, want = _agrees(_legacy_liveview_render, source, context)
-        assert got == "" and want.count(",") == 3  # pks depend on the DB sequence
-        got, want = _agrees(_legacy_liveview_render, source, context)
-        assert got == want and want.count(",") == 3
 
 
 # ---------------------------------------------------------------------------------------------
