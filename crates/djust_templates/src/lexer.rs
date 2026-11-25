@@ -294,12 +294,26 @@ fn literal_region_end(source: &str, at: usize) -> Option<usize> {
     None
 }
 
-/// True for an all-uppercase spelling of a standard element (`DIV`, `BR`).
-/// `Button`-style PascalCase names are component tags even when a lowercase
-/// element of that name exists.
-fn is_uppercase_html_element(name: &str) -> bool {
-    !name.chars().any(|c| c.is_ascii_lowercase())
-        && STANDARD_ELEMENTS.contains(&name.to_ascii_lowercase().as_str())
+/// Void elements: `<Input />` is a valid way to write one in HTML.
+const VOID_ELEMENTS: &[&str] = &[
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source",
+    "track", "wbr",
+];
+
+/// Is `<Name ...>` the element HTML spells that way, rather than a component tag?
+///
+/// HTML reads element names in any case, so `<DIV>`, `<TextArea>` and `<tItLe>`
+/// are elements. What HTML does not have is a self-closing non-void element, so
+/// `<Button label="x" />` and `<Header />` are the JSX component shape, however
+/// the name is spelled. An all-uppercase name is always HTML (`<BR/>`). A name
+/// that is not a standard element at all (`<Widget>`) is a component tag.
+fn is_html_element_spelling(name: &str, self_closing: bool) -> bool {
+    let lower = name.to_ascii_lowercase();
+    if !STANDARD_ELEMENTS.contains(&lower.as_str()) {
+        return false;
+    }
+    let all_upper = !name.chars().any(|c| c.is_ascii_lowercase());
+    all_upper || !self_closing || VOID_ELEMENTS.contains(&lower.as_str())
 }
 
 /// Split tag content into arguments, respecting quoted strings.
@@ -465,8 +479,19 @@ pub fn tokenize_spanned(source: &str) -> Result<(Vec<Token>, Vec<Span>)> {
                             break;
                         }
                     }
+                    let self_closing = {
+                        let mut rest = look.clone();
+                        let mut last = None;
+                        while let Some(c) = rest.next() {
+                            if c == '>' {
+                                break;
+                            }
+                            last = Some(c);
+                        }
+                        last == Some('/')
+                    };
                     if matches!(look.peek(), Some(c) if c.is_whitespace() || c == '/' || c == '>')
-                        && !is_uppercase_html_element(&name)
+                        && !is_html_element_spelling(&name, self_closing)
                     {
                         flush_text!(tok_start);
                         chars = look;
@@ -801,6 +826,43 @@ mod tests {
     fn uppercase_after_lt_without_tag_shape_is_text() {
         let tokens = tokenize("a<B)").unwrap();
         assert_eq!(tokens, vec![Token::Text("a<B)".to_string())]);
+    }
+
+    /// HTML reads element names in any case, so a standard element spelled
+    /// `<TextArea>` or `<tItLe>` is an element. The JSX shape (a self-closing
+    /// non-void element) and a name HTML does not have stay refused (#4006).
+    #[test]
+    fn a_standard_element_in_any_case_is_html_but_the_component_shape_is_not() {
+        for source in [
+            "<TextArea>x</TextArea>",
+            "<tItLe>x</tItLe>",
+            "<DIV>x</DIV>",
+            "<Button>x</Button>",
+            "<BR/>",
+            "<Br />",
+            "<Input name=\"a\" />",
+            "<Img src=\"a\"/>",
+        ] {
+            let tokens = tokenize(source).unwrap();
+            assert!(
+                !tokens.iter().any(|t| matches!(t, Token::CapitalizedTag(_))),
+                "{source} is HTML"
+            );
+        }
+        for (source, name) in [
+            ("<Button label=\"x\" />", "Button"),
+            ("<Header />", "Header"),
+            ("<TextArea/>", "TextArea"),
+            ("<Widget>child</Widget>", "Widget"),
+            ("<Chart\n data=\"1\">", "Chart"),
+        ] {
+            let tokens = tokenize(source).unwrap();
+            assert_eq!(
+                tokens.first(),
+                Some(&Token::CapitalizedTag(name.to_string())),
+                "{source} is a component tag"
+            );
+        }
     }
 
     #[test]

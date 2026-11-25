@@ -118,7 +118,9 @@ async def test_last_strict_handler_removal_keeps_emitting_explicit_clear(source)
     for _ in range(2):
         await produce(consumer, source)
         assert consumer.send_json.call_args.args[0]["parameter_contracts"] is None
-        assert json.loads(zlib.decompress(consumer._recovery_contracts))["parameter_contracts"] is None
+        assert (
+            json.loads(zlib.decompress(consumer._recovery_contracts))["parameter_contracts"] is None
+        )
 
 
 @pytest.mark.asyncio

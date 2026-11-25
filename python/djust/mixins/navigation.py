@@ -95,7 +95,7 @@ class NavigationMixin:
         Example::
 
             @event_handler
-            def filter_results(self, category="all", **kwargs):
+            def filter_results(self, category: str = "all", **kwargs):
                 self.category = category
                 self.live_patch(params={"category": category, "page": 1})
         """
@@ -134,7 +134,7 @@ class NavigationMixin:
         Example::
 
             @event_handler
-            def go_to_detail(self, item_id, **kwargs):
+            def go_to_detail(self, item_id: Any, **kwargs):
                 self.live_redirect(f"/items/{item_id}/")
         """
         nav = {

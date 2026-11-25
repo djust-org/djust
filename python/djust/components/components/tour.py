@@ -33,7 +33,7 @@ class Tour(Component):
     as untrusted: ignore anything else and clamp the step::
 
         @event_handler()
-        def tour(self, value="", **kwargs):
+        def tour(self, value: str = "", **kwargs):
             if value == "next":
                 self.tour_step = min(self.tour_step + 1, len(self.steps) - 1)
             elif value == "prev":

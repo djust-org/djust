@@ -34,6 +34,31 @@ def test_capitalized_tag_is_a_template_error_under_the_native_engine(src):
     assert "dj-hook" in str(exc.value)
 
 
+@pytest.mark.parametrize(
+    "src,expected",
+    [
+        ("<TextArea>{{ v }}</TextArea>", "<TextArea>a</TextArea>"),
+        ("<DIV>{{ v }}</DIV>", "<DIV>a</DIV>"),
+        ("<Button>{{ v }}</Button>", "<Button>a</Button>"),
+        ("<BR/>", "<BR/>"),
+        ('<Input name="n" />', '<Input name="n" />'),
+    ],
+)
+def test_a_standard_element_in_any_case_is_still_html(src, expected):
+    from djust._rust import render_template
+
+    assert render_template(src, {"v": "a"}) == expected
+
+
+@pytest.mark.parametrize("src", ["<TextArea />", "<Header />", '<Button label="x"/>'])
+def test_a_self_closing_non_void_element_is_the_component_shape_in_any_case(src):
+    from djust._rust import render_template
+
+    with pytest.raises(Exception) as exc:
+        render_template(src, {})
+    assert "removed in djust 2.0" in str(exc.value)
+
+
 def test_button_tag_error_names_the_hook_replacement():
     from djust._rust import render_template
 

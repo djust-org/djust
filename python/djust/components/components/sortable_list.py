@@ -25,7 +25,7 @@ class SortableList(Component):
     missing or repeated id::
 
         @event_handler()
-        def reorder(self, order=None, **kwargs):
+        def reorder(self, order: Any = None, **kwargs):
             by_id = {str(i["id"]): i for i in self.items}
             if not isinstance(order, list) or sorted(map(str, order)) != sorted(by_id):
                 return

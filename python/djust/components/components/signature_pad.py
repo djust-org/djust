@@ -92,7 +92,7 @@ class SignaturePad(Component):
         from djust.components.signature import SignatureError, decode_signature_data_url
 
         @event_handler()
-        def save_signature(self, signature="", **kwargs):
+        def save_signature(self, signature: str = "", **kwargs):
             try:
                 image = decode_signature_data_url(signature)
             except SignatureError:
