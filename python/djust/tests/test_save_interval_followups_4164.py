@@ -61,8 +61,22 @@ class Counter(LiveView):
         self.count += 10
         self.push_event("go", {"url": "/thanks/"})
 
+    @event_handler()
+    def grow(self, **kwargs):
+        self.count += 1
+        self.blob = "x" * 4000
+
+    @event_handler(save=True)
+    def keep_and_note(self, **kwargs):
+        self.count += 1
+        self.request.session["order"] = "placed"
+
     def get_context_data(self, **kwargs):
         return {"count": self.count}
+
+
+class Small(Counter):
+    automatic_state_max_kb = 2
 
 
 urlpatterns = [_path(sf.PATH.strip("/") + "/", Counter.as_view())]
@@ -150,3 +164,99 @@ async def test_a_fallback_request_that_changes_the_state_still_takes_the_tab(run
         finally:
             await comm.disconnect()
     assert await _stored(key) == 2
+
+
+# ---------------------------------------------------------------------------
+# item 3: an over-limit turn's session write is ordered and bounded
+# ---------------------------------------------------------------------------
+
+
+def _order(key: str) -> Any:
+    from django.contrib.sessions.backends.db import SessionStore
+
+    return SessionStore(key).get("order")
+
+
+async def _over_limit_socket(runtimes) -> tuple:
+    key = await sync_to_async(sf.page_get)(Small)
+    comm, _ = await harness.mount_view(Small, key)
+    await harness.event(comm, "grow")  # deferred, over the limit
+    return key, comm, runtimes[-1]
+
+
+async def test_an_over_limit_turns_session_write_waits_for_the_save_still_running(runtimes):
+    """The write goes through the runtime's one save queue: while an earlier
+    save of this connection is still running it does not start, so it can
+    never land before an older write."""
+    import asyncio
+
+    from djust.tests._ws_frames import has_frame, receive_until
+
+    with _settings(DJUST_STATE_SAVE_INTERVAL=60):
+        key, comm, rt = await _over_limit_socket(runtimes)
+        try:
+            earlier: asyncio.Future = asyncio.get_running_loop().create_future()
+            real_note = rt._note_over_limit
+
+            async def note_then_start_another_save(*args, **kwargs):
+                # Another save of this connection starts after the refused one
+                # (as a flush or catch-up would) and is still running.
+                await real_note(*args, **kwargs)
+                rt._explicit_save_pending = earlier
+
+            rt._note_over_limit = note_then_start_another_save
+            await comm.send_json_to(
+                {"type": "event", "event": "keep_and_note", "params": {}, "ref": 71}
+            )
+            await asyncio.sleep(0.3)
+            assert await sync_to_async(_order)(key) is None  # still behind the earlier save
+            earlier.set_result(None)
+            frames = await receive_until(comm, has_frame(ref=71), what="the reply")
+            assert frames[-1]["type"] in ("patch", "html_update"), frames
+            assert await sync_to_async(_order)(key) == "placed"
+        finally:
+            await comm.disconnect()
+
+
+async def test_an_over_limit_turns_session_write_is_bounded_by_the_save_deadline(
+    runtimes, monkeypatch, caplog
+):
+    """A session write that outruns the deadline does not fail the turn: the
+    reply is served, a WARNING says the write is still running, and it lands
+    in order. (Over a socket the write holds the session's sync thread, so the
+    reply itself still waits for that thread; what the deadline bounds is the
+    turn's own wait on the save.)"""
+    import logging
+    import time
+
+    from django.test import override_settings
+
+    from djust.tests._ws_frames import has_frame, receive_until
+
+    real = runtime._save_session_writes
+
+    def slow(view):
+        time.sleep(0.6)
+        real(view)
+
+    monkeypatch.setattr(runtime, "_save_session_writes", slow)
+    with (
+        _settings(DJUST_STATE_SAVE_INTERVAL=60),
+        override_settings(DJUST_EXPLICIT_STATE_SAVE_TIMEOUT=0.2),
+    ):
+        key, comm, rt = await _over_limit_socket(runtimes)
+        try:
+            with caplog.at_level(logging.WARNING, logger="djust.runtime"):
+                await comm.send_json_to(
+                    {"type": "event", "event": "keep_and_note", "params": {}, "ref": 72}
+                )
+                frames = await receive_until(comm, has_frame(ref=72), what="the reply")
+            assert frames[-1]["type"] in ("patch", "html_update"), frames
+            assert "outran the save deadline" in caplog.text
+            pending = rt._explicit_save_pending
+            if pending is not None:
+                await pending
+            assert await sync_to_async(_order)(key) == "placed"
+            assert rt.state_unsaved
+        finally:
+            await comm.disconnect()

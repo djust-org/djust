@@ -6701,7 +6701,8 @@ class ViewRuntime(RuntimeTurnPort):
                 # change), so the page is told every time it cannot be made,
                 # and what the handler wrote to the session is still stored.
                 await self._note_over_limit(view, refused, interactive=True, every_time=True)
-                await sync_to_async(_save_session_writes)(view)
+                if not await self._save_session_writes_in_order(view, extra, released):
+                    return False
                 self._mark_state_dirty(view)
                 if children:
                     return await self._persist_explicit_children_after_event(
@@ -7036,6 +7037,56 @@ class ViewRuntime(RuntimeTurnPort):
             view.__dict__.pop("_djust_event_request", None)
         self._explicit_save_succeeded()
         self._state_saved(view)
+        return True
+
+    async def _save_session_writes_in_order(
+        self, view: Any, extra: Dict[str, Any], released: Optional[Callable[[], bool]]
+    ) -> bool:
+        """Store an over-limit turn's ``request.session`` writes (#4164 item 3).
+
+        Through :func:`_run_explicit_save`, like every other save of this
+        runtime: it waits for a save still running, so an older write cannot
+        land after it, and it is bounded by the turn's save deadline. Past the
+        deadline the write keeps running in order and the turn is served (its
+        state is the view's, as with any over-limit turn). False when the
+        session could not be written (the page gets the reload error) or the
+        work was released (#4211)."""
+        try:
+            await _run_explicit_save(
+                self,
+                _unless_released(lambda: _save_session_writes(view), released),
+                deadline=self._explicit_save_deadline(),
+            )
+        except _WorkReleased:
+            return False
+        except ExplicitSaveDeferred:
+            logger.warning(
+                "djust: the session writes of an over-limit turn outran the save deadline; "
+                "they are stored when the save lands"
+            )
+        except LateSaveDropped:
+            view._force_full_html = True
+            await self.transport.send_error(
+                "State unavailable. Please reload the page.", code="state_error", **extra
+            )
+            return False
+        except Exception as exc:  # noqa: BLE001 — storage errors can carry values
+            from ._exposure_diagnostics import log_failure_for
+
+            view._force_full_html = True
+            log_failure_for(
+                logger,
+                (view,),
+                exc,
+                "Session writes of an over-limit turn not stored: %s",
+                exc,
+                level="warning",
+            )
+            self._mark_state_dirty(view)  # the view keeps its values, as served or not
+            await self.transport.send_error(
+                "State unavailable. Please reload the page.", code="state_error", **extra
+            )
+            return False
         return True
 
     async def _note_over_limit(

@@ -696,9 +696,6 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     # A deferred turn's identity check (design: save frequency): the binding
     # read the save makes, without the save.
     ("runtime.py", "ViewRuntime._defer_explicit_turn", "check"): plumbing(_SESSION),
-    # Over the size limit with saves deferred, the session writes of a turn
-    # whose own state could not be saved (option A): a session write only.
-    ("runtime.py", "ViewRuntime.commit_explicit_turn", "_save_session_writes"): plumbing(_SESSION),
     # Background work that failed: its session writes, under the result's
     # authorization, without saving the view (#4162).
     (
