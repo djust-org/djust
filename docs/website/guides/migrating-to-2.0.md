@@ -284,13 +284,13 @@ it prints:
 ADR-038 exposure inventory (legacy destinations; values redacted)
 
 shop.views.CartView  [policy: legacy; reconnect: fresh mount]
-  coupon  str  instance  -> template_context, client_state, snapshot (conditional: session_state)
+  coupon  str  instance  -> template_context, client_state, snapshot
       suggest: coupon: str = state(...)  # not restored on a reconnect today, so no persistence grant is needed; a declared field renders in the template without get_context_data()
-  items  list  instance  -> template_context, client_state, snapshot (conditional: session_state)
+  items  list  instance  -> template_context, client_state, snapshot
       suggest: items: list = state(...)  # not restored on a reconnect today, so no persistence grant is needed; a declared field renders in the template without get_context_data()
-  page  int  instance  -> template_context, client_state, snapshot (conditional: session_state)
+  page  int  instance  -> template_context, client_state, snapshot
       suggest: page: int = state(...)  # not restored on a reconnect today, so no persistence grant is needed; a declared field renders in the template without get_context_data()
-  _audit_note  str  private  -> - (conditional: private_session)
+  _audit_note  str  private  -> -
       suggest: explicit mode never persists underscore attributes, and this view does not restore them on a reconnect today; leave it instance-only
 ```
 
@@ -1471,3 +1471,4 @@ stops it with the name of its replacement.
 
 <!-- generated-doc prose-sha256: 3010d0c189bc -->
 <!-- generated-doc prose-sha256: ebc0727383bb -->
+<!-- generated-doc prose-sha256: 7a168a61e24b -->

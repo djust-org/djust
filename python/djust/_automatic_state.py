@@ -2530,14 +2530,16 @@ SAVED_STATE_PREFIXES = (_KEY_PREFIX, "_djust_explicit_")
 
 
 def _is_lazy_child_key(key: Any) -> bool:
-    """A lazy legacy child's saved state (``_lazy_containers``):
-    ``liveview_<path>__lazy__<view id>``. It carries no expiry of its own."""
+    """A lazy child's saved state, ``liveview_<path>__lazy__<view id>``: written by
+    djust 1.3 / 2.0 pre-releases; nothing writes them now. It carries no expiry
+    of its own, so ``djust clear --all`` is what removes one."""
     return isinstance(key, str) and key.startswith("liveview_") and "__lazy__" in key
 
 
 def saved_state_keys(session: Any, *, lazy: bool = True) -> list:
     """The keys of one session that hold saved view state. ``lazy=False``
-    leaves out a lazy legacy child's entries."""
+    leaves out the lazy-child entries written by djust 1.3 / 2.0 pre-releases
+    (nothing writes them now)."""
     return sorted(
         key
         for key in session.keys()

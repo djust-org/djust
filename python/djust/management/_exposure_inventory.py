@@ -25,22 +25,14 @@ import inspect
 import textwrap
 from typing import Any, Iterable, Optional
 
-#: Destination names and what each means under the legacy policy on 2.0.
+#: Destination names and what each means.
 #:
-#: 2.0 removed the shared render cache (the Rust view kept in the state
-#: backend), the page's ``liveview_<path>`` session copy and its
-#: ``__private`` copy (#4087). A legacy view's state is written to the session
-#: only when it renders as a ``lazy=True`` child and an event reaches it over
-#: the page-POST fallback (``_lazy_containers.py``); whether a view is used that
-#: way is not visible from its class, so those two destinations are always
-#: reported as conditional.
+#: 2.0 removed the shared render cache, the page's ``liveview_<path>`` session
+#: copy and its ``__private`` copy (#4087), and the legacy ``lazy=True`` child's
+#: session entry (#4200): nothing a legacy view holds reaches the session.
 DESTINATIONS: dict[str, str] = {
     "template_context": "legacy get_context_data(): rendered into HTML and the Rust render state",
     "client_state": "get_state(): client/debug state and API assign diffs",
-    "session_state": "only as a lazy=True child on the page-POST fallback: session key "
-    "liveview_<path>__lazy__<id>, the context copy",
-    "private_session": "only as a lazy=True child on the page-POST fallback: the same "
-    "session entry's private part, _get_private_state()",
 }
 
 _PUBLIC_INSTANCE = ("template_context", "client_state")
@@ -289,28 +281,15 @@ def inventory_view(view_class: type) -> dict[str, Any]:
     for name, types in scan.mount_stored.items():
         stored.setdefault(name, set()).update(types)
 
-    # Declared state() fields: legacy reads them into context. As a lazy=True
-    # child on the page-POST fallback a PUBLIC field reaches the session's
-    # context copy, and its backing slot (_state_<name>) the private part only
-    # when its value holds a Django model (#2959, #1994). A ``_``-named field,
-    # or one in ``static_assigns``, never reaches the public context: its slot
-    # is a private attribute there.
-    static_assigns = attrs.get("static_assigns") or ()
-    try:
-        static_skip = set(static_assigns)
-    except TypeError:
-        static_skip = set()
+    # Declared state() fields: legacy reads them into context.
     for name, obj in attrs.items():
         if issubclass(type(obj), StateProperty):
-            slot_private = name.startswith("_") or name in static_skip
             add(
                 name,
                 kind="state",
                 type=scan.annotations.get(name) or _state_type(obj),
                 destinations=list(_RENDER_ONLY),
-                conditional=(
-                    ["private_session"] if slot_private else ["session_state", "private_session"]
-                ),
+                conditional=[],
                 storage_key=f"_state_{name}",
                 declared={"persist": obj.exposure.persist, "client": obj.exposure.client},
                 suggestion=_suggest(name, "state", None, obj.exposure != type(obj.exposure)()),
@@ -326,7 +305,7 @@ def inventory_view(view_class: type) -> dict[str, Any]:
                 kind="private",
                 type=type_name,
                 destinations=[],
-                conditional=["private_session"],
+                conditional=[],
                 suggestion=_suggest(name, "private", type_name, False),
             )
         else:
@@ -335,7 +314,7 @@ def inventory_view(view_class: type) -> dict[str, Any]:
                 kind="instance",
                 type=type_name,
                 destinations=list(_PUBLIC_INSTANCE),
-                conditional=["session_state"],
+                conditional=[],
                 suggestion=_suggest(name, "instance", type_name, False),
             )
 
@@ -354,7 +333,7 @@ def inventory_view(view_class: type) -> dict[str, Any]:
                 kind="property",
                 type=None,
                 destinations=list(_RENDER_ONLY),
-                conditional=["session_state"],
+                conditional=[],
                 suggestion=_suggest(name, "property", None, False),
             )
             continue
@@ -366,7 +345,7 @@ def inventory_view(view_class: type) -> dict[str, Any]:
             kind="class_value",
             type=type(obj).__name__,
             destinations=list(_RENDER_ONLY) if serializable else [],
-            conditional=["session_state"] if serializable else ["template_context"],
+            conditional=[] if serializable else ["template_context"],
             suggestion=_suggest(name, "class_value", None, False),
         )
 

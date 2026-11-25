@@ -5,7 +5,7 @@ PostProcessingMixin - Debug info and client script injection for LiveView.
 import json
 import logging
 import re
-from typing import TYPE_CHECKING, Any, Dict, List, cast
+from typing import Any, Dict, List, cast
 
 logger = logging.getLogger(__name__)
 
@@ -91,14 +91,6 @@ def bug_capture_scrub() -> List[str]:
 class PostProcessingMixin:
     """Post-processing: get_debug_info, _inject_client_script."""
 
-    if TYPE_CHECKING:
-        # Cooperating method supplied by the host class (LiveView via
-        # ContextMixin.get_context_data, mixins/context.py). Declared type-only
-        # so the strict-island mypy run resolves it on the mixin without a
-        # runtime change — this mixin is never instantiated standalone.
-        def get_context_data(self, **kwargs: Any) -> Dict[str, Any]: ...
-        def _extract_handler_metadata(self) -> Dict[str, Dict[str, Any]]: ...
-
     def get_debug_info(self) -> Dict[str, Any]:
         """
         Get debug information about this LiveView instance.
@@ -134,9 +126,9 @@ class PostProcessingMixin:
         """
         Get a slim debug payload for event responses (skip static handler metadata).
 
-        Unlike get_debug_info() which includes handler signatures (~20KB+),
-        this returns only the parts that change per event: variables and view class.
-        Handlers are static and only sent on initial mount via get_debug_info().
+        Unlike get_debug_info(), which also carries the config and the (empty)
+        handler map, this returns only the parts that change per event:
+        variables and view class.
         """
         from .._exposure import explicit_debug_projection
 

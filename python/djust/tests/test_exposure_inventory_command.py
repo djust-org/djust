@@ -138,8 +138,8 @@ def test_destinations_types_and_suggestions(no_construction):
 
     public = {"template_context", "client_state"}
     assert set(names["count"]["destinations"]) == public
-    # 2.0 writes a legacy view to the session only as a lazy=True child (#4087).
-    assert names["count"]["conditional"] == ["session_state"]
+    # 2.0 writes nothing a legacy view holds to the session (#4087, #4200).
+    assert names["count"]["conditional"] == []
     assert names["count"]["type"] == "int"
     assert names["count"]["suggestion"].startswith("count: int = state(...)")
     assert set(names["secret_key"]["destinations"]) == public
@@ -148,25 +148,24 @@ def test_destinations_types_and_suggestions(no_construction):
     assert names["first"]["type"] == "int" and names["second"]["type"] is None
     assert set(names["dynamic"]["destinations"]) == public
 
-    # Underscore attributes: the private session part of a lazy=True child only.
+    # Underscore attributes reach no destination.
     assert names["_token"]["destinations"] == []
-    assert names["_token"]["conditional"] == ["private_session"]
+    assert names["_token"]["conditional"] == []
     assert names["_later"]["destinations"] == []
-    assert names["_later"]["conditional"] == ["private_session"]
+    assert names["_later"]["conditional"] == []
 
-    # Class values reach render context (and a lazy child's session copy) only.
+    # Class values reach render context only.
     assert names["api_token"]["destinations"] == ["template_context"]
-    assert names["api_token"]["conditional"] == ["session_state"]
+    assert names["api_token"]["conditional"] == []
     assert names["api_token"]["type"] == "str"
     assert names["label"]["destinations"] == ["template_context"]
     assert names["label"]["kind"] == "property"
     assert names["helper"]["destinations"] == []  # not JSON-serializable
 
-    # Public state() fields: context; a lazy child's session copy, and its
-    # backing slot only when it holds a Django model (#2959, #1994).
+    # Public state() fields: context only.
     assert names["total"]["destinations"] == ["template_context"]
     assert names["rows"]["destinations"] == ["template_context"]
-    assert names["rows"]["conditional"] == ["session_state", "private_session"]
+    assert names["rows"]["conditional"] == []
     assert names["rows"]["type"] == "list"
     assert names["lazy"]["type"] is None
     assert "get_context_data" in names["label"]["suggestion"]
@@ -182,8 +181,8 @@ def test_no_destination_describes_the_removed_1x_stores():
         assert "render_cache" not in item["destinations"] + item["conditional"], item
         assert "session_state" not in item["destinations"], item
         assert "private_session" not in item["destinations"], item
-    assert "lazy=True" in DESTINATIONS["session_state"]
-    assert "lazy=True" in DESTINATIONS["private_session"]
+    assert "session_state" not in DESTINATIONS
+    assert "private_session" not in DESTINATIONS
 
 
 def test_explicit_views_are_reported_with_their_policy(no_construction):

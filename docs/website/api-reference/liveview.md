@@ -105,7 +105,7 @@ A key your override adds on top of `super()`'s result renders and is computed ag
 
 #### `get_render_only_context() -> dict`
 
-Template values that render on every transport but are never saved (2.0 saves nothing of a legacy view between requests anyway). Models, QuerySets and lists of models in it go through the JIT like public attributes (only the paths the template reads, with `djust_exclude_fields` applied). Use it for content that must not persist (a conversation's messages, a document's text) or for rows a handler already holds on a private attribute:
+Template values that render on every transport but are never saved. Models, QuerySets and lists of models in it go through the JIT like public attributes (only the paths the template reads, with `djust_exclude_fields` applied). Use it for content that must not persist (a conversation's messages, a document's text) or for rows a handler already holds on a private attribute:
 
 ```python
 class ChatView(LiveView):
