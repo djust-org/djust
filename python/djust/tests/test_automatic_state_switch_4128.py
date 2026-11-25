@@ -581,9 +581,24 @@ class LazyPageOff(LiveView):
     template = "<div dj-root><section>" + LAZY + "</section></div>"
 
 
+class LazyChildOff(LazyChild):
+    automatic_state = False
+    # An inherited grant is not a declaration: the subclass states its own field.
+    count = state(0, persist="server")
+
+
+class LazyPageChildOff(LiveView):
+    exposure_policy = "explicit"
+    template = (
+        '<div dj-root><section><div dj-view="' + MODULE + '.LazyChildOff" dj-lazy></div>'
+        "</section></div>"
+    )
+
+
 urlpatterns += [
     path("lazy-on/", LazyPage.as_view()),
     path("lazy-page-off/", LazyPageOff.as_view()),
+    path("lazy-child-off/", LazyPageChildOff.as_view()),
 ]
 
 
@@ -619,6 +634,7 @@ def _lazy_flow(url: str) -> List[int]:
     [
         pytest.param("/lazy-on/", False, id="project-off"),
         pytest.param("/lazy-page-off/", True, id="page-off"),
+        pytest.param("/lazy-child-off/", False, id="child-off"),
     ],
 )
 def test_sweep_a_lazy_child_keeps_only_its_declared_field(url, project, settings):

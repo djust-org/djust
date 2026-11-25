@@ -504,7 +504,12 @@ async def _sse_mount(user, view_name, event=None):
         {"type": "mount", "view": f"{_MOD}.{view_name}", "url": "/x/", "params": {}}
     )
     if event is not None and session.runtime.view_instance is not None:
-        await session.runtime.dispatch_event({"event": event, "params": {}})
+        # A client event is dispatched with the POST's request in hand.
+        session._event_request = request
+        try:
+            await session.runtime.dispatch_event({"event": event, "params": {}})
+        finally:
+            session._event_request = None
     messages = []
     while not session.queue.empty():
         messages.append(session.queue.get_nowait())
@@ -724,6 +729,13 @@ class TestPostOnlyDecorator:
         assert mounted is False  # the refused authorization ended the view
         assert RAN == []
         assert "Event authorization failed" in repr(messages)
+
+    async def test_sse_event_runs_for_the_permitted_user(self):
+        # The control: the same harness runs the handler for a superuser, so the
+        # refusal above is the post() rule and not a missing request.
+        mounted, messages = await _sse_mount(_SuperUser(), "PostOnlyView", event="touch")
+        assert mounted is True
+        assert RAN == ["PostOnlyView"], messages
 
 
 @pytest.mark.django_db(transaction=True)

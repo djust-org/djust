@@ -277,6 +277,8 @@ def _mount_explicit(parent: Any, request: Any, view_id: str, entry: LazyContaine
         ):
             raise ExposureError("Lazy child identity changed")
     except ExposureError:
+        # Static text: the contract error's own message may name view state.
+        logger.warning("Lazy view refused: an exposure contract error in the child")
         raise PermissionDenied("Lazy view refused") from None
     if snapshot_tenant_scope(child) != entry.child_tenant:
         raise PermissionDenied("Lazy view changed tenant")

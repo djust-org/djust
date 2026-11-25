@@ -185,6 +185,7 @@ MIGRATED_STEP3: tuple[str, ...] = (
     "python/djust/tests/test_stable_component_ids_4114.py",
     "python/djust/tests/test_turn_middleware_core.py",
     "tests/unit/test_layout_switching.py",
+    "python/djust/tests/test_exposure_event_diagnostics.py",
     # -- end of implementer 1 --
     # -- implementer 2: #4194, #4195 (add lines here) --
     # -- end of implementer 2 --
