@@ -298,16 +298,6 @@ In development, pages render without Tailwind utilities until you compile the CS
 
 ---
 
-### C022: Invalid event_parameter_policy
-
-**Severity**: Error
-
-**What causes it**: `LIVEVIEW_CONFIG['event_parameter_policy']` is set to something other than `'legacy'` or `'strict'`. Every event handler without its own `parameter_policy` inherits this value, and dispatch rejects each of their events until it is fixed. `'strict'` is the default since djust 2.0; `'legacy'` is deprecated and removed before 2.0.0 (#4199).
-
-**Fix**: Set the key to `'legacy'` or `'strict'`, or remove it. Suppress with `DJUST_CONFIG = {"suppress_checks": ["C022"]}` (the runtime still rejects the events).
-
----
-
 ### C023: channels_redis socket timeout at redis-py 8's default
 
 **Severity**: Warning
@@ -865,9 +855,9 @@ Retired in 2.0 with time-travel debugging (#4184). Nothing reports it; remove it
 
 **Severity**: Error
 
-**What causes it**: An event handler or server function uses the strict parameter policy (ADR-036), and strict dispatch would reject every call to it. Message: "<view>.<handler>(): strict event parameter contract is invalid: Parameter '<name>' ...". The causes are an annotation that cannot be resolved (a misspelled name, a `TYPE_CHECKING`-only import, a name from another class), an unsupported type (supported: `str`, `int`, `float`, `bool`, `Decimal`, `UUID`, `date`, `Optional[T]`, `list[T]`, `dict[str, T]`, explicit `Any`), a named parameter without an annotation, or a keyword parameter named `view_id`, `component_id` or starting with `_`, which the framework reserves for routing. Staged component output callbacks are checked the same way for their payload parameters.
+**What causes it**: An event handler or server function declares parameters that strict dispatch (ADR-036) would reject every call to it. Message: "<view>.<handler>(): strict event parameter contract is invalid: Parameter '<name>' ...". The causes are an annotation that cannot be resolved (a misspelled name, a `TYPE_CHECKING`-only import, a name from another class), an unsupported type (supported: `str`, `int`, `float`, `bool`, `Decimal`, `UUID`, `date`, `Optional[T]`, `list[T]`, `dict[str, T]`, explicit `Any`), a named parameter without an annotation, or a keyword parameter named `view_id`, `component_id` or starting with `_`, which the framework reserves for routing. Staged component output callbacks are checked the same way for their payload parameters.
 
-**Fix**: Correct the named parameter's declaration, or use `Any` for input you validate yourself. A handler not yet moved to the strict policy is never reported; converting one is covered in [Migrating to djust 2.0](migrating-to-2.0.md#2-make-event-handlers-strict).
+**Fix**: Correct the named parameter's declaration, or use `Any` for input you validate yourself. Converting a 1.x handler is covered in [Migrating to djust 2.0](migrating-to-2.0.md#2-make-event-handlers-strict).
 
 ---
 
@@ -988,11 +978,11 @@ Retired in 2.0 (#4199). Nothing reports it; the class statement itself is refuse
 
 ### V031: a dj-auto-recover handler that cannot receive its values
 
-**Severity**: Error under the strict parameter policy; Warning for the 1.x names under the legacy policy
+**Severity**: Error
 
-**What causes it**: A handler named by `dj-auto-recover` takes the 1.x `_form_values` / `_data_attrs` names (as parameters or from `**kwargs`), which strict dispatch never delivers; or it declares the 2.0 `form_values` / `data_attrs` parameters positional-only, or under the legacy policy, which sends only the `_` names. Message: "<view>.restore(): this dj-auto-recover handler declares _form_values / _data_attrs, which strict dispatch never delivers, so the event is refused."
+**What causes it**: A handler named by `dj-auto-recover` takes the 1.x `_form_values` / `_data_attrs` names (as parameters or from `**kwargs`), which strict dispatch never delivers; or it declares the 2.0 `form_values` / `data_attrs` parameters positional-only. Message: "<view>.restore(): this dj-auto-recover handler declares _form_values / _data_attrs, which strict dispatch never delivers, so the event is refused."
 
-**Fix**: Declare `form_values: dict[str, Any]` and `data_attrs: dict[str, str]` and run the handler under the strict policy. See the [reconnection guide](reconnection.md#custom-recovery-with-dj-auto-recover). Suppress with `DJUST_CONFIG = {"suppress_checks": ["V031"]}`.
+**Fix**: Declare `form_values: dict[str, Any]` and `data_attrs: dict[str, str]`. See the [reconnection guide](reconnection.md#custom-recovery-with-dj-auto-recover). Suppress with `DJUST_CONFIG = {"suppress_checks": ["V031"]}`.
 
 ### V032: an admin widget states `exposure_policy = "legacy"` (removed in 2.0)
 
@@ -1000,19 +990,11 @@ Retired in 2.0 (#4199). Nothing reports it; the widget's class statement itself 
 
 ---
 
-### V033: a legacy-policy handler strict dispatch would refuse
+### V034: a handler reads `_target`
 
 **Severity**: Warning
 
-**What causes it**: a handler that runs under the legacy parameter policy (`parameter_policy="legacy"` or the project's `LIVEVIEW_CONFIG['event_parameter_policy']`) and whose signature does not compile under the strict policy: a parameter without a supported annotation, one that starts with `_`, or one named `view_id` or `component_id`. Strict is the only policy in djust 2.0.0, so every call to the handler would be refused. djust's own handlers are not reported. Message: '<handler>: runs under the legacy parameter policy, and strict dispatch, the only policy in djust 2.0.0, would refuse every call to it: ...'
-
-**Fix**: annotate every parameter with `str`, `int`, `float`, `bool`, `Decimal`, `UUID`, `date`, `Optional[T]`, `list[T]`, `dict[str, T]` or `Any`, rename a parameter that starts with `_` or is named `view_id` / `component_id`, then delete the legacy pin. See the [migration guide](website/guides/migrating-to-2.0.md). Suppress with `DJUST_CONFIG = {"suppress_checks": ["V033"]}`.
-
-### V034: a handler uses `_target`
-
-**Severity**: Warning
-
-**What causes it**: a handler that declares a `_target` parameter or reads the string `"_target"` from its source (`kwargs.get("_target")`). Only the legacy parameter policy sends `_target`; a strict client sends `field` for `dj-input`, `dj-change`, `dj-blur` and `dj-focus`. A `_target` parameter under the strict policy is a `djust.V016` error and is not repeated here. Message: '<handler>: reads _target, which a strict client never sends; djust 2.0.0 removes the legacy parameter policy that sent it.'
+**What causes it**: a handler that reads the string `"_target"` from its source (`kwargs.get("_target")`). Only the removed 1.x legacy parameter policy sent `_target`; the client sends `field` for `dj-input`, `dj-change`, `dj-blur` and `dj-focus`. A `_target` parameter is a `djust.V016` error and is not repeated here. Message: '<handler>: reads _target, which a strict client never sends; djust 2.0.0 removes the legacy parameter policy that sent it.'
 
 **Fix**: declare `field: str = ""` instead. A `dj-submit` handler receives the pressed submit button as one of its form fields (its `name=value`). Suppress with `DJUST_CONFIG = {"suppress_checks": ["V034"]}`.
 
@@ -1695,14 +1677,6 @@ render time for those too, and `DJUST_UNSUPPLIED_NAMES = "error"` in your test
 settings turns it into an error that fails the test that renders it. Suppress with
 `DJUST_CONFIG = {"suppress_checks": ["T027"]}` or a
 `{# djust_typecheck: noqa count #}` template comment.
-
-### T028: a template binding the strict policy would refuse
-
-**Severity**: Warning
-
-**What causes it**: an event binding whose handler runs under the legacy parameter policy and which sends something the strict policy would refuse: a `data-*` argument (strict handlers receive only `dj-value-*`), an argument the handler does not declare, or a value its annotation cannot accept. The same rules as `djust.T020` and `djust.T021`, applied to a handler that is still legacy, so the change can be made before strict becomes the only policy. A noqa comment works as for T020: `{# noqa: T028 -- reason #}`. Message: '<handler>() runs under the legacy parameter policy; under strict, the only policy in djust 2.0.0: ...'
-
-**Fix**: pass arguments with `dj-value-*` instead of `data-*` and make the handler's declared parameters match what the binding sends. Suppress with `DJUST_CONFIG = {"suppress_checks": ["T028"]}`.
 
 ### T029: Python code emits a `data-*` event argument
 

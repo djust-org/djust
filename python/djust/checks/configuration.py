@@ -2068,8 +2068,6 @@ def check_configuration(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     # C024 -- DJUST_EXPLICIT_STATE_SAVE_TIMEOUT out of range (#3200)
     _check_explicit_state_save_timeout(errors)
 
-    # C022 -- ADR-036 project event parameter policy
-
     # C043 -- DJUST_UNSUPPLIED_NAMES is not "debug" / "warn" / "error" (#4279)
     _check_unsupplied_names_mode(errors)
 

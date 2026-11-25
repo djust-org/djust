@@ -778,7 +778,7 @@ def _messages(reports: list[OwnerReport]) -> list[CheckMessage]:
 def _emit(
     check_id: str, message: str, finding: Finding, report: OwnerReport, binding: Any
 ) -> CheckMessage:
-    """The one constructor of ``djust.T019``-``T022`` and ``T028`` (one ID, one emitter)."""
+    """The one constructor of ``djust.T019``-``T022`` (one ID, one emitter)."""
     details: dict[str, Any] = {
         "hint": finding.hint,
         "fix_hint": finding.hint,
@@ -795,8 +795,6 @@ def _emit(
         return BindingWarning(message, id="djust.T020", **details)
     if check_id == "djust.T021":
         return BindingWarning(message, id="djust.T021", **details)
-    if check_id == "djust.T028":
-        return BindingWarning(message, id="djust.T028", **details)
     return BindingWarning(message, id="djust.T022", **details)
 
 
@@ -805,7 +803,7 @@ def check_event_bindings(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     """``djust.T019``-``T022``: template event bindings against their owners;
     ``djust.T024``: floor-excluded user fields in those templates."""
     if all(
-        _is_check_suppressed("djust.%s" % check_id) for check_id in (*BINDING_IDS, "T024", "T028")
+        _is_check_suppressed("djust.%s" % check_id) for check_id in (*BINDING_IDS, "T024")
     ):
         return []
     try:

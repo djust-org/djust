@@ -10,9 +10,9 @@ Registers checks with Django's check framework that also run via
 - Templates (T0xx) -- template file scanning
 - Code Quality (Q0xx) -- AST-based quality checks
 - Accessibility (Y0xx) -- template ARIA/WCAG scanning
-- Event parameters (V016, V018, V031, V033) -- ADR-036 strict handler contracts
+- Event parameters (V016, V018, V031) -- ADR-036 strict handler contracts
 - Event bindings (T019-T022, T023) -- ADR-037 template bindings against their owners
-- Upgrade (V033-V035, V037, T028, T029) -- what a 1.3 project must change before 2.0.0
+- Upgrade (V034, V035, V037, T029) -- what a 1.3 project must change before 2.0.0
 - Serialization floor (T024) -- user fields a template reads that djust never serializes
 - Document-root placement (T025) -- dj-view / dj-root on <html>, <head> or <body>
 - Shared template library names (T026) -- a tag or filter two loaded libraries register

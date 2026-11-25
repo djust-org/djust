@@ -79,10 +79,10 @@ def raw_handler(self, value: str = ""):
 **Rules:**
 
 - Declare the parameters the binding sends; `manage.py check` reports a mismatch (`djust.T020`)
-- Under the legacy policy, `dj-input` and `dj-change` also send `field` and `_target`, and `dj-submit` sends `_target` with the form fields: keep `**kwargs` on those handlers, or declare the names
+- `parameter_policy="strict"` is accepted and does nothing: strict is the only policy, and `parameter_policy="legacy"` is refused
 - Give a parameter a default when a binding may omit it
 - `value` is the magic parameter name for `dj-input` and `dj-change` events
-- `data-item-id` becomes `item_id` (kebab-case → snake_case)
+- `data-item-id` does not become an argument; `dj-value-item-id` does (kebab-case → snake_case: `item_id`)
 
 ---
 
