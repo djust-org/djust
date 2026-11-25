@@ -1748,58 +1748,190 @@ const _SHAPE_SKIPPED = new Set(('class style dj-id open hidden disabled checked 
 const _SHAPE_SKIPPED_PREFIX = /^(aria-|data-djust-|data-dj-|data-upload-|data-stream-)/;
 const _shapeText = (text) => text.replace(/[ \t\n\r\f]+/g, ' ').replace(/^ | $/g, '');
 
+// #4001: the fallback computes the shape before every request and again before
+// it applies the answer, and walking a 6,000-element page costs ~10 ms each
+// time. So each element's piece of the text (its open tag, its children's
+// pieces, '>') is hashed once and kept with its CRC-32, its Adler-32 sums and
+// its length; a parent's piece combines its children's (zlib's crc32_combine
+// and adler32_combine), which gives the value of hashing the whole text in one
+// pass, byte for byte. A MutationObserver on the document forgets the pieces of
+// every element a change is in or under, and of every element (re)inserted (a
+// node changed while detached). The content of a <template> is not observed,
+// so nothing in or around one is kept. Work follows the change, not the page.
+const _SHAPE_POLY = 0xEDB88320;
+const _SHAPE_BASE = 65521;
+
+/** (a * b) mod the CRC-32 polynomial, reflected (zlib's multmodp). */
+function _shapeMulMod(a, b) {
+    let p = 0;
+    for (let m = 0x80000000; m; m >>>= 1) {
+        if (a & m) {
+            p ^= b;
+            if ((a & (m - 1)) === 0) break;
+        }
+        b = b & 1 ? (b >>> 1) ^ _SHAPE_POLY : b >>> 1;
+    }
+    return p >>> 0;
+}
+
+const _SHAPE_X2N = (() => {
+    const table = new Uint32Array(32);
+    let p = 0x40000000;
+    table[0] = p;
+    for (let n = 1; n < 32; n++) table[n] = p = _shapeMulMod(p, p); // eslint-disable-line security/detect-object-injection
+    return table;
+})();
+const _shapeX8n = new Map();
+
+/** x^(8 * len) mod the polynomial: what appending `len` bytes does to a CRC. */
+function _shapeShift(len) {
+    let p = _shapeX8n.get(len);
+    if (p !== undefined) return p;
+    p = 0x80000000;
+    for (let n = len, k = 3; n; n = Math.floor(n / 2), k++) {
+        if (n & 1) p = _shapeMulMod(_SHAPE_X2N[k & 31], p);
+    }
+    if (_shapeX8n.size > 4096) _shapeX8n.clear();
+    _shapeX8n.set(len, p);
+    return p;
+}
+
+/** A running hash of the shape text: bytes streamed in, kept pieces combined in. */
+class _ShapeHash {
+    constructor() {
+        this.crc = 0xFFFFFFFF; // the CRC register (pre-conditioned)
+        this.a = 1;
+        this.b = 0;
+        this.len = 0;
+        this.volatile = false; // holds a piece that cannot be kept
+    }
+    byte(code) {
+        this.crc = _SHAPE_CRC[(this.crc ^ code) & 0xFF] ^ (this.crc >>> 8);
+        this.a = (this.a + code) % _SHAPE_BASE;
+        this.b = (this.b + this.a) % _SHAPE_BASE;
+        this.len++;
+    }
+    /** The UTF-8 bytes of `text`. */
+    put(text) {
+        for (const char of text) {
+            const c = char.codePointAt(0);
+            if (c < 0x80) this.byte(c);
+            else if (c < 0x800) { this.byte(0xC0 | (c >> 6)); this.byte(0x80 | (c & 63)); }
+            else if (c < 0x10000) { this.byte(0xE0 | (c >> 12)); this.byte(0x80 | ((c >> 6) & 63)); this.byte(0x80 | (c & 63)); }
+            else { this.byte(0xF0 | (c >> 18)); this.byte(0x80 | ((c >> 12) & 63)); this.byte(0x80 | ((c >> 6) & 63)); this.byte(0x80 | (c & 63)); }
+        }
+    }
+    /** Append a finished piece, as if its bytes were streamed in. */
+    add(piece) {
+        if (piece.volatile) this.volatile = true;
+        if (!piece.len) return;
+        const crc = (_shapeMulMod(_shapeShift(piece.len), (this.crc ^ 0xFFFFFFFF) >>> 0) ^ piece.crc) >>> 0;
+        this.crc = (crc ^ 0xFFFFFFFF) >>> 0;
+        const rem = piece.len % _SHAPE_BASE;
+        let a = this.a + piece.a + _SHAPE_BASE - 1;
+        let b = (rem * this.a) % _SHAPE_BASE + this.b + piece.b + _SHAPE_BASE - rem;
+        if (a >= _SHAPE_BASE) a -= _SHAPE_BASE;
+        if (a >= _SHAPE_BASE) a -= _SHAPE_BASE;
+        if (b >= _SHAPE_BASE * 2) b -= _SHAPE_BASE * 2;
+        if (b >= _SHAPE_BASE) b -= _SHAPE_BASE;
+        this.a = a;
+        this.b = b;
+        this.len += piece.len;
+    }
+    piece() {
+        return {crc: (this.crc ^ 0xFFFFFFFF) >>> 0, a: this.a, b: this.b, len: this.len, volatile: this.volatile};
+    }
+}
+
+// The kept pieces, and the observer that forgets them. `var`: #1370.
+var _shapePieces = null; // eslint-disable-line no-var
+var _shapeObserver = null; // eslint-disable-line no-var
+
+function _shapeForget(records) {
+    for (const r of records) {
+        for (let n = r.target; n; n = n.parentNode) _shapePieces.delete(n);
+        if (r.type === 'childList') {
+            r.addedNodes.forEach((n) => {
+                if (n.nodeType !== 1) return;
+                _shapePieces.delete(n);
+                n.querySelectorAll('*').forEach((el) => _shapePieces.delete(el));
+            });
+        }
+    }
+}
+
+/** True when pieces may be kept: the observer that forgets them is running. */
+function _shapeWatch() {
+    if (!_shapeObserver && typeof MutationObserver === 'function') {
+        _shapePieces = new WeakMap();
+        _shapeObserver = new MutationObserver(_shapeForget);
+        _shapeObserver.observe(document,
+            { subtree: true, childList: true, attributes: true, characterData: true });
+    }
+    if (!_shapeObserver) return false;
+    _shapeForget(_shapeObserver.takeRecords());
+    return true;
+}
+
+/** Append the pieces of `node`'s significant children to `hash`. */
+function _shapeChildren(hash, node, keep) {
+    for (const child of getSignificantChildren(node)) {
+        if (child.nodeType === Node.COMMENT_NODE) {
+            hash.put('!');
+        } else if (child.nodeType === Node.TEXT_NODE) {
+            hash.put('"' + _shapeText(child.textContent) + '\0');
+        } else {
+            hash.add(_shapePiece(child, keep));
+        }
+    }
+}
+
+/** `el`'s piece: `<tag attrs`, its children (or its shown text), `>`. */
+function _shapePiece(el, keep) {
+    if (keep) {
+        const kept = _shapePieces.get(el);
+        if (kept) return kept;
+    }
+    const hash = new _ShapeHash();
+    // A template's content is another tree, which the observer does not see.
+    if (el.tagName === 'TEMPLATE') hash.volatile = true;
+    const csrf = el.getAttribute('name') === 'csrfmiddlewaretoken';
+    const attrs = [];
+    for (const name of el.getAttributeNames()) {
+        const lower = name.toLowerCase();
+        if (_SHAPE_SKIPPED.has(lower) || _SHAPE_SKIPPED_PREFIX.test(lower)) continue;
+        // Django masks the CSRF token again on every render.
+        if (csrf && lower === 'value') continue;
+        attrs.push(' ' + lower + '=' + el.getAttribute(name) + '\0');
+    }
+    hash.put('<' + el.tagName.toLowerCase() + attrs.sort().join(''));
+    // dj-disable-with shows other text while its request is out.
+    const shown = el.getAttribute('data-djust-original-text');
+    // A dj-update="ignore" subtree is the client's (#4283): not walked.
+    if (el.getAttribute('dj-update') !== 'ignore') {
+        if (shown === null) _shapeChildren(hash, el, keep && !hash.volatile);
+        else if (shown === ' ' || /[^ \t\n\r\f]/.test(shown)) hash.put('"' + _shapeText(shown) + '\0');
+    }
+    hash.put('>');
+    const piece = hash.piece();
+    if (keep && !piece.volatile) _shapePieces.set(el, piece);
+    return piece;
+}
+
 /** The shape of `root`'s tree as 16 hex digits, or null if it cannot be computed. */
 function domShape(root) {
     if (!root) return null;
-    let crc = 0xFFFFFFFF, a = 1, b = 0;
-    const byte = (code) => {
-        crc = _SHAPE_CRC[(crc ^ code) & 0xFF] ^ (crc >>> 8);
-        a = (a + code) % 65521;
-        b = (b + a) % 65521;
-    };
-    // The UTF-8 bytes of `text`.
-    const put = (text) => {
-        for (const char of text) {
-            const c = char.codePointAt(0);
-            if (c < 0x80) byte(c);
-            else if (c < 0x800) { byte(0xC0 | (c >> 6)); byte(0x80 | (c & 63)); }
-            else if (c < 0x10000) { byte(0xE0 | (c >> 12)); byte(0x80 | ((c >> 6) & 63)); byte(0x80 | (c & 63)); }
-            else { byte(0xF0 | (c >> 18)); byte(0x80 | ((c >> 12) & 63)); byte(0x80 | ((c >> 6) & 63)); byte(0x80 | (c & 63)); }
-        }
-    };
-    const walk = (node) => {
-        for (const child of getSignificantChildren(node)) {
-            if (child.nodeType === Node.COMMENT_NODE) {
-                put('!');
-            } else if (child.nodeType === Node.TEXT_NODE) {
-                put('"' + _shapeText(child.textContent) + '\0');
-            } else {
-                const csrf = child.getAttribute('name') === 'csrfmiddlewaretoken';
-                const attrs = [];
-                for (const name of child.getAttributeNames()) {
-                    const lower = name.toLowerCase();
-                    if (_SHAPE_SKIPPED.has(lower) || _SHAPE_SKIPPED_PREFIX.test(lower)) continue;
-                    // Django masks the CSRF token again on every render.
-                    if (csrf && lower === 'value') continue;
-                    attrs.push(' ' + lower + '=' + child.getAttribute(name) + '\0');
-                }
-                put('<' + child.tagName.toLowerCase() + attrs.sort().join(''));
-                // dj-disable-with shows other text while its request is out.
-                const shown = child.getAttribute('data-djust-original-text');
-                // A dj-update="ignore" subtree is the client's (#4283): not walked.
-                if (child.getAttribute('dj-update') !== 'ignore') {
-                    if (shown === null) walk(child);
-                    else if (shown === ' ' || /[^ \t\n\r\f]/.test(shown)) put('"' + _shapeText(shown) + '\0');
-                }
-                put('>');
-            }
-        }
-    };
-    walk(root);
+    const hash = new _ShapeHash();
+    // The root's own children are walked every time: which of a <body> root's
+    // children count depends on the page (isForeignBodyChild), not on them.
+    _shapeChildren(hash, root, _shapeWatch() && root.tagName !== 'TEMPLATE');
+    const {crc, a, b} = hash.piece();
     const hex = (n) => (n >>> 0).toString(16).padStart(8, '0');
-    return hex(crc ^ 0xFFFFFFFF) + hex((b << 16) | a);
+    return hex(crc) + hex((b << 16) | a);
 }
 window.djust.domShape = domShape;
+// Tests: forget every kept piece, so the next shape is computed from scratch.
+window.djust._domShapeForgetAll = () => { if (_shapePieces) _shapePieces = new WeakMap(); };
 
 const WHITESPACE_PRESERVING_TAGS = ['PRE', 'CODE', 'TEXTAREA', 'SCRIPT', 'STYLE'];
 

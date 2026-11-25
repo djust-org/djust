@@ -200,8 +200,8 @@ typed value on a `dj-input` (form, editor), a click on a `dj-click` button
 (table, dashboard, push). Committed as
 [`client-turns-baseline.json`](client-turns-baseline.json).
 
-Measured 2026-11-25 on the machine above, Chromium 158.0.8127.36 headless, at
-`02beb674f` (after #4001 / #4328). 30 measured turns per cell after 3 warm-up
+Measured 2026-11-25 on the machine above, Chromium 158.0.8127.36 headless,
+after #4001 / #4328 and the incremental shape below. 30 measured turns per cell after 3 warm-up
 turns, one cell at a time, under `nice -n 10`: p95 is the second-largest sample
 of 30, so read it as noisy. Total run time about one minute.
 
@@ -233,26 +233,33 @@ and answers with the whole page).
 
 | Shape | Elements | Cell | send | apply | total | long | down bytes |
 | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: |
-| form | 35 | ws | 0.4 / 1.2 | 0.5 / 1.5 | 7.3 / 12.7 | 0 | 404 |
-| form | 35 | http | 0.9 / 3.0 | 0.7 / 1.3 | 66.3 / 73.9 | 0 | 264 |
-| form | 35 | http-nosave | 0.7 / 2.8 | 0.9 / 1.9 | 18.3 / 24.9 | 0 | 1,277 |
-| table | 6,019 | ws | 0.2 / 0.6 | 1.1 / 2.0 | 29.6 / 42.0 | 0 | 407 |
-| table | 6,019 | http | 9.5 / 20.3 | 9.5 / 18.3 | 180.2 / 228.5 | 0 | 250 |
-| table | 6,019 | http-nosave | 0.8 / 14.9 | 34.5 / 49.4 | 107.0 / 166.7 | 1 (53 ms) | 192,807 |
-| dashboard | 66 | ws | 0.1 / 0.4 | 0.3 / 0.6 | 5.5 / 8.7 | 0 | 403 |
-| dashboard | 66 | http | 0.6 / 1.2 | 0.6 / 1.1 | 62.1 / 88.7 | 0 | 243 |
-| dashboard | 66 | http-nosave | 0.4 / 0.9 | 0.7 / 2.0 | 17.4 / 29.4 | 0 | 1,849 |
-| push | 18 | ws | 0.2 / 0.4 | 0.6 / 1.2 | 8.7 / 16.0 | 0 | 719 |
-| editor | 18 | ws | 0.4 / 2.0 | 0.3 / 0.5 | 7.4 / 8.8 | 0 | 4,642 |
-| editor | 18 | http | 0.9 / 2.5 | 0.6 / 1.3 | 25.0 / 60.1 | 0 | 4,456 |
-| editor | 18 | http-nosave | 0.7 / 2.7 | 0.6 / 1.0 | 19.3 / 25.8 | 0 | 4,925 |
+| form | 35 | ws | 0.4 / 2.7 | 0.5 / 1.0 | 8.1 / 15.7 | 0 | 404 |
+| form | 35 | http | 0.8 / 2.6 | 0.5 / 1.1 | 61.0 / 73.9 | 0 | 264 |
+| form | 35 | http-nosave | 0.7 / 2.0 | 0.9 / 1.2 | 15.3 / 20.7 | 0 | 1,277 |
+| table | 6,019 | ws | 0.2 / 0.3 | 1.0 / 1.8 | 35.1 / 71.8 | 0 | 407 |
+| table | 6,019 | http | 1.3 / 2.6 | 0.8 / 3.8 | 165.9 / 391.1 | 0 | 250 |
+| table | 6,019 | http-nosave | 0.8 / 1.3 | 32.6 / 54.3 | 112.8 / 200.2 | 3 (62 ms) | 192,807 |
+| dashboard | 66 | ws | 0.2 / 0.5 | 0.5 / 0.9 | 7.9 / 12.2 | 0 | 403 |
+| dashboard | 66 | http | 0.5 / 0.8 | 0.5 / 1.3 | 28.3 / 47.4 | 0 | 243 |
+| dashboard | 66 | http-nosave | 0.4 / 0.6 | 0.7 / 1.2 | 15.3 / 20.1 | 0 | 1,849 |
+| push | 18 | ws | 0.2 / 0.5 | 0.6 / 1.0 | 9.8 / 17.4 | 0 | 719 |
+| editor | 18 | ws | 0.6 / 2.7 | 0.4 / 1.0 | 9.6 / 13.5 | 0 | 4,642 |
+| editor | 18 | http | 0.9 / 3.2 | 0.5 / 1.3 | 29.2 / 71.2 | 0 | 4,456 |
+| editor | 18 | http-nosave | 0.7 / 2.5 | 0.6 / 1.1 | 14.6 / 20.2 | 0 | 4,925 |
 
-A separate run of the same command with the client from before #4001
-(`--client` with `client-core.js` from `6c9526298`), apply p50 / p95: table
-over `ws` 3.6 / 6.3 ms (now 1.1 / 2.0), over `http` 12.9 / 26.2 (now
-9.5 / 18.3), the table's whole-page morph 31.5 / 45.2 (now 34.5 / 49.4: the
-morph path is not scoped, so that is run-to-run noise); every other cell
-within 0.3 ms. #4001's own by-size bench
+Before, p50 / p95 ms, from separate runs of the same command: the client
+from before #4001 (`--client` with `client-core.js` from `6c9526298`), and
+the one before the incremental shape (`88a801617`):
+
+| Table cell | before #4001 | before the incremental shape | now |
+| --- | ---: | ---: | ---: |
+| ws, apply | 3.6 / 6.3 | 1.1 / 2.0 | 1.0 / 1.8 |
+| http, send | 9.6 / 14.4 | 9.5 / 20.3 | 1.3 / 2.6 |
+| http, apply | 12.9 / 26.2 | 9.5 / 18.3 | 0.8 / 3.8 |
+| http-nosave, apply | 31.5 / 45.2 | 34.5 / 49.4 | 32.6 / 54.3 |
+
+Every other cell moved by under 0.3 ms between the three. The whole-page morph
+is not scoped, so its spread is run-to-run noise. #4001's own by-size bench
 (`scripts/bench_client_patch_turn.py`, an unrelated counter update with no
 server) went from 0.2 / 0.6 / 6.0 ms to 0.2 / 0.2 / 0.2 ms p50 at 100 / 1,000 /
 10,000 elements.
@@ -262,14 +269,19 @@ What this says:
 1. **Over the socket the browser's part is about a millisecond** for every
    shape, the 1,000-row table included (6,000 elements): the turn is the
    server's (compare the server table above). Input to send is under 0.5 ms.
-2. **The HTTP fallback costs the browser about 10 ms each way on the table**,
-   with patches: the render digest (`domShape`, a walk of the whole LiveView
-   root) is computed before the POST is sent, and again before the answer's
-   patches are applied (the `_applyIf` check, #4108). That is the remaining
-   client cost that grows with the page; making the digest incremental is the
-   follow-up.
+2. **The HTTP fallback's render digest now follows the change.** It cost
+   about 10 ms each way on the table: the shape (`domShape`, #4108) was a walk
+   of the whole LiveView root, before the POST and again before the answer's
+   patches were applied. Each element's piece is now kept with its CRC-32 and
+   Adler-32 and combined (zlib's `crc32_combine` / `adler32_combine`), and a
+   MutationObserver forgets the pieces a change makes stale, so a turn
+   rehashes the changed path: send 9.5 → 1.3 ms, apply 9.5 → 0.8 ms p50. The
+   value is byte-identical to the server's: seeded random pages and edits
+   (`python/djust/tests/test_dom_shape_random_4001.py` writes the server's
+   shapes, `tests/js/dom_shape_incremental_4001.test.js` checks the client's,
+   kept and from scratch).
 3. **The whole-page answer** (`http-nosave`, 193 KB for the table) takes
-   35 ms p50 to morph, with one long task (53 ms) in 30 turns. The small
+   33 ms p50 to morph, with three long tasks (up to 62 ms) in 30 turns. The small
    shapes' whole-page answers cost under 1 ms more than their patches.
 
 The server's `total` figures here are not comparable with the server table's:
