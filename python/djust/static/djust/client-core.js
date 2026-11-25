@@ -1466,6 +1466,12 @@ function storeSignedSnapshot(data, primaryViewPath) {
     );
     if (!eligible || typeof data.view !== 'string' || !data.view ||
         ['__proto__', 'constructor', 'prototype'].includes(data.view)) return;
+    // #4164: the turn serial of the state this frame shows. A reconnect sends
+    // it back, so the server can tell when it restored an older state.
+    if (!revocation && Number.isInteger(data.state_serial) && data.state_serial >= 0) {
+        if (!window.djust._stateSerial) window.djust._stateSerial = Object.create(null);
+        window.djust._stateSerial[data.view] = data.state_serial;
+    }
     const token = data.state_snapshot_signed;
     // Cache invalidation sentinel, not a comparison of authentication secrets.
     // eslint-disable-next-line security/detect-possible-timing-attacks
@@ -1487,6 +1493,18 @@ function storeSignedSnapshot(data, primaryViewPath) {
 // echoed verbatim; the server validates its signature, age and binding, and
 // ignores one it does not accept. Shared by the WebSocket and SSE mounts (#1646).
 // Only a reconnect sends it: a first mount has no earlier state to bring back.
+// #4164: the turn serial a reconnecting page view sends with its mount frame
+// (the last one a frame showed it), or null on a first mount.
+function reconnectStateSerial(viewPath) {
+    if (!(window.djust && window.djust._isReconnect)) return null;
+    const serials = window.djust._stateSerial;
+    if (!serials || typeof viewPath !== 'string' || !viewPath ||
+        !Object.prototype.hasOwnProperty.call(serials, viewPath)) return null;
+    // eslint-disable-next-line security/detect-object-injection
+    const serial = serials[viewPath];
+    return Number.isInteger(serial) && serial > 0 ? serial : null;
+}
+
 function reconnectStateSnapshot(viewPath) {
     if (!(window.djust && window.djust._isReconnect)) return null;
     const bag = window.djust._clientState;
@@ -2702,6 +2720,8 @@ class LiveViewWebSocket {
         // Never for a view mounted beside it: the server ships no token for one.
         const snapshot = options.primary ? reconnectStateSnapshot(viewPath) : null;
         if (snapshot) frame.state_snapshot = snapshot;
+        const serial = options.primary ? reconnectStateSerial(viewPath) : null;
+        if (serial !== null) frame.state_serial = serial;
         this.sendMessage(frame);
         return true;
     }
@@ -3654,6 +3674,8 @@ class LiveViewSSE {
         // #3988: as the WebSocket mount does (reconnectStateSnapshot, 03-websocket.js).
         const snapshot = reconnectStateSnapshot(viewPath);
         if (snapshot) frame.state_snapshot = snapshot;
+        const serial = reconnectStateSerial(viewPath);
+        if (serial !== null) frame.state_serial = serial;
         return this.sendMessage(frame);
     }
 
@@ -8385,7 +8407,8 @@ function _noteRenderDigest(data, sent) {
         _setRenderToken(data.render_digest);
     }
     if (!sent || !changed) return;
-    if (!whole) {
+    // A whole page chosen for its size (#4229) answered a token that matched.
+    if (!whole || data.whole_page === 'size') {
         _httpDigestMisses = 0;
     } else if (++_httpDigestMisses >= 2) {
         _httpDigestHold = _HTTP_DIGEST_HOLD;
@@ -17497,7 +17520,10 @@ globalThis.djust.djDialog = {
 
     function _onError(e) {
         const detail = (e && e.detail) || {};
-        if (detail.code === 'state_error' && detail.transient === true) {
+        // #4164: a reconnect that restored an older state than the page
+        // showed, and changes not saved yet, are notices of the same kind.
+        const notice = detail.code === 'state_error' || detail.code === 'state_not_restored';
+        if (notice && detail.transient === true) {
             _showSaving(detail);
             return;
         }
