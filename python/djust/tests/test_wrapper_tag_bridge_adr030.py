@@ -109,7 +109,10 @@ def test_the_component_census_matches_adr_030():
     # #4331 moved to the wrapper side: four layout tags (whose Django nodes now draw their
     # body), sidebar / sidebar_item / nav_menu / nav_item / toolbar, and accordion and
     # app_shell; each keeps its own native handler, so none of them needs the bridge.
-    assert len(wrappers) == 51 and len(refused) == 8, (wrappers, refused)
+    # page_header went the other way: it pushes its actions key around its body (#4331 review),
+    # so the probe refuses it; it has its own native handler and never needed the bridge.
+    assert "modified context" in reasons["page_header"]
+    assert len(wrappers) == 50 and len(refused) == 9, (wrappers, refused)
 
 
 def test_a_bridged_wrapper_renders_through_the_rust_engine(bridged_components):
