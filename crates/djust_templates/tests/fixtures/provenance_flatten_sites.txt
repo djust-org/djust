@@ -684,7 +684,6 @@ let open = format!("<{sentinel_tag} ");
 reduced_html.clone()
 text_changes.push((idx, old_frag.to_string(), new_frag.to_string()));
 Some("[]".to_string())
-PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
 Some("[]".to_string())
 PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
 PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())

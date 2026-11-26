@@ -1076,7 +1076,9 @@ pub struct LoopItemStore {
     /// Testing only: 1 serves a stored item whatever its value now is, 2
     /// ignores the environment and length, 3 hashes a list inside an item
     /// by its kind only (an in-place change to a row's inner list is then
-    /// missed). Lets the differential tests prove they see a broken store.
+    /// missed), 4 skips the read check of a body holding a nested loop (an
+    /// inner loop reading outer context is then stored). Lets the
+    /// differential tests prove they see a broken store.
     sabotage: u8,
     /// Bodies with a nested `{% for %}` are refused (#4325 WP4 switched off).
     refuse_nested: bool,
@@ -1114,6 +1116,10 @@ impl LoopItemStore {
 
     #[doc(hidden)]
     pub fn set_sabotage(&mut self, mode: u8) {
+        if self.sabotage != mode {
+            // Mode 4 changes verdicts, so none may outlive a switch.
+            self.verdicts.clear();
+        }
         self.sabotage = mode;
     }
 
@@ -1204,10 +1210,14 @@ impl LoopItemStore {
         hash_body(body, &mut body_hasher);
         var_names.hash(&mut body_hasher);
         let body_sig = body_hasher.finish();
-        let storable = *self
-            .verdicts
-            .entry(body_sig)
-            .or_insert_with(|| body_is_item_storable_in(body, var_names, !self.refuse_nested));
+        let storable = *self.verdicts.entry(body_sig).or_insert_with(|| {
+            if self.sabotage == 4 && !self.refuse_nested && body.iter().any(node_holds_for) {
+                // Sabotage 4: a nested body's reads are not checked.
+                body.iter().all(|n| node_is_item_storable(n, true))
+            } else {
+                body_is_item_storable_in(body, var_names, !self.refuse_nested)
+            }
+        });
         if !storable {
             return None;
         }

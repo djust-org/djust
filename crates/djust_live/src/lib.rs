@@ -681,7 +681,8 @@ impl RustLiveViewBackend {
 
     /// Testing only: break the per-item loop store on purpose (1: serve a
     /// stored item whatever its value, 2: ignore length and environment, 3:
-    /// hash a row's inner lists by kind only), so
+    /// hash a row's inner lists by kind only, 4: store nested-loop bodies
+    /// without checking what they read), so
     /// the differential tests can prove they see a broken store. 0 restores.
     #[pyo3(name = "_set_loop_item_store_sabotage")]
     fn set_loop_item_store_sabotage(&mut self, mode: u8) {
@@ -2763,27 +2764,38 @@ impl RustLiveViewBackend {
             };
             // #4325 C1: the plan was validated against the borrowed tree;
             // apply it to `last_vdom` itself instead of patching a clone of
-            // the whole tree (and dropping the old one afterwards).
-            let text_region_fast_path: Option<(VNode, Vec<djust_vdom::Patch>)> =
-                match text_region_plan {
-                    Some(plan) => match self.last_vdom.take() {
-                        Some(mut vdom) => {
+            // the whole tree (and dropping the old one afterwards). The
+            // patches are serialized BEFORE the tree is taken, and nothing on
+            // this path returns early: any refusal (a serialization error, an
+            // apply that finds a non-text node) leaves `last_vdom` in place
+            // and falls back to the full parse, which also restores
+            // `loop_render_cache` and rebuilds the index the plan shifted.
+            let text_region_fast_path: Option<(VNode, String)> = match text_region_plan {
+                Some(plan) => {
+                    let patches_json = if plan.patches.is_empty() {
+                        Some("[]".to_string())
+                    } else {
+                        serde_json::to_string(&plan.patches).ok()
+                    };
+                    match (patches_json, self.last_vdom.take()) {
+                        (Some(json), Some(mut vdom)) => {
                             if apply_text_region_edits(&mut vdom, &plan.edits) {
-                                Some((vdom, plan.patches))
+                                Some((vdom, json))
                             } else {
-                                // Unreachable (every path was checked), but a
-                                // refused apply left the tree untouched: fall
-                                // back to the full parse, which rebuilds the
-                                // index the plan already shifted.
                                 self.last_vdom = Some(vdom);
                                 self.text_node_index = None;
                                 None
                             }
                         }
-                        None => None,
-                    },
-                    None => None,
-                };
+                        (_, vdom) => {
+                            self.last_vdom = vdom;
+                            self.text_node_index = None;
+                            None
+                        }
+                    }
+                }
+                None => None,
+            };
 
             let mut took_full_parse = false;
             // Which parse-skipping path fired, for `RenderTiming::fast_path` (#2532).
@@ -2810,17 +2822,10 @@ impl RustLiveViewBackend {
                 // try_text_region_fast_path to catch stale offsets.
                 self.text_node_index = None;
                 (vdom, patches_json, parse_ms, 0.0)
-            } else if let Some((vdom, text_patches)) = text_region_fast_path {
+            } else if let Some((vdom, patches_json)) = text_region_fast_path {
                 fast_path = FAST_PATH_TEXT_REGION;
                 let parse_ms = t_parse_start.elapsed().as_secs_f64() * 1000.0;
-                let patches_json = if text_patches.is_empty() {
-                    Some("[]".to_string())
-                } else {
-                    Some(serde_json::to_string(&text_patches).map_err(|e| {
-                        PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
-                    })?)
-                };
-                (vdom, patches_json, parse_ms, 0.0)
+                (vdom, Some(patches_json), parse_ms, 0.0)
             } else {
                 took_full_parse = true;
                 fast_path = FAST_PATH_NONE;
@@ -6611,15 +6616,15 @@ struct TextRegionPlan {
 
 /// Apply a [`TextRegionPlan`]'s edits to `vdom` in place (#4325 C1). Every
 /// path is checked to name a text node first, so `false` means nothing was
-/// written; the fast paths validated the paths already, so it is not
-/// expected. Same writes as the clone-and-patch they replace: the text, and
+/// written and the caller falls back to the full parse; the fast paths
+/// validated the paths already, so it is not expected. Never panics (it runs
+/// under the FFI boundary). Same writes as the clone-and-patch they replace: the text, and
 /// the node's cached HTML cleared.
 fn apply_text_region_edits(vdom: &mut VNode, edits: &[TextRegionEdit]) -> bool {
     if !edits
         .iter()
         .all(|e| get_vdom_node(vdom, &e.path).is_some_and(|n| n.is_text()))
     {
-        debug_assert!(false, "text-region plan names a non-text node");
         return false;
     }
     for edit in edits {
@@ -9976,11 +9981,7 @@ mod text_region_in_place_4325 {
                 text: own("root is an element"),
             },
         ];
-        // `debug_assert!` fires in a test build; catch it.
-        let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            apply_text_region_edits(&mut tree, &edits)
-        }));
-        assert!(matches!(refused, Ok(false) | Err(_)));
+        assert!(!apply_text_region_edits(&mut tree, &edits));
         assert_eq!(tree.to_html(), before);
     }
 }

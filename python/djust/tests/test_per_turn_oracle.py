@@ -242,6 +242,28 @@ class NestedTable(Table):
         self.items[5]["tags"][1] = self.items[5]["tags"][1] + "x"
 
 
+class NestedOuterTable(Table):
+    """The inner loop reads outer context (``title``): the per-item store must
+    refuse the body (#4325 WP4, ``reads_only_bound``), so a retitle re-renders
+    every row."""
+
+    exposure_policy = "explicit"
+    template = (
+        "<div dj-root><h1>{{ title }}</h1>"
+        '<table>{% for row in items %}<tr id="row-{{ row.id }}"><td>{{ row.name }}</td>'
+        "<td>{% for t in row.tags %}{{ title }}:{{ t }} {% endfor %}</td></tr>"
+        "{% endfor %}</table></div>"
+    )
+
+
+NESTED_OUTER_SCRIPT = [
+    ("event", "retitle"),
+    ("event", "cell"),
+    ("event", "retitle"),
+    ("event", "nested"),
+]
+
+
 NESTED_SCRIPT = [
     ("event", "retag"),
     ("event", "nested"),
@@ -1133,6 +1155,7 @@ WS_CASES: List[Tuple[str, type, Script]] = [
     ("counter_client", ClientCounter, COUNTER_SCRIPT),
     ("table", Table, TABLE_SCRIPT),
     ("nested_table", NestedTable, NESTED_SCRIPT),
+    ("nested_outer_table", NestedOuterTable, NESTED_OUTER_SCRIPT),
     ("derived", Derived, DERIVED_SCRIPT),
     ("opaque", Opaque, OPAQUE_SCRIPT),
     ("models", Models, MODELS_SCRIPT),
@@ -1952,6 +1975,22 @@ def _break_loop_item_nested(patch: Any) -> None:
     patch.setattr(rust_bridge.RustBridgeMixin, "_sync_state_to_rust", sync)
 
 
+def _break_nested_read_check(patch: Any) -> None:
+    from djust.mixins import rust_bridge
+
+    real = rust_bridge.RustBridgeMixin._sync_state_to_rust
+
+    # As if the store stored a nested-loop body without checking what it reads
+    # (sabotage 4): an inner loop reading outer context is served stale.
+    def sync(self: Any, *args: Any, **kwargs: Any) -> Any:
+        rust_view = getattr(self, "_rust_view", None)
+        if rust_view is not None and hasattr(rust_view, "_set_loop_item_store_sabotage"):
+            rust_view._set_loop_item_store_sabotage(4)
+        return real(self, *args, **kwargs)
+
+    patch.setattr(rust_bridge.RustBridgeMixin, "_sync_state_to_rust", sync)
+
+
 SABOTAGE = {
     "unchanged_save_skip": (_break_unchanged_save_skip, _reconnect_run),
     "contract_cache": (_break_contract_cache, _redeclared_run),
@@ -2016,3 +2055,19 @@ async def test_a_shortcut_that_served_a_stale_value_fails_the_oracle(monkeypatch
             FLIPS["n"] = 0
             broken = await observe(run)
     assert as_bytes(honest) != as_bytes(broken), f"breaking {shortcut} changed no frame"
+
+
+async def test_a_nested_body_stored_without_its_read_check_fails_the_oracle(monkeypatch):
+    """``loop_item_nested`` rests on two checks: the row's value hash (its
+    sabotage above) and the scoped read check of the body (#4325 WP4). Broken
+    so that an inner loop reading ``title`` is stored, a retitle must leave
+    stale rows in a frame the ``nested_outer_table`` case compares."""
+    from django.test import override_settings
+
+    run = lambda: run_ws(NestedOuterTable, NESTED_OUTER_SCRIPT)  # noqa: E731
+    with harness.shortcuts(monkeypatch), override_settings(DJUST_STATE_SAVE_INTERVAL=0):
+        honest = await observe(run)
+        with monkeypatch.context() as patch:
+            _break_nested_read_check(patch)
+            broken = await observe(run)
+    assert as_bytes(honest) != as_bytes(broken), "skipping the nested read check changed no frame"
