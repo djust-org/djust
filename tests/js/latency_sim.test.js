@@ -227,8 +227,8 @@ describe('Latency simulator jitter (#4307)', () => {
         // The first frame draws the longest delay, the second the shortest.
         const draws = [0.999, 0];
         dom.window.Math.random = () => draws.shift() ?? 0.5;
-        transport.ws.onmessage({ data: JSON.stringify({ type: 'noop', n: 1 }) });
-        transport.ws.onmessage({ data: JSON.stringify({ type: 'noop', n: 2 }) });
+        transport.ws.onmessage({ data: JSON.stringify({ type: 'render', n: 1 }) });
+        transport.ws.onmessage({ data: JSON.stringify({ type: 'render', n: 2 }) });
         await new Promise(resolve => setTimeout(resolve, 150));
         expect(order).toEqual([1, 2]);
         dom.window.close();

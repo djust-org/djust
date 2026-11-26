@@ -15,6 +15,7 @@
  */
 
 import { afterEach, describe, expect, it } from 'vitest';
+import { PROTOCOL } from './_helpers.js';
 import { JSDOM } from 'jsdom';
 import { withContracts } from './_open_contracts.js';
 import { packManifest } from './_parameter_manifest.js';
@@ -76,7 +77,7 @@ async function wsRedirectMount(win, frame) {
     const ws = new win.djust.LiveViewWebSocket();
     ws.connect('ws://localhost/ws/live/');
     ws.ws.onopen({ type: 'open' });
-    await ws.handleMessage({ type: 'connect', session_id: 's' });
+    await ws.handleMessage({ type: 'connect', protocol: PROTOCOL, session_id: 's' });
     ws.liveRedirectMount({ type: 'live_redirect_mount', view: frame.view, params: {}, url: '/next/' });
     ws.skipMountHtml = false;
     await ws.handleMessage({
@@ -131,7 +132,7 @@ describe('dj-poll on the [dj-root] element itself', () => {
         const ws = new win.djust.LiveViewWebSocket();
         ws.connect('ws://localhost/ws/live/');
         ws.ws.onopen({ type: 'open' });
-        await ws.handleMessage({ type: 'connect', session_id: 's' });
+        await ws.handleMessage({ type: 'connect', protocol: PROTOCOL, session_id: 's' });
         ws.primaryViewPath = 'app.DashboardView';
         ws.skipMountHtml = true;
         await ws.handleMessage({

@@ -9,6 +9,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { PROTOCOL } from './_helpers.js';
 import { JSDOM } from 'jsdom';
 import fs from 'fs';
 
@@ -63,7 +64,7 @@ const events = (sent) => sent.filter((m) => m.type === 'event');
 describe('max_message_size on the client', () => {
     it('does not send an event frame over the announced limit, and reports it', async () => {
         const { lv, sent, errors, djustErrors } = createHarness();
-        await lv.handleMessage({ type: 'connect', session_id: 's1', max_message_size: 1000 });
+        await lv.handleMessage({ type: 'connect', protocol: PROTOCOL, session_id: 's1', max_message_size: 1000 });
         lv.viewMounted = true;
 
         const settled = lv.sendEvent('save', { blob: 'x'.repeat(5000) });
@@ -82,7 +83,7 @@ describe('max_message_size on the client', () => {
 
     it('counts UTF-8 bytes, not UTF-16 code units', async () => {
         const { lv, sent, djustErrors } = createHarness();
-        await lv.handleMessage({ type: 'connect', session_id: 's1', max_message_size: 1000 });
+        await lv.handleMessage({ type: 'connect', protocol: PROTOCOL, session_id: 's1', max_message_size: 1000 });
         lv.viewMounted = true;
 
         // 400 characters, 1200 bytes in UTF-8.
@@ -95,7 +96,7 @@ describe('max_message_size on the client', () => {
 
     it('sends a frame under the limit', async () => {
         const { lv, sent, djustErrors } = createHarness();
-        await lv.handleMessage({ type: 'connect', session_id: 's1', max_message_size: 1000 });
+        await lv.handleMessage({ type: 'connect', protocol: PROTOCOL, session_id: 's1', max_message_size: 1000 });
         lv.viewMounted = true;
 
         lv.sendEvent('save', { text: 'short' });
@@ -106,7 +107,7 @@ describe('max_message_size on the client', () => {
 
     it('sends anything when the server announced no limit', async () => {
         const { lv, sent } = createHarness();
-        await lv.handleMessage({ type: 'connect', session_id: 's1' });
+        await lv.handleMessage({ type: 'connect', protocol: PROTOCOL, session_id: 's1' });
         lv.viewMounted = true;
 
         lv.sendEvent('save', { blob: 'x'.repeat(100000) });

@@ -84,11 +84,11 @@ async function mountedWS(env, inner) {
 let version = 1;
 function patchFrame(patches) {
     version += 1;
-    return { type: 'patch', version, patches };
+    return { type: 'render', version, patches };
 }
 function htmlFrame(inner) {
     version += 1;
-    return { type: 'html_update', version, html: `<div dj-view="${VIEW}" dj-root>${inner}</div>` };
+    return { type: 'render', version, html: `<div dj-view="${VIEW}" dj-root>${inner}</div>` };
 }
 
 async function setup(inner, hooks) {

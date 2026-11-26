@@ -110,7 +110,7 @@ describe('WebSocket send-count dedup after N server responses (#315)', () => {
         // accumulate without WeakMap dedup.
         const N = 5;
         for (let i = 0; i < N; i++) {
-            const patchMsg = JSON.stringify({ type: 'patch', patches: [] });
+            const patchMsg = JSON.stringify({ type: 'render', patches: [] });
             if (mockWsInstance && mockWsInstance.onmessage) {
                 mockWsInstance.onmessage({ data: patchMsg });
             }

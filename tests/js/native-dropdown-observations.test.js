@@ -27,7 +27,7 @@ async function setup() {
     const requests = [];
     dom.window.fetch = async (_url, options) => {
         requests.push(JSON.parse(options.body));
-        return {ok: true, json: async () => ({type: 'noop'})};
+        return {ok: true, json: async () => ({type: 'render'})};
     };
     dom.window.eval(client);
     await tick();
@@ -71,7 +71,7 @@ it('coalesces pending visibility to its latest value; another menu reports in or
         const finishes = [];
         dom.window.fetch = (_url, options) => {
             requests.push(JSON.parse(options.body));
-            return new Promise(resolve => finishes.push(() => resolve({ok: true, json: async () => ({type: 'noop'})})));
+            return new Promise(resolve => finishes.push(() => resolve({ok: true, json: async () => ({type: 'render'})})));
         };
         toggle('one', true);
         toggle('one', false);

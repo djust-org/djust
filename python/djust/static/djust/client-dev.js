@@ -120,7 +120,7 @@
         // Override handleMessage to add hot reload logging and visual feedback
         window.djust.LiveViewWebSocket.prototype.handleMessage = function(data) {
             // Log hot reload patches
-            if (data.type === 'patch' && data.hotreload) {
+            if (data.type === 'render' && data.hotreload) {
                 const fileName = data.file.split('/').pop();
                 const patchCount = data.patches?.length || 0;
 

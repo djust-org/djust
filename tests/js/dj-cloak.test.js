@@ -3,6 +3,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { PROTOCOL } from './_helpers.js';
 import { JSDOM } from 'jsdom';
 import fs from 'fs';
 
@@ -74,7 +75,7 @@ describe('dj-cloak', () => {
         ws.connect('ws://localhost/ws/live/');
         ws.ws.onopen({ type: 'open' });
 
-        await ws.handleMessage({ type: 'connect', session_id: 'test-session' });
+        await ws.handleMessage({ type: 'connect', protocol: PROTOCOL, session_id: 'test-session' });
         ws.skipMountHtml = true;
         await ws.handleMessage({ type: 'mount', view: 'test.views.TestView', html: '<div>content</div>', version: 1 });
 
@@ -117,7 +118,7 @@ describe('dj-cloak', () => {
         ws.connect('ws://localhost/ws/live/');
         ws.ws.onopen({ type: 'open' });
 
-        await ws.handleMessage({ type: 'connect', session_id: 'test-session' });
+        await ws.handleMessage({ type: 'connect', protocol: PROTOCOL, session_id: 'test-session' });
         ws.skipMountHtml = true;
 
         await expect(

@@ -14,6 +14,7 @@
  */
 
 import { afterEach, describe, expect, it } from 'vitest';
+import { PROTOCOL } from './_helpers.js';
 import { JSDOM } from 'jsdom';
 import { readFileSync } from 'fs';
 import { setTimeout as nativeSleep } from 'node:timers/promises';
@@ -84,7 +85,7 @@ async function mountOtherView(win, { prerendered }) {
     const ws = new win.djust.LiveViewWebSocket();
     ws.connect('ws://localhost/ws/live/');
     ws.ws.onopen({ type: 'open' });
-    await ws.handleMessage({ type: 'connect', session_id: 's' });
+    await ws.handleMessage({ type: 'connect', protocol: PROTOCOL, session_id: 's' });
     ws.skipMountHtml = prerendered;
     await ws.handleMessage({
         type: 'mount',

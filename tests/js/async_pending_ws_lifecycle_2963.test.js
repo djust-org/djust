@@ -103,11 +103,11 @@ describe('async_pending loading lifecycle over the socket (#2963)', () => {
         ws.sendEvent('generate', {});
         const ref = sentMessages.filter(m => m.type === 'event')[0].ref;
 
-        await ws.handleMessage({ type: 'noop', ref, async_pending: true, async_batch: 'b1' });
+        await ws.handleMessage({ type: 'render', ref, async_pending: true, async_batch: 'b1' });
         expect(loading(dom)).toBe(true);
 
         await ws.handleMessage({
-            type: 'patch', patches: [], version: 2, event_name: 'generate', source: 'async',
+            type: 'render', patches: [], version: 2, event_name: 'generate', source: 'async',
         });
         await ws.handleMessage({ type: 'async_complete', async_batch: 'b1' });
         expect(loading(dom)).toBe(false);
@@ -122,13 +122,13 @@ describe('async_pending loading lifecycle over the socket (#2963)', () => {
         const ref = sentMessages.filter(m => m.type === 'event')[0].ref;
 
         await ws.handleMessage({
-            type: 'patch', patches: [], version: 2, event_name: 'generate',
+            type: 'render', patches: [], version: 2, event_name: 'generate',
             source: 'event', ref, async_pending: true, async_batch: 'b2',
         });
         expect(loading(dom)).toBe(true);
 
         await ws.handleMessage({
-            type: 'patch', patches: [], version: 3, event_name: 'generate', source: 'async',
+            type: 'render', patches: [], version: 3, event_name: 'generate', source: 'async',
         });
         await ws.handleMessage({ type: 'async_complete', async_batch: 'b2' });
         expect(loading(dom)).toBe(false);
@@ -142,7 +142,7 @@ describe('async_pending loading lifecycle over the socket (#2963)', () => {
         ws.sendEvent('generate', {});
         const ref = sentMessages.filter(m => m.type === 'event')[0].ref;
 
-        await ws.handleMessage({ type: 'noop', ref });
+        await ws.handleMessage({ type: 'render', ref });
         expect(loading(dom)).toBe(false);
     });
 });

@@ -104,15 +104,15 @@ describe('Tick/async patch version sequencing (#2829)', () => {
         ws.sendEvent('click', { n: 2 });
 
         // Event A's response: v2. Applied, B still pending.
-        await ws.handleMessage({ type: 'patch', patches: [], version: 2, source: 'event', ref: refA });
+        await ws.handleMessage({ type: 'render', patches: [], version: 2, source: 'event', ref: refA });
 
         // The tick's frame: v3. Server-initiated, arrives while B is pending,
         // so the client buffers it and never applies its version.
-        await ws.handleMessage({ type: 'patch', patches: [], version: 3, source: 'tick' });
+        await ws.handleMessage({ type: 'render', patches: [], version: 3, source: 'tick' });
 
         // Event B's response: v4. The server's counter is monotonic, so v4 is
         // correct — the client's view is the thing that is stale.
-        await ws.handleMessage({ type: 'patch', patches: [], version: 4, source: 'event', ref: refA + 1 });
+        await ws.handleMessage({ type: 'render', patches: [], version: 4, source: 'event', ref: refA + 1 });
 
         // THE SYMPTOM: a spurious full-HTML recovery for a sequence that is
         // entirely valid on the wire.
@@ -132,7 +132,7 @@ describe('Tick/async patch version sequencing (#2829)', () => {
 
         ws.sendEvent('click', { n: 1 });
         const refA = getSeqState().pendingEventRef;
-        await ws.handleMessage({ type: 'patch', patches: [], version: 2, source: 'event', ref: refA });
+        await ws.handleMessage({ type: 'render', patches: [], version: 2, source: 'event', ref: refA });
 
         expect(requestHtmlCount(sentMessages)).toBe(0);
     });
@@ -148,11 +148,11 @@ describe('Tick/async patch version sequencing (#2829)', () => {
 
         ws.sendEvent('click', { n: 1 });
         const refA = getSeqState().pendingEventRef;
-        await ws.handleMessage({ type: 'patch', patches: [], version: 2, source: 'event', ref: refA });
+        await ws.handleMessage({ type: 'render', patches: [], version: 2, source: 'event', ref: refA });
 
         // v3 is never delivered — lost in transit, not deferred by us. The gap
         // is real corruption and MUST still recover.
-        await ws.handleMessage({ type: 'patch', patches: [], version: 4, source: 'event', ref: refA + 1 });
+        await ws.handleMessage({ type: 'render', patches: [], version: 4, source: 'event', ref: refA + 1 });
 
         expect(
             requestHtmlCount(sentMessages),
@@ -173,9 +173,9 @@ describe('Tick/async patch version sequencing (#2829)', () => {
         const refA = getSeqState().pendingEventRef;
 
         // v2 is lost; v3 is buffered and DECLINED (non-contiguous).
-        await ws.handleMessage({ type: 'patch', patches: [], version: 3, source: 'tick' });
+        await ws.handleMessage({ type: 'render', patches: [], version: 3, source: 'tick' });
         // The window closes with a versionless noop.
-        await ws.handleMessage({ type: 'noop', ref: refA });
+        await ws.handleMessage({ type: 'render', ref: refA });
 
         expect(
             requestHtmlCount(sentMessages),
@@ -189,7 +189,7 @@ describe('Tick/async patch version sequencing (#2829)', () => {
 
         ws.sendEvent('click', { n: 1 });
         const refA = getSeqState().pendingEventRef;
-        await ws.handleMessage({ type: 'patch', patches: [], version: 2, source: 'event', ref: refA });
+        await ws.handleMessage({ type: 'render', patches: [], version: 2, source: 'event', ref: refA });
 
         // The strip is a shared helper called at each transport's inbound
         // entry (WebSocket, SSE, HTTP fallback), so by the time the frame
@@ -197,7 +197,7 @@ describe('Tick/async patch version sequencing (#2829)', () => {
         // wire-supplied one. The caller-set pin below keeps a future transport
         // from omitting it.
         await ws.handleMessage({
-            type: 'patch', patches: [], version: 4, source: 'event', ref: refA + 1,
+            type: 'render', patches: [], version: 4, source: 'event', ref: refA + 1,
             _deferred: true, // hostile/buggy server trying to skip the check
         });
 
@@ -221,8 +221,8 @@ describe('Tick/async patch version sequencing (#2829)', () => {
         const refA = getSeqState().pendingEventRef;
 
         // v2 never arrives.
-        await ws.handleMessage({ type: 'patch', patches: [], version: 3, source: 'tick' });
-        await ws.handleMessage({ type: 'patch', patches: [], version: 4, source: 'event', ref: refA });
+        await ws.handleMessage({ type: 'render', patches: [], version: 3, source: 'tick' });
+        await ws.handleMessage({ type: 'render', patches: [], version: 4, source: 'event', ref: refA });
 
         // ≥1, not exactly 1: with the contiguity guard the gap is now visible
         // to BOTH the closing frame (strict check) and the flush (the declined

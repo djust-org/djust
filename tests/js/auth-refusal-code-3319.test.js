@@ -78,7 +78,7 @@ describe('#3319 refusal code on the WebSocket client', () => {
     it('a stale refusal does not label a later close', async () => {
         const c = await wsClient();
         await c.send({ type: 'error', error: 'Permission denied', code: 'permission_denied' });
-        await c.send({ type: 'noop' });
+        await c.send({ type: 'render' });
         c.close(4403);
         expect(c.refused[0].error_code).toBeNull();
     });

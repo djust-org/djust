@@ -23,19 +23,19 @@ function createDom() {
     return dom;
 }
 
-describe.each(['LiveViewWebSocket', 'LiveViewSSE'])('%s layout frame', (transportName) => {
+describe.each(['LiveViewWebSocket', 'LiveViewSSE'])('%s layout effect of a render frame', (transportName) => {
     it('swaps the layout and keeps the live root', async () => {
         const dom = createDom();
         try {
             const { window } = dom;
             const root = window.document.querySelector('[dj-root]');
             const transport = new window.djust[transportName]();
-            await transport.handleMessage({
-                type: 'layout',
+            await transport.handleMessage({ type: 'render', effects: [{
+                kind: 'layout',
                 path: 'layouts/fullscreen.html',
                 html: '<!doctype html><html><head></head><body>' +
                     '<header id="new">NEW</header><div dj-root></div></body></html>',
-            });
+            }] });
             expect(window.document.getElementById('new')).not.toBeNull();
             expect(window.document.getElementById('old')).toBeNull();
             expect(window.document.querySelector('[dj-root]')).toBe(root);

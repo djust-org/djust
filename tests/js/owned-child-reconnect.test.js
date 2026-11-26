@@ -29,7 +29,7 @@ for (const transport of ['ws', 'sse', 'http']) {
                 } else {
                     connection = {handleMessage: async (data) => {
                         w.fetch = async () => ({ok: true, status: 200,
-                            headers: {get: () => 'application/json'}, json: async () => data});
+                            headers: {get: (name) => (name.toLowerCase() === 'content-type' ? 'application/json' : null)}, json: async () => data});
                         await w.djust.handleEvent('refresh', {});
                     }};
                 }

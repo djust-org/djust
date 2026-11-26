@@ -3034,7 +3034,8 @@
 
             // Match response to pending events and capture completed event
             if (payload && this._pendingEvents) {
-                const isEventResponse = payload.type === 'patch' || payload.type === 'html_update' || payload.type === 'error' || payload.type === 'noop';
+                // An answer to an event names its request (#3658).
+                const isEventResponse = (payload.type === 'render' && payload.ref != null) || payload.type === 'error';
                 if (isEventResponse) {
                     // Find the most recent pending event (FIFO)
                     const keys = Object.keys(this._pendingEvents);

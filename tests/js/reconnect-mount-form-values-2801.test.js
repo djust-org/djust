@@ -78,7 +78,7 @@ for (const prerendered of [true, false]) {
                 expect(d.querySelector('#forced').value).toBe('');
                 expect(w.djust._isReconnect).toBe(false);
                 const eventCount = events.length;
-                await socket.handleMessage({ type: 'html_update', html: `<div dj-root dj-view="test.Editor">${form}</div>`, version: events.length + 1 });
+                await socket.handleMessage({ type: 'render', html: `<div dj-root dj-view="test.Editor">${form}</div>`, version: events.length + 1 });
                 await settle(w);
                 expect(d.querySelector('#body').value).toBe('');
                 expect(events).toHaveLength(eventCount);

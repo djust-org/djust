@@ -367,7 +367,7 @@ describe('dj-form-pending', () => {
             expect(resolved).toBe(false);
 
             // Simulate server response with matching ref
-            await ws.handleMessage({ type: 'noop', ref: 1 });
+            await ws.handleMessage({ type: 'render', ref: 1 });
 
             // Now the Promise should be resolved
             await nativeSleep(10);

@@ -55,7 +55,7 @@ function normalized(doc, root) {
     return root.innerHTML;
 }
 
-describe('compression-fallback html_update keeps the baseline (#4229)', () => {
+describe('a compression-fallback html render keeps the baseline (#4229)', () => {
     it('the recorded server frames leave the DOM of a fresh render, with no recovery', async () => {
         const { dom, sent } = createDom();
         const ws = new dom.window.djust.LiveViewWebSocket();
@@ -64,7 +64,10 @@ describe('compression-fallback html_update keeps the baseline (#4229)', () => {
         ws.viewMounted = true;
         await ws.handleMessage({ type: 'mount', view: 't.Grid', ...fixture.mount });
 
-        expect(fixture.frames.map((f) => f.type)).toEqual(['html_update', 'patch', 'patch']);
+        // One render frame per turn (#3658): the compression fallback's whole
+        // HTML, then two patch frames.
+        expect(fixture.frames.map((f) => [f.type, Array.isArray(f.patches) ? 'patches' : 'html']))
+            .toEqual([['render', 'html'], ['render', 'patches'], ['render', 'patches']]);
         for (const frame of fixture.frames) await ws.handleMessage(frame);
 
         expect(sent.filter((m) => m.type === 'request_html')).toEqual([]);
@@ -82,10 +85,10 @@ describe('compression-fallback html_update keeps the baseline (#4229)', () => {
         ws.ws = new dom.window.WebSocket();
         ws.viewMounted = true;
         await ws.handleMessage({ type: 'mount', view: 't.Grid', version: 1, html: inner(0, 'start') });
-        await ws.handleMessage({ type: 'html_update', html: inner(1000, 'start'), version: 2, source: 'event' });
+        await ws.handleMessage({ type: 'render', html: inner(1000, 'start'), version: 2, source: 'event' });
         expect(sent.filter((m) => m.type === 'request_html')).toEqual([]);
         // What a reset Rust counter put on the wire over SSE before the fix.
-        await ws.handleMessage({ type: 'html_update', html: inner(1000, 'after'), version: 1, source: 'event' });
+        await ws.handleMessage({ type: 'render', html: inner(1000, 'after'), version: 1, source: 'event' });
         expect(sent.filter((m) => m.type === 'request_html').length).toBeGreaterThan(0);
     });
 });

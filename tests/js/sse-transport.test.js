@@ -55,7 +55,7 @@ describe('LiveViewSSE', () => {
         mockEventSource.onopen();
         expect(sse._pendingViewPath).toBeNull();
         await sse.handleMessage({
-            type: 'noop', source: 'event', view: 'myapp.views.HomeView',
+            type: 'render', source: 'event', view: 'myapp.views.HomeView',
             state_snapshot_signed: 'latest-signed-token',
         });
         expect(window.djust._clientState['myapp.views.HomeView']).toBe('latest-signed-token');
@@ -358,7 +358,7 @@ describe('LiveViewSSE', () => {
             sse.connect('myapp.views.HomeView');
 
             // Simulate incoming message via onmessage
-            const msgData = JSON.stringify({ type: 'noop' });
+            const msgData = JSON.stringify({ type: 'render' });
             mockEventSource.onmessage({ data: msgData });
 
             expect(sse.stats.received).toBe(1);

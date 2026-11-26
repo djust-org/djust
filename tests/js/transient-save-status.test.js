@@ -36,7 +36,7 @@ describe.each(['LiveViewWebSocket', 'LiveViewSSE'])('%s transient saves', name =
             expect(errors[0].view).toBe('test.View');
             expect(status(dom)?.textContent).toContain('still saving');
             expect(overlay(dom)).toBeNull();
-            await transport.handleMessage({type: 'html_update', source: 'async', view: 'test.View',
+            await transport.handleMessage({type: 'render', source: 'async', view: 'test.View',
                 html: '<div dj-root dj-view="test.View">saved</div>'});
             expect(dom.window.document.querySelector('[dj-root]').textContent).toBe('saved');
             expect(status(dom)).toBeNull();
@@ -58,9 +58,9 @@ describe.each(['LiveViewWebSocket', 'LiveViewSSE'])('%s transient saves', name =
             await transport.handleMessage({type: 'error', error: 'saving child', code: 'state_error',
                 transient: true, view: 'test.Child', target_id: 'child'});
             expect(errors[0]).toMatchObject({transient: true, view: 'test.Child', target_id: 'child'});
-            await transport.handleMessage({type: 'patch', patches: [], view: 'test.View'});
+            await transport.handleMessage({type: 'render', patches: [], view: 'test.View'});
             expect(status(dom)).not.toBeNull();
-            await transport.handleMessage({type: 'patch', patches: [], view: 'test.Child', target_id: 'child'});
+            await transport.handleMessage({type: 'render', patches: [], view: 'test.Child', target_id: 'child'});
             expect(status(dom)).toBeNull();
         } finally { dom.window.close(); }
     });
@@ -145,11 +145,11 @@ describe('transient save display', () => {
         const dom = page();
         try {
             const transport = new dom.window.djust.LiveViewWebSocket();
-            await transport.handleMessage({type: 'patch', patches: [], version: 1, view: 'test.View'});
+            await transport.handleMessage({type: 'render', patches: [], version: 1, view: 'test.View'});
             error(dom);
-            await transport.handleMessage({type: 'patch', patches: [], version: 3, view: 'test.View'});
+            await transport.handleMessage({type: 'render', patches: [], version: 3, view: 'test.View'});
             expect(status(dom)).not.toBeNull();
-            await transport.handleMessage({type: 'patch', patches: [], version: 2, view: 'test.View'});
+            await transport.handleMessage({type: 'render', patches: [], version: 2, view: 'test.View'});
             expect(status(dom)).toBeNull();
         } finally { dom.window.close(); }
     });
@@ -158,11 +158,11 @@ describe('transient save display', () => {
         try {
             const transport = new dom.window.djust.LiveViewWebSocket();
             error(dom);
-            await transport.handleMessage({type: 'html_update', view: 'test.View'});
+            await transport.handleMessage({type: 'render', view: 'test.View'});
             expect(status(dom)).not.toBeNull();
-            await transport.handleMessage({type: 'patch', patches: [], broadcast: true, view: 'test.View'});
+            await transport.handleMessage({type: 'render', patches: [], broadcast: true, view: 'test.View'});
             expect(status(dom)).not.toBeNull();
-            await transport.handleMessage({type: 'patch', patches: [], view: 'test.View'});
+            await transport.handleMessage({type: 'render', patches: [], view: 'test.View'});
             expect(status(dom)).toBeNull();
         } finally { dom.window.close(); }
     });

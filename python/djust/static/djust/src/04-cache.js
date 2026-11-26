@@ -29,7 +29,7 @@ const _pendingTriggerEls = new Map();    // ref -> trigger element for loading s
 const _pendingEventResolvers = new Map(); // ref -> resolve() for Promise-based sendEvent (#1315)
 const _pendingEventOwners = new Map();   // ref -> transport instance
 const _pendingAsyncBatches = new Map();  // opaque server batch -> originating control
-const _tickBuffer = [];                  // buffered server-initiated patches during pending events
+const _tickBuffer = [];                  // server-initiated render frames held during pending events
 const _tickBufferOwners = new WeakMap();
 
 function hasPendingEventRequests(transport) {
@@ -64,12 +64,15 @@ async function flushServerUpdates(transport) {
     while (!hasPendingEventRequests(transport)) {
         const [frame] = takeServerUpdates(transport, 1);
         if (!frame) return;
-        // A frame buffered for a slot is replayed in that slot's context (#3252).
+        // A held `render` frame applies as it would have (#3658): its DOM
+        // part, in the context of its slot when it names one (#3252), then
+        // its effects, page-level. No nested flush: this loop is the flush.
         if (typeof frame.target_id === 'string' && frame.target_id) {
-            await withSlot(frame.target_id, () => handleServerResponse(frame, null, null, transport));
+            await withSlot(frame.target_id, () => applyRenderDom(transport, frame));
         } else {
-            await handleServerResponse(frame, null, null, transport);
+            await applyRenderDom(transport, frame);
         }
+        applyEffects(frame.effects);
     }
 }
 

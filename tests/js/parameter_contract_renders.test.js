@@ -31,7 +31,7 @@ function setup(name) {
     const transport = new dom.window.djust[name]();
     transport.primaryViewPath = 'app.Page';
     const lookup = (path = 'app.Page') => dom.window.lookupContract(transport, path, null, null, 'choose');
-    const frame = (extra = {}) => ({type: 'html_update', version: 2,
+    const frame = (extra = {}) => ({type: 'render', version: 2,
         html: '<div dj-root dj-view="app.Page"><span>new</span></div>',
         parameter_contract_view: 'app.Page', parameter_contracts: manifest('str'), ...extra});
     const mount = () => transport.handleMessage({type: 'mount', view: 'app.Page',
@@ -68,7 +68,7 @@ describe.each(['LiveViewWebSocket', 'LiveViewSSE'])('%s applied contracts', name
         const {dom, transport, lookup, frame, mount} = setup(name);
         try {
             await mount();
-            await transport.handleMessage(frame({type: 'patch', patches: [], html: undefined}));
+            await transport.handleMessage(frame({type: 'render', patches: [], html: undefined}));
             expect(lookup().parameters[0].type).toBe('str');
             await transport.handleMessage(frame({version: 3, parameter_contracts: null}));
             expect(lookup()).toBe(null);
@@ -104,7 +104,7 @@ describe.each(['LiveViewWebSocket', 'LiveViewSSE'])('%s applied contracts', name
             await mount();
             const seen = [];
             dom.window.onReinit = () => seen.push(lookup().parameters[0].type);
-            await transport.handleMessage(frame({type: 'embedded_update', view_id: 'child',
+            await transport.handleMessage(frame({type: 'render', view_id: 'child',
                 html: '<span>child new</span>', source: 'async'}));
             expect(lookup().parameters[0].type).toBe('str');
             expect(seen).toContain('str');
@@ -116,7 +116,7 @@ describe.each(['LiveViewWebSocket', 'LiveViewSSE'])('%s applied contracts', name
         try {
             await mount();
             const request = dom.window.registerRequest(transport, 'choose', null);
-            await transport.handleMessage(frame({type: 'embedded_update', view_id: 'child',
+            await transport.handleMessage(frame({type: 'render', view_id: 'child',
                 ref: request.ref, html: '<span>child new</span>',
                 parameter_contracts: {version: 99}}));
             expect(() => lookup()).toThrow('Invalid public parameter contracts');
@@ -128,7 +128,7 @@ describe.each(['LiveViewWebSocket', 'LiveViewSSE'])('%s applied contracts', name
         const {dom, transport, lookup, frame, mount} = setup(name);
         try {
             await mount();
-            await transport.handleMessage(frame({type: 'embedded_update', view_id: 'removed',
+            await transport.handleMessage(frame({type: 'render', view_id: 'removed',
                 html: '<span>child new</span>', source: 'async'}));
             expect(lookup().parameters[0].type).toBe('int');
         } finally { dom.window.close(); }
@@ -138,7 +138,7 @@ describe.each(['LiveViewWebSocket', 'LiveViewSSE'])('%s applied contracts', name
         const {dom, transport, lookup, frame, mount} = setup(name);
         try {
             await mount();
-            await transport.handleMessage(frame({type: 'patch', html: undefined, patches: [
+            await transport.handleMessage(frame({type: 'render', html: undefined, patches: [
                 {type: 'SetText', path: [0, 0], text: 'partial'},
                 {type: 'SetText', path: [99], text: 'invalid'},
             ]}));
@@ -186,9 +186,9 @@ it('keeps buffered snapshots on the originating transport until replay', async (
     try {
         await mount();
         const request = dom.window.registerRequest(transport, 'choose', null);
-        await transport.handleMessage(frame({type: 'patch', patches: [], html: undefined, source: 'tick'}));
+        await transport.handleMessage(frame({type: 'render', patches: [], html: undefined, source: 'tick'}));
         expect(lookup().parameters[0].type).toBe('int');
-        await transport.handleMessage({type: 'noop', ref: request.ref});
+        await transport.handleMessage({type: 'render', ref: request.ref});
         expect(lookup().parameters[0].type).toBe('str');
     } finally { dom.window.close(); }
 });
@@ -198,11 +198,11 @@ it.each(['root', 'child'])('does not regress a newer %s snapshot when replaying 
     try {
         await mount();
         const request = dom.window.registerRequest(transport, 'choose', null);
-        await transport.handleMessage(frame({type: 'patch', patches: [], html: undefined, source: 'tick'}));
+        await transport.handleMessage(frame({type: 'render', patches: [], html: undefined, source: 'tick'}));
         const newer = target === 'root'
-            ? frame({type: 'patch', patches: [], html: undefined, version: 3, ref: request.ref,
+            ? frame({type: 'render', patches: [], html: undefined, version: 3, ref: request.ref,
                 parameter_contracts: manifest('bool')})
-            : frame({type: 'embedded_update', view_id: 'child', version: undefined,
+            : frame({type: 'render', view_id: 'child', version: undefined,
                 html: '<span>child new</span>', ref: request.ref, parameter_contracts: manifest('bool')});
         await transport.handleMessage(newer);
         expect(lookup().parameters[0].type).toBe('bool');
@@ -215,8 +215,8 @@ it('does not let an older buffered snapshot replace a newer legacy render', asyn
     try {
         await transport.handleMessage({type: 'mount', view: 'app.Page', version: 1});
         const request = dom.window.registerRequest(transport, 'choose', null);
-        await transport.handleMessage(frame({type: 'patch', patches: [], html: undefined, source: 'tick'}));
-        await transport.handleMessage({type: 'patch', version: 3, patches: [], ref: request.ref});
+        await transport.handleMessage(frame({type: 'render', patches: [], html: undefined, source: 'tick'}));
+        await transport.handleMessage({type: 'render', version: 3, patches: [], ref: request.ref});
         expect(lookup()).toBe(null);
     } finally { dom.window.close(); }
 });
