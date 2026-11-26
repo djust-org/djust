@@ -1,38 +1,38 @@
 """Rust template engine registration for djust-components.
 
-One render path per component tag where it costs nothing (S3 of
-``docs/reviews/2026-11-11-djust-2-consolidated.md``, decided 2026-11-12): a ``djust_components`` tag
-renders under the Rust engine through the ``{% load %}`` bridge (#2547, ``djust.template_libraries``),
-which runs the Python tag's OWN compile function and renders the Django node it returns, so the output
-is the Python tag's by construction. The tags are registered here, at ``ready()``, so a Rust template
-uses them without ``{% load djust_components %}``.
+One render path per component tag (S3 of ``docs/reviews/2026-11-11-djust-2-consolidated.md``, decided
+2026-11-12, completed by #4331): every ``djust_components`` tag has exactly one renderer, and no tag
+is drawn by two implementations that can drift. Either
 
-A native twin (a hand-written handler in this module) is kept only where a benchmark earns it or the
-bridge lacks a capability the tag needs, and each kept twin is pinned against its Python tag
-(``python/tests/test_component_single_render_path.py``), its known divergences listed there:
+* the tag renders under the Rust engine through the ``{% load %}`` bridge (#2547,
+  ``djust.template_libraries``), which runs the Python tag's OWN compile function and renders the
+  Django node it returns, so the output is the Python tag's by construction (registered here, at
+  ``ready()``, so a Rust template uses the tag without ``{% load djust_components %}``); or
+* the tag has a native handler in this module, and the Django tag is a thin wrapper: it resolves its
+  operands, renders its body where it has one, and calls the handler (``render_kwargs`` /
+  ``python_operands``), so both engines draw the same bytes. These are:
 
-* the core layout tags (``app_shell``, ``app_sidebar``, ``app_header``, ``app_content``): the
-  root-proof protocol (``_render_root_parts``, ``core_root_layout_object`` in
-  ``crates/djust_templates/src/registry.rs``), which a bridged node cannot take part in;
-* the inclusion tags ``badge``, ``avatar``, ``progress``, ``pagination``: through the
-  bridge each use renders an inclusion template through the backend, measured 4 to 8x slower;
-* ``data_table``: the one implementation on both engines (#3869). The Django engine's tag is a
-  simple tag that calls :func:`render_data_table`, which hands :class:`DataTableHandler` the same
-  operands the Rust engine does, so a template draws the same table (and every native feature:
-  expandable rows, editable columns, export ...) under either engine; there is no
-  ``djust_components/table.html``;
-* the block tags whose Django node reads its children (``accordion``, ``sidebar``, ``nav_menu``,
-  ``toolbar``, ``filter_bar``, ``page_header``) and their child tags: the bridge can
-  only serve them by handing the body to Django's engine, which cannot compile a Rust-only tag
-  (``{% call %}``, ``{% component %}``, ``{% slot %}``, ``{% dj_suspense %}``) and loses the
-  ``{% if %}`` boundary markers the Rust renderer emits. ``tabs`` and ``split_pane`` already took that
-  raw-body route before (``RAW_BODY_TAGS``), and ``form_array`` takes it since #4331: it repeats its
-  body once per row with the row pushed, which a body rendered once cannot do. Its markup is still
-  drawn by one handler, :class:`FormArrayHandler`, which the Django node calls.
+  * the core layout tags (``app_shell``, ``app_sidebar``, ``app_header``, ``app_content``): the
+    root-proof protocol (``_render_root_parts``, ``core_root_layout_object`` in
+    ``crates/djust_templates/src/registry.rs``), which a bridged node cannot take part in;
+  * ``badge``, ``avatar``, ``progress``, ``pagination``: through the bridge each use rendered an
+    inclusion template through the backend, measured 4 to 8x slower; the templates are gone;
+  * ``data_table`` (#3869): the Django tag calls :func:`render_data_table`, which hands
+    :class:`DataTableHandler` the same operands the Rust engine does; there is no
+    ``djust_components/table.html``;
+  * the block tags whose node reads its children (``accordion``, ``sidebar``, ``nav_menu``,
+    ``toolbar``, ``filter_bar``, ``page_header``) and their child tags: the bridge can only serve
+    them by handing the body to Django's engine, which cannot compile a Rust-only tag
+    (``{% call %}``, ``{% component %}``, ``{% slot %}``, ``{% dj_suspense %}``) and loses the
+    ``{% if %}`` boundary markers the Rust renderer emits.
 
-Since #4331 the Django nodes of ``accordion`` / ``accordion_item`` and ``app_shell`` render their
-body and call the handler here (``render_kwargs``), as ``data_table`` does since #3869, so each
-draws the same bytes under either engine.
+``tabs``, ``split_pane`` and ``form_array`` take the raw-body route (``RAW_BODY_TAGS``): Django's
+engine compiles the body. ``form_array`` repeats its body once per row with the row pushed, which a
+body rendered once cannot do; its markup is drawn by one handler, :class:`FormArrayHandler`.
+
+The parity ratchet (``scripts/template-library-parity-baseline.csv``) is ``IDENTICAL`` for every tag
+but ``filter_search`` outside a bar (``KNOWN_DIVERGENCES`` in
+``python/tests/test_component_single_render_path.py``).
 
 Inline handlers implement: render(self, args, context) -> str
 Block handlers implement:  render(self, args, content, context) -> str

@@ -1189,6 +1189,36 @@ The other simple classes (`Accordion`, `Avatar`, `Breadcrumb`, `ButtonGroup`,
 `Pagination`, `Radio`, `Range`, `Select`, `Switch`, `Table`, `Tabs`, `TextArea`,
 `Toast`, `Tooltip`) have no twin in `djust.components.ui` and draw what they drew.
 
+### Markup that changed: one renderer per component tag
+
+Every `djust_components` tag now has one renderer, so both template engines
+draw the same bytes ([#4331](https://github.com/djust-org/djust/issues/4331)).
+Where the two engines used to disagree, one side's markup is gone. A stylesheet or
+test that targets the old markup needs the new selector:
+
+- **Rust engine, `badge`, `avatar`, `progress`, `pagination`.** They draw the
+  `dj-*` BEM markup the Django engine drew. The old Rust classes `badge-*`,
+  `avatar-image`, `progress-wrapper` and `pagination-btn` are gone from these
+  tags. The inclusion templates `djust_components/badge.html`, `avatar.html`,
+  `progress.html` and `pagination.html` are removed, so a project template of
+  the same name no longer overrides them.
+- **Django engine, `sidebar`, `nav_menu`, `toolbar`, `filter_bar`, `app_shell`.**
+  They draw the native markup. `toolbar` groups its children between separators
+  in `dj-toolbar__group`; the default `filter_bar` id is `filter-bar`; the
+  default `toolbar` id is `toolbar-<hash>`.
+- **`accordion`.** The Rust engine renamed its classes to the `dj-accordion*`
+  BEM classes the Django engine draws. The panel is always drawn and a closed one
+  carries `hidden`; the header button has `aria-controls` and the panel
+  `role="region"`.
+- **Standalone `sidebar_item`, `nav_item`, `accordion_item`.** Outside their
+  parent tag they carry an invisible marker comment, so the Rust engine can tell
+  where the item sits.
+- **Marked-safe operands.** A `mark_safe` value passed as a tag argument is
+  escaped by both engines, as it already was in an attribute.
+- **`form_array`.** Its body is compiled by Django's engine on both engines, so a
+  Rust-only tag inside it (`{% call %}`, `{% component %}`) is no longer
+  available there.
+
 ### State a legacy view no longer keeps
 
 A 1.3 legacy view kept these between requests and reconnects. None of them
@@ -1528,4 +1558,4 @@ removed setting at startup, and `exposure_policy = "legacy"`,
 module that states it is imported. `djust_exposure_inventory` lists any view
 still on `[policy: legacy]`; run `--fix` on it.
 
-<!-- generated-doc prose-sha256: f57b6679be0e -->
+<!-- generated-doc prose-sha256: 571fec9b15e4 -->
