@@ -1013,7 +1013,9 @@ reports = json.loads(out.getvalue())["reports"]
 missing = sorted({m["name"] for r in reports for m in r.get("missing", [])})
 
 from django.test import Client
-client = Client()
+from djust._protocol import PROTOCOL_VERSION
+# The shipped client sends its wire version on every HTTP POST (#3658 slice 3).
+client = Client(HTTP_X_DJUST_PROTOCOL=str(PROTOCOL_VERSION))
 page = client.get("/")
 html = page.content.decode()
 answer = client.post(

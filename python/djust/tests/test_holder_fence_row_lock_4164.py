@@ -11,8 +11,8 @@ write, while a newer holder takes the tab (``_row_lock_race``):
   one never lands. Runs when ``DJUST_PG_RACE_DATABASE`` holds a Django
   ``DATABASES`` entry as JSON (and the driver is importable); skipped
   otherwise. ``DJUST_MYSQL_RACE_DATABASE`` does the same for MySQL. On
-  ``cached_db`` the database row is checked; its cache is written after the
-  commit, outside the lock, and can be left with the older copy.
+  ``cached_db`` the cache entry is cleared after the commit, outside the
+  lock, so a late cache step cannot leave an older copy there (#4324).
 
 Each run is a separate process with its own settings, so the race uses the
 database a deployment would, never the suite's test database.
@@ -80,12 +80,10 @@ def test_under_the_row_lock_the_late_write_never_lands(server, engine):
     out = _race(_configured(server), int(os.environ.get("DJUST_RACE_ROUNDS", "20")), engine)
     assert out["row_lock"] is True
     assert out["db_violations"] == 0, out
-    if engine == "db":
-        assert out["violations"] == 0, out
-    # cached_db: the database row is right; the cache write runs after the
-    # commit, outside the lock (test_session_merge_3347 pins that), so a late
-    # writer's cache write can land after the newer one's. Recorded in
-    # save-frequency.md, not asserted.
+    # cached_db too: its cache step runs after the commit, outside the lock
+    # (test_session_merge_3347 pins that), and is a delete, so a late one
+    # cannot leave the older copy in the cache (#4324).
+    assert out["violations"] == 0, out
     assert out["errors"] == [], out
     # The newer holder waited for the late writer's transaction.
     assert out["b_wait_avg_s"] > 0.2, out

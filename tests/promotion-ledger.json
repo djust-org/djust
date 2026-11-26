@@ -1,4 +1,21 @@
 {
   "_doc": "Tests that failed late and run early until they stay green. Maintained by scripts/promotion_ledger.py (promote / demote); see tests/early_tier.py and docs/testing-strategy.md. Fields: test (path::[Class::]test_name, parameters stripped), promoted, last_failed (ISO dates), reason, green_streak (consecutive green nightlies), pinned (never demoted or evicted).",
-  "entries": []
+  "entries": [
+    {
+      "test": "python/djust/tests/test_exposure_framework_views.py::test_a_generated_project_renders_typechecks_and_answers_an_event",
+      "promoted": "2026-11-26",
+      "last_failed": "2026-11-26",
+      "reason": "failed in the nightly main-health suite: https://github.com/djust-org/djust/actions/runs/45868490070",
+      "green_streak": 0,
+      "pinned": false
+    },
+    {
+      "test": "python/djust/tests/test_scaffold_sse_4216.py::test_a_scaffolded_project_serves_sse",
+      "promoted": "2026-11-26",
+      "last_failed": "2026-11-26",
+      "reason": "failed in the nightly main-health suite: https://github.com/djust-org/djust/actions/runs/45868490070",
+      "green_streak": 0,
+      "pinned": false
+    }
+  ]
 }
