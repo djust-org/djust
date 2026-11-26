@@ -4184,9 +4184,16 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                             // as usual, and the slot is emptied.
                             let mut item_hash: Option<u128> = None;
                             if let Some(key) = item_slot {
+                                // A hit appends the stored HTML straight from
+                                // the store, with no copy of it (#4325 C2).
                                 let found = crate::loop_cache::with_active_item_store(|store| {
                                     match store.item_hash(&item) {
-                                        Some(hash) => Some((hash, store.lookup(key, index, hash))),
+                                        Some(hash) => Some((
+                                            hash,
+                                            store.lookup_with(key, index, hash, |html| {
+                                                output.push_str(html)
+                                            }),
+                                        )),
                                         None => {
                                             store.forget(key, index);
                                             None
@@ -4195,11 +4202,8 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                                 })
                                 .flatten();
                                 match found {
-                                    Some((_, Some(html))) => {
-                                        output.push_str(&html);
-                                        continue;
-                                    }
-                                    Some((hash, None)) => item_hash = Some(hash),
+                                    Some((_, true)) => continue,
+                                    Some((hash, false)) => item_hash = Some(hash),
                                     None => {}
                                 }
                             }

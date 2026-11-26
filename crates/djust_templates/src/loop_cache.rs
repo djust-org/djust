@@ -1194,30 +1194,47 @@ impl LoopItemStore {
 
     /// The keyed 128-bit hash of a plain item value; `None` when the value
     /// is not plain data (it is then rendered and never stored).
+    ///
+    /// One walk of the value feeds both keyed hashers (#4325 C2): the same
+    /// two 64-bit halves as hashing it once per key, at half the walking.
     pub fn item_hash(&self, value: &djust_core::Value) -> Option<u128> {
-        let mut a = self.keys.0.build_hasher();
-        let mut b = self.keys.1.build_hasher();
-        if !hash_plain(value, &mut a) || !hash_plain(value, &mut b) {
+        let mut tee = TeeHasher(self.keys.0.build_hasher(), self.keys.1.build_hasher());
+        if !hash_plain(value, &mut tee) {
             return None;
         }
-        Some(((a.finish() as u128) << 64) | b.finish() as u128)
+        Some(((tee.0.finish() as u128) << 64) | tee.1.finish() as u128)
     }
 
-    /// The stored output for `index` if it was rendered from an equal value.
-    pub fn lookup(&mut self, key: u64, index: usize, hash: u128) -> Option<String> {
+    /// Hand the stored output for `index` to `emit` if it was rendered from
+    /// an equal value; `true` on a hit. The stored HTML is borrowed, not
+    /// cloned, so a hit costs no allocation (#4325 C2).
+    pub fn lookup_with(
+        &mut self,
+        key: u64,
+        index: usize,
+        hash: u128,
+        emit: impl FnOnce(&str),
+    ) -> bool {
         let found = self
             .loops
             .get(&key)
             .and_then(|l| l.items.get(index))
             .and_then(|slot| slot.as_ref())
             .filter(|(h, _)| *h == hash || self.sabotage == 1)
-            .map(|(_, html)| html.clone());
-        if found.is_some() {
+            .map(|(_, html)| html.as_str());
+        let hit = match found {
+            Some(html) => {
+                emit(html);
+                true
+            }
+            None => false,
+        };
+        if hit {
             self.hits += 1;
         } else {
             self.misses += 1;
         }
-        found
+        hit
     }
 
     pub fn store(&mut self, key: u64, index: usize, hash: u128, html: String) {
@@ -1446,6 +1463,54 @@ fn hash_body<H: Hasher>(nodes: &[Node], h: &mut H) {
     }
 }
 
+/// Feeds every write to two hashers, so one walk of a value yields both keyed
+/// halves of [`LoopItemStore::item_hash`] (#4325 C2). Each stable `Hasher`
+/// method is forwarded to the same method of both, so each half is exactly
+/// what hashing the value into that hasher alone produces (`write_str` and
+/// `write_length_prefix` are unstable to override; their defaults route
+/// through the forwarded methods, as `DefaultHasher`'s own do).
+struct TeeHasher<A, B>(A, B);
+
+macro_rules! tee_forward {
+    ($($method:ident: $ty:ty),* $(,)?) => {
+        $(
+            #[inline]
+            fn $method(&mut self, i: $ty) {
+                self.0.$method(i);
+                self.1.$method(i);
+            }
+        )*
+    };
+}
+
+impl<A: Hasher, B: Hasher> Hasher for TeeHasher<A, B> {
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        self.0.write(bytes);
+        self.1.write(bytes);
+    }
+
+    tee_forward!(
+        write_u8: u8,
+        write_u16: u16,
+        write_u32: u32,
+        write_u64: u64,
+        write_u128: u128,
+        write_usize: usize,
+        write_i8: i8,
+        write_i16: i16,
+        write_i32: i32,
+        write_i64: i64,
+        write_i128: i128,
+        write_isize: isize,
+    );
+
+    /// Not a combined hash: callers read the two halves directly.
+    fn finish(&self) -> u64 {
+        self.0.finish()
+    }
+}
+
 /// Hash a plain data value with a type tag per kind; `false` for anything
 /// that is not plain data (a live handle, an encoded object, a model, a
 /// dict view or named tuple, or a map with a non-scalar key).
@@ -1538,4 +1603,137 @@ pub fn with_active_item_store<R>(f: impl FnOnce(&mut LoopItemStore) -> R) -> Opt
         return None;
     }
     Some(f(&mut cache.item_store))
+}
+
+#[cfg(test)]
+mod item_store_one_walk_4325 {
+    //! #4325 C2: `item_hash` walks a value once through a tee of both keyed
+    //! hashers, and a hit hands the stored HTML over by borrow. Both must
+    //! decide exactly as the two-walk, cloning versions did.
+    use super::{hash_plain, LoopItemStore, TeeHasher};
+    use djust_core::{ObjectKey, Value};
+    use indexmap::IndexMap;
+    use std::hash::{BuildHasher, Hasher};
+
+    /// The pre-C2 `item_hash`: one full walk per key.
+    fn two_walks(store: &LoopItemStore, value: &Value) -> Option<u128> {
+        let mut a = store.keys.0.build_hasher();
+        let mut b = store.keys.1.build_hasher();
+        if !hash_plain(value, &mut a) || !hash_plain(value, &mut b) {
+            return None;
+        }
+        Some(((a.finish() as u128) << 64) | b.finish() as u128)
+    }
+
+    fn values() -> Vec<Value> {
+        let mut row = IndexMap::new();
+        row.insert(ObjectKey::Str("id".into()), Value::Integer(-7));
+        row.insert(ObjectKey::Int(3), Value::Float(-0.0));
+        row.insert(ObjectKey::Bool(true), Value::Bool(false));
+        row.insert(ObjectKey::None, Value::None);
+        row.insert(
+            ObjectKey::Str("tags".into()),
+            Value::List(vec![
+                Value::String("été ↑".into()),
+                Value::SafeString("<b>x</b>".into()),
+                Value::Tuple(vec![
+                    Value::Decimal("1.50".into()),
+                    Value::BigInt("1".repeat(40)),
+                ]),
+            ]),
+        );
+        vec![
+            Value::None,
+            Value::Bool(true),
+            Value::Integer(i64::MIN),
+            Value::Float(f64::NAN),
+            Value::String(String::new()),
+            Value::String("a\u{0}b".into()),
+            Value::List(vec![]),
+            Value::Object(row),
+        ]
+    }
+
+    #[test]
+    fn the_tee_hash_equals_one_walk_per_key() {
+        let store = LoopItemStore::default();
+        for value in values() {
+            assert_eq!(
+                store.item_hash(&value),
+                two_walks(&store, &value),
+                "{value:?}"
+            );
+            assert!(store.item_hash(&value).is_some());
+        }
+        // Not plain data: refused by both.
+        let mut map = IndexMap::new();
+        map.insert(ObjectKey::Str("m".into()), Value::ModelName("app.M".into()));
+        let model = Value::Object(map);
+        assert_eq!(store.item_hash(&model), two_walks(&store, &model));
+    }
+
+    #[test]
+    fn every_forwarded_write_reaches_both_halves_as_it_would_alone() {
+        let store = LoopItemStore::default();
+        let mut tee = TeeHasher(store.keys.0.build_hasher(), store.keys.1.build_hasher());
+        let mut a = store.keys.0.build_hasher();
+        let mut b = store.keys.1.build_hasher();
+        macro_rules! both {
+            ($($call:ident($v:expr)),*) => {$(
+                tee.$call($v);
+                a.$call($v);
+                b.$call($v);
+            )*};
+        }
+        both!(
+            write(b"bytes"),
+            write_u8(1),
+            write_u16(2),
+            write_u32(3),
+            write_u64(4),
+            write_u128(5),
+            write_usize(6),
+            write_i8(-1),
+            write_i16(-2),
+            write_i32(-3),
+            write_i64(-4),
+            write_i128(-5),
+            write_isize(-6)
+        );
+        std::hash::Hash::hash("a str", &mut tee);
+        std::hash::Hash::hash("a str", &mut a);
+        std::hash::Hash::hash("a str", &mut b);
+        assert_eq!(tee.0.finish(), a.finish());
+        assert_eq!(tee.1.finish(), b.finish());
+    }
+
+    #[test]
+    fn lookup_with_serves_the_stored_bytes_and_counts_as_before() {
+        let mut store = LoopItemStore::default();
+        store.set_enabled(true);
+        store.begin_render();
+        let key = 42;
+        store
+            .loops
+            .entry(key)
+            .or_default()
+            .items
+            .resize_with(2, || None);
+        let value = Value::String("v".into());
+        let hash = store.item_hash(&value).expect("plain");
+        store.store(key, 0, hash, "<li>v</li>".into());
+
+        let mut out = String::new();
+        assert!(store.lookup_with(key, 0, hash, |h| out.push_str(h)));
+        assert_eq!(out, "<li>v</li>");
+        // A different value, an empty slot, an unknown loop: misses, no emit.
+        let other = store.item_hash(&Value::String("w".into())).expect("plain");
+        assert!(!store.lookup_with(key, 0, other, |_| panic!("emitted on a miss")));
+        assert!(!store.lookup_with(key, 1, hash, |_| panic!("emitted on a miss")));
+        assert!(!store.lookup_with(7, 0, hash, |_| panic!("emitted on a miss")));
+        assert_eq!((store.hits(), store.misses()), (1, 3));
+        // Sabotage 1 still serves whatever the value now is.
+        store.set_sabotage(1);
+        assert!(store.lookup_with(key, 0, other, |_| {}));
+    }
 }
