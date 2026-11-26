@@ -7,7 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.3.4] - 2026-11-12
+## [1.3.4] - 2026-11-26
+
+### Security
+
+- **The unused `bincode` dependency is gone, and with it RUSTSEC-2025-0141 (#4219).**
+  `crates/djust_live` declared `bincode = "2.0"` but no code used it. The weekly scan of
+  `djust.cdx.json` at v1.3.3 matched the advisory (bincode is unmaintained). The dependency,
+  its lockfile entries, its SBOM components and the advisory's ignore entry in
+  `osv-scanner.toml` are removed. Nothing else changes.
 
 ### Added
 
