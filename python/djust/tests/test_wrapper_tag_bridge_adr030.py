@@ -87,8 +87,11 @@ def test_the_component_census_matches_adr_030():
     # confirm_dialog_block renders its body only when open; the startup registration
     # (`rust_handlers.bridged_handler`) routes it as a wrapper all the same, and the
     # parents that read their children take the raw-body route (`RAW_BODY_TAGS`).
-    for parent in ("tabs", "accordion", "modal", "confirm_dialog_block"):
+    for parent in ("tabs", "modal", "confirm_dialog_block"):
         assert "does not render its body" in reasons[parent], parent
+    # accordion and app_shell render their whole body since #4331 (the handler redraws or
+    # places what it finds in it), so the probe reads them as wrappers.
+    assert reasons["accordion"] is None and reasons["app_shell"] is None
     # Renders its body under a pushed variable: the one shape that would
     # diverge from Django silently on the bridge, so it must be refused.
     # nav_menu was on this side from #3873 until #4331, when it and sidebar (and their items)
@@ -103,10 +106,10 @@ def test_the_component_census_matches_adr_030():
     # counts, and the change should say which side it landed on.
     # modal_description (a wrapper: it always renders its body) is the 41st;
     # it has its own Rust block handler, so it does not need the bridge.
-    # #4331 moved four layout tags (whose Django nodes now draw their body) and sidebar /
-    # sidebar_item / nav_menu / nav_item to the wrapper side; each has its own native handler,
-    # so none of them needs the bridge either.
-    assert len(wrappers) == 49 and len(refused) == 10, (wrappers, refused)
+    # #4331 moved to the wrapper side: four layout tags (whose Django nodes now draw their
+    # body), sidebar / sidebar_item / nav_menu / nav_item / toolbar, and accordion and
+    # app_shell; each keeps its own native handler, so none of them needs the bridge.
+    assert len(wrappers) == 51 and len(refused) == 8, (wrappers, refused)
 
 
 def test_a_bridged_wrapper_renders_through_the_rust_engine(bridged_components):

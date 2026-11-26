@@ -450,66 +450,45 @@ def do_tab(parser: Any, token: Any) -> template.Node:
 # ---------------------------------------------------------------------------
 
 
+def _handler_operands(kwargs: Any, context: Any) -> dict[str, Any]:
+    """A tag's ``key=value`` arguments resolved and handed over as the Rust engine hands them to
+    its native handler (``rust_handlers._python_operand``), for a node whose markup that handler
+    draws (#4331)."""
+    from djust.components.rust_handlers import _python_operand
+
+    return {k: _python_operand(_resolve(v, context)) for k, v in kwargs.items()}
+
+
 class AccordionItemNode(template.Node):
-    def __init__(self, item_id: Any, title: Any, nodelist: Any) -> None:
-        self.item_id = item_id
-        self.title = title
-        self.nodelist = nodelist
+    """``{% accordion_item %}``: drawn by ``AccordionItemHandler`` (#4331), the one renderer."""
 
-    def render(self, context: Any) -> SafeString:
-        return self.nodelist.render(context)
-
-
-class AccordionNode(template.Node):
     def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
     def render(self, context: Any) -> SafeString:
-        kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
-        accordion_id = kw.get("id", "accordion")
-        active = kw.get("active", "")
-        event = kw.get("event", "accordion_toggle")
+        from djust.components.rust_handlers import AccordionItemHandler
 
-        component_id = kw.get("component_id", "")
-        cid_attr = f' data-component-id="{attr_text(component_id)}"' if component_id else ""
+        content = self.nodelist.render(context)
+        kw = _handler_operands(self.kwargs, context)
+        return mark_safe(AccordionItemHandler().render_kwargs(kw, content))
 
-        # ARIA: derive stable per-item ids so the trigger's aria-controls
-        # and the content panel's id/aria-labelledby can be paired.
-        # Deterministic from the existing `id` kwarg + item id.
-        e_accordion_id = attr_text(accordion_id)
 
-        items = [n for n in self.nodelist if isinstance(n, AccordionItemNode)]
-        parts = []
-        for idx, item in enumerate(items):
-            iid = _resolve(item.item_id, context) or f"item-{idx}"
-            title = _resolve(item.title, context)
-            is_open = iid == active
-            open_cls = "dj-accordion-item--open" if is_open else ""
-            chevron_cls = "dj-accordion__chevron--open" if is_open else ""
-            e_iid = attr_text(iid)
-            trigger_id = f"{e_accordion_id}-trigger-{e_iid}"
-            panel_id = f"{e_accordion_id}-panel-{e_iid}"
-            content_html = ""
-            if is_open:
-                content_html = (
-                    f'<div class="dj-accordion__content" id="{panel_id}" '
-                    f'role="region" aria-labelledby="{trigger_id}">'
-                    f"{item.render(context)}</div>"
-                )
-            parts.append(
-                f'<div class="dj-accordion-item {open_cls}">'
-                f'<button class="dj-accordion__trigger" id="{trigger_id}" '
-                f'aria-expanded="{"true" if is_open else "false"}" '
-                f'aria-controls="{panel_id}" '
-                f'dj-click="{attr_text(event)}" dj-value-value="{e_iid}"{cid_attr}>'
-                f"<span>{conditional_escape(title)}</span>"
-                f'<span class="dj-accordion__chevron {chevron_cls}" aria-hidden="true">&#9662;</span>'
-                f"</button>"
-                f"{content_html}</div>"
-            )
+class AccordionNode(template.Node):
+    """``{% accordion %}``: drawn by ``AccordionHandler`` (#4331), the one renderer. The body is
+    rendered whole, as the Rust engine hands it to the handler: the handler redraws the items it
+    finds in it (parent ``active`` / ``event`` / ``component_id``) and keeps any other body."""
 
-        return mark_safe(f'<div class="dj-accordion" id="{e_accordion_id}">{"".join(parts)}</div>')
+    def __init__(self, nodelist: Any, kwargs: Any) -> None:
+        self.nodelist = nodelist
+        self.kwargs = kwargs
+
+    def render(self, context: Any) -> SafeString:
+        from djust.components.rust_handlers import AccordionHandler
+
+        content = self.nodelist.render(context)
+        kw = _handler_operands(self.kwargs, context)
+        return mark_safe(AccordionHandler().render_kwargs(kw, content))
 
 
 @register.tag("accordion")
@@ -525,11 +504,9 @@ def do_accordion(parser: Any, token: Any) -> template.Node:
 def do_accordion_item(parser: Any, token: Any) -> template.Node:
     bits = token.split_contents()[1:]
     kwargs = _parse_kv_args(bits, parser)
-    item_id = kwargs.get("id", "")
-    title = kwargs.get("title", "")
     nodelist = parser.parse(("endaccordion_item",))
     parser.delete_first_token()
-    return AccordionItemNode(item_id, title, nodelist)
+    return AccordionItemNode(nodelist, kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -6582,8 +6559,8 @@ def do_nav_item(parser: Any, token: Any) -> template.Node:
 
 
 class AppSidebarNode(template.Node):
-    """``{% app_sidebar %}``: drawn by ``AppSidebarHandler`` (#4331). ``AppShellNode`` reads
-    ``nodelist`` and draws its own slot."""
+    """``{% app_sidebar %}``: drawn by ``AppSidebarHandler`` (#4331). Inside an
+    ``{% app_shell %}`` the shell places what it draws."""
 
     def __init__(self, nodelist: Any) -> None:
         self.nodelist = nodelist
@@ -6595,8 +6572,8 @@ class AppSidebarNode(template.Node):
 
 
 class AppHeaderNode(template.Node):
-    """``{% app_header %}``: drawn by ``AppHeaderHandler`` (#4331). ``AppShellNode`` reads
-    ``nodelist`` and draws its own slot."""
+    """``{% app_header %}``: drawn by ``AppHeaderHandler`` (#4331). Inside an
+    ``{% app_shell %}`` the shell places what it draws."""
 
     def __init__(self, nodelist: Any) -> None:
         self.nodelist = nodelist
@@ -6608,8 +6585,8 @@ class AppHeaderNode(template.Node):
 
 
 class AppContentNode(template.Node):
-    """``{% app_content %}``: drawn by ``AppContentHandler`` (#4331). ``AppShellNode`` reads
-    ``nodelist`` and draws its own slot."""
+    """``{% app_content %}``: drawn by ``AppContentHandler`` (#4331). Inside an
+    ``{% app_shell %}`` the shell places what it draws."""
 
     def __init__(self, nodelist: Any) -> None:
         self.nodelist = nodelist
@@ -6621,50 +6598,21 @@ class AppContentNode(template.Node):
 
 
 class AppShellNode(template.Node):
+    """``{% app_shell %}``: drawn by ``AppShellHandler`` (#4331), the one renderer, from the whole
+    rendered body: the slot tags draw their own wrappers, the handler places the sidebar first and
+    keeps every other body (content outside the slots used to be dropped here) in template order.
+    Django's engine only: the Rust engine draws the tag natively (the root-proof protocol)."""
+
     def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
     def render(self, context: Any) -> SafeString:
-        kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
-        shell_id = kw.get("id", "app-shell")
-        sidebar_collapsed = kw.get("sidebar_collapsed", False)
-        custom_class = kw.get("class", "")
+        from djust.components.rust_handlers import AppShellHandler
 
-        cls = "dj-app-shell"
-        if sidebar_collapsed:
-            cls += " dj-app-shell--sidebar-collapsed"
-        if custom_class:
-            # An attribute value is escaped whatever it is marked as (#4009, #3898).
-            cls += f" {attr_text(custom_class)}"
-
-        # Find sub-nodes
-        sidebar_nodes = [n for n in self.nodelist if isinstance(n, AppSidebarNode)]
-        header_nodes = [n for n in self.nodelist if isinstance(n, AppHeaderNode)]
-        content_nodes = [n for n in self.nodelist if isinstance(n, AppContentNode)]
-
-        sidebar_html = ""
-        if sidebar_nodes:
-            sidebar_content = sidebar_nodes[0].nodelist.render(context)
-            sidebar_html = f'<aside class="dj-app-shell__sidebar">{sidebar_content}</aside>'
-
-        header_html = ""
-        if header_nodes:
-            header_content = header_nodes[0].nodelist.render(context)
-            header_html = f'<header class="dj-app-shell__header">{header_content}</header>'
-
-        content_html = ""
-        if content_nodes:
-            main_content = content_nodes[0].nodelist.render(context)
-            content_html = f'<main class="dj-app-shell__content">{main_content}</main>'
-
-        return mark_safe(
-            f'<div class="{cls}" id="{attr_text(shell_id)}">'
-            f"{sidebar_html}"
-            f'<div class="dj-app-shell__main">'
-            f"{header_html}{content_html}"
-            f"</div></div>"
-        )
+        content = self.nodelist.render(context)
+        kw = _handler_operands(self.kwargs, context)
+        return mark_safe(AppShellHandler().render_kwargs(kw, content))
 
 
 @register.tag("app_shell")
@@ -9057,77 +9005,41 @@ def do_cookie_consent(parser: Any, token: Any) -> template.Node:
 
 
 class FormArrayNode(template.Node):
+    """``{% form_array %}``: drawn by ``FormArrayHandler`` (#4331), the one renderer. The node
+    renders its body once per row (#930) and hands the rendered rows over; the Rust engine runs
+    this node too (``RAW_BODY_TAGS``), so both engines repeat the body the same way."""
+
     def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
     def render(self, context: Any) -> SafeString:
-        kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
-        name = kw.get("name", "items")
-        rows = kw.get("rows", [{"value": ""}])
-        min_rows = kw.get("min", 1)
-        max_rows = kw.get("max", 10)
-        add_event = kw.get("add_event", "add_row")
-        remove_event = kw.get("remove_event", "remove_row")
-        add_label = kw.get("add_label", "Add row")
-        custom_class = kw.get("class", "")
+        from djust.components.rust_handlers import FormArrayHandler
 
-        e_name = escape(str(name))
-        e_add_event = escape(str(add_event))
-        e_remove_event = escape(str(remove_event))
-        e_add_label = conditional_escape(str(add_label))
-        e_class = escape(str(custom_class))
-
-        try:
-            min_rows = int(min_rows)
-        except (ValueError, TypeError):
-            min_rows = 1
-        try:
-            max_rows = int(max_rows)
-        except (ValueError, TypeError):
-            max_rows = 10
-
-        if not isinstance(rows, list):
+        raw_rows = _resolve(self.kwargs["rows"], context) if "rows" in self.kwargs else None
+        if "rows" not in self.kwargs:
+            rows: list[Any] = [{"value": ""}]
+        elif isinstance(raw_rows, (list, tuple)):
+            rows = list(raw_rows)
+        else:
             rows = [{"value": ""}]
+        kw = _handler_operands({k: v for k, v in self.kwargs.items() if k != "rows"}, context)
 
-        classes = ["dj-form-array"]
-        if e_class:
-            classes.append(e_class)
-        class_str = " ".join(classes)
-
-        row_count = len(rows)
-        can_add = row_count < max_rows
-        can_remove = row_count > min_rows
-
-        # Render template content for each row, or default inputs.
-        #
-        # If the `{% form_array %}...{% endform_array %}` block contains inner
-        # template markup, that nodelist is rendered once per row with the
-        # loop variables ``row``, ``forloop`` and ``row_index`` pushed onto the
-        # context stack. This lets callers customize per-row layout, e.g.::
+        # If the block holds markup, it is rendered once per row with ``row``, ``row_index``
+        # and ``forloop`` pushed, so a caller lays out each row::
         #
         #     {% form_array name="items" rows=rows %}
         #       <input name="items[{{ row_index }}][label]" value="{{ row.label }}">
-        #       <input name="items[{{ row_index }}][value]" value="{{ row.value }}">
         #     {% endform_array %}
         #
-        # If the nodelist is empty (self-closing-style usage), fall back to the
-        # single-input-per-row default rendering.
+        # A blank block keeps the single-input-per-row default.
         has_inner = bool(self.nodelist) and any(
             not (isinstance(n, template.base.TextNode) and not n.s.strip()) for n in self.nodelist
         )
-        rows_html = []
-        for i, row in enumerate(rows):
-            remove_html = ""
-            if can_remove:
-                remove_html = (
-                    f'<button class="dj-form-array__remove" type="button" '
-                    f'dj-click="{e_remove_event}" dj-value-value="{i}" '
-                    f'aria-label="Remove row {i + 1}">&times;</button>'
-                )
-
-            if has_inner:
-                # Render the inner block with per-row context
+        row_bodies: list[str] | None = None
+        if has_inner:
+            row_bodies = []
+            for i, row in enumerate(rows):
                 row_ctx = {
                     "row": row,
                     "row_index": i,
@@ -9139,33 +9051,8 @@ class FormArrayNode(template.Node):
                     },
                 }
                 with context.push(**row_ctx):
-                    inner_html = self.nodelist.render(context)
-                rows_html.append(
-                    f'<div class="dj-form-array__row" data-index="{i}">'
-                    f"{inner_html}{remove_html}</div>"
-                )
-            else:
-                # only in value= (#3904)
-                val = attr_text(row.get("value", "") if isinstance(row, dict) else row)
-                rows_html.append(
-                    f'<div class="dj-form-array__row" data-index="{i}">'
-                    f'<input type="text" name="{e_name}[{i}]" value="{val}" '
-                    f'class="dj-form-array__input">'
-                    f"{remove_html}</div>"
-                )
-
-        add_disabled = "" if can_add else " disabled"
-        add_html = (
-            f'<button class="dj-form-array__add" type="button" '
-            f'dj-click="{e_add_event}"{add_disabled}>'
-            f"{e_add_label}</button>"
-        )
-
-        return mark_safe(
-            f'<div class="{class_str}" data-min="{min_rows}" data-max="{max_rows}">'
-            f'<div class="dj-form-array__rows">{"".join(rows_html)}</div>'
-            f"{add_html}</div>"
-        )
+                    row_bodies.append(self.nodelist.render(context))
+        return mark_safe(FormArrayHandler().render_kwargs(kw, rows, row_bodies))
 
 
 @register.tag("form_array")

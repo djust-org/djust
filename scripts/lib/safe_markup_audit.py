@@ -381,9 +381,9 @@ AUDITED: dict[tuple[str, str], Audit] = {
         (
             RH,
             'shell_id = attr_text(kw.get("id", "app-shell"))',
-            "AppShellHandler._render_root_parts",
+            "AppShellHandler._root_parts",
         ),
-        (RH, 'cls += f" {attr_text(custom_class)}"', "AppShellHandler._render_root_parts"),
+        (RH, 'cls += f" {attr_text(custom_class)}"', "AppShellHandler._root_parts"),
         (
             RH,
             'return (len(content[:start].encode()), len(content[:end].encode())), ""',
@@ -431,13 +431,30 @@ AUDITED: dict[tuple[str, str], Audit] = {
     # a slice of it, or a replacement inside it, at a position it cannot read is reported rather
     # than assumed. Escaped data cannot hold `<`, so each literal these search for is markup the
     # engine or a sibling handler wrote. ---
-    (RH, "AccordionHandler.render"): S(
+    (RH, "AccordionHandler.render_kwargs"): S(
         1,
-        "the id is attr_text; `content` is the rendered block body (a SafeString, see `_root_layout_html`), into which component_id_attr's output (one whole data-component-id attribute, value through attr_text, or '') is inserted at each offset `_accordion_trigger_ends` returns: the end of a literal `<button class=\"accordion-trigger\"` that AccordionItemHandler wrote, i.e. between that tag's attributes; nested accordions are skipped and only offsets come back (#4134)",
-        (RH, 'accordion_id = attr_text(kw.get("id", "accordion"))'),
+        "the one renderer of the tag on both engines (#4331). The id is attr_text; `content` is the rendered block body (a SafeString, see `_root_layout_html`), copied in slices cut at the markers AccordionItemHandler writes (`<!--djust-accordion-item:` + a hex payload: escaped data cannot spell `<!--`). A marked item is replaced only when the bytes after its marker are exactly the standalone markup `_accordion_item_standalone` rebuilds from the payload around the item's own body, whose length the payload carries; the replacement is `_accordion_item_parts` again (every value in it through attr_text or escape, component_id through component_id_attr) around that same body slice. Anything else is copied as it is",
+        (RH, 'accordion_id = attr_text(kw.get("id", _ACCORDION_DEFAULT_ID))'),
         (RH, 'cid_attr = component_id_attr(kw.get("component_id"))'),
-        (RH, "content = content[:end] + cid_attr + content[end:]"),
-        (RH, "for match in _ACCORDION_TOKEN.finditer(content):", "_accordion_trigger_ends"),
+        (RH, "content.startswith(before, match.end())"),
+        (RH, "parts.append(content[body_start:body_end])"),
+        (RH, 'iid = attr_text(item_id or f"item-{index}")', "_accordion_item_parts"),
+        (RH, 'f"<span>{escape(title)}</span>"', "_accordion_item_parts"),
+    ),
+    (RH, "AccordionItemHandler.render_kwargs"): S(
+        1,
+        "the marker is a literal around the hex of a JSON payload (only 0-9a-f); `before` / `after` are `_accordion_item_parts` (every value through attr_text or escape, #4331); `content` is the rendered block body (a SafeString, see `_root_layout_html`), placed in element text as the engine rendered it",
+        (RH, 'key = text.encode("utf-8").hex()'),
+        (RH, "before, after = _accordion_item_standalone(_json.loads(text))"),
+        (RH, 'iid = attr_text(item_id or f"item-{index}")', "_accordion_item_parts"),
+    ),
+    (RH, "FormArrayHandler.render_kwargs"): S(
+        1,
+        "the one renderer of the tag's markup on both engines (#4331): name, events and class through attr_text, the add label through conditional_escape (text), min / max int()-coerced, a default row's value through attr_text (#3904). `row_bodies` are the tag's body rendered once per row by the template engine (FormArrayNode, which the Rust engine runs too through the raw-body route), placed in element text as rendered, as any block body is",
+        (RH, "cell = row_bodies[i]"),
+        (RH, "e_name = attr_text(name)"),
+        (RH, "e_class = attr_text(custom_class)"),
+        (DC, "row_bodies.append(self.nodelist.render(context))", "FormArrayNode.render"),
     ),
     (RH, "NavMenuHandler.render_kwargs"): S(
         1,

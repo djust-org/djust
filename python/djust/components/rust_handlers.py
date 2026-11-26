@@ -22,11 +22,17 @@ bridge lacks a capability the tag needs, and each kept twin is pinned against it
   expandable rows, editable columns, export ...) under either engine; there is no
   ``djust_components/table.html``;
 * the block tags whose Django node reads its children (``accordion``, ``sidebar``, ``nav_menu``,
-  ``toolbar``, ``filter_bar``, ``form_array``, ``page_header``) and their child tags: the bridge can
+  ``toolbar``, ``filter_bar``, ``page_header``) and their child tags: the bridge can
   only serve them by handing the body to Django's engine, which cannot compile a Rust-only tag
   (``{% call %}``, ``{% component %}``, ``{% slot %}``, ``{% dj_suspense %}``) and loses the
   ``{% if %}`` boundary markers the Rust renderer emits. ``tabs`` and ``split_pane`` already took that
-  raw-body route before (``RAW_BODY_TAGS``).
+  raw-body route before (``RAW_BODY_TAGS``), and ``form_array`` takes it since #4331: it repeats its
+  body once per row with the row pushed, which a body rendered once cannot do. Its markup is still
+  drawn by one handler, :class:`FormArrayHandler`, which the Django node calls.
+
+Since #4331 the Django nodes of ``accordion`` / ``accordion_item`` and ``app_shell`` render their
+body and call the handler here (``render_kwargs``), as ``data_table`` does since #3869, so each
+draws the same bytes under either engine.
 
 Inline handlers implement: render(self, args, context) -> str
 Block handlers implement:  render(self, args, content, context) -> str
@@ -374,69 +380,163 @@ def _with_typed_block_operands(handler: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 
-#: What an accordion's own markup is made of, for stamping its triggers (#4134): a ``<div>``
-#: opening (a nested accordion's is told apart), a ``</div>``, and an item's trigger.
-_ACCORDION_TOKEN = _re_filters.compile(
-    r'<div class="accordion"[ >]|<div\b|</div\s*>|<button class="accordion-trigger"'
-)
+#: How an ``{% accordion_item %}`` hands the ``{% accordion %}`` that holds it what it was given
+#: (#4331). The items render before the accordion, and the parent decides what an item cannot:
+#: the accordion's ``id`` (the trigger / panel ids), its ``active`` (which item is open), its
+#: ``event`` (the default for an item without one), its ``component_id=`` and an item's position
+#: (the ``item-N`` id of an item without one). So each item writes this comment, carrying the hex
+#: of a JSON list (only ``0-9a-f``: no value can end the comment, open another or read as markup),
+#: then draws itself as a standalone item; the accordion redraws every item it finds whose
+#: standalone markup follows its comment exactly. Outside an accordion the comment is invisible.
+_ACCORDION_ITEM_MARK = _re_filters.compile(r"<!--djust-accordion-item:([0-9a-f]*)-->")
+
+#: The id a standalone item's trigger and panel ids start with: the accordion's default ``id``.
+_ACCORDION_DEFAULT_ID = "accordion"
+_ACCORDION_DEFAULT_EVENT = "accordion_toggle"
 
 
-def _accordion_trigger_ends(content: str) -> list[int]:
-    """Where THIS accordion's item triggers' ``<button class="accordion-trigger"`` end (#4134).
+def _accordion_item_parts(
+    accordion_id: str,
+    index: int,
+    item_id: object,
+    title: str,
+    is_open: bool,
+    event: object,
+    cid_attr: str,
+) -> tuple[str, str]:
+    """The markup of one accordion item around its body: ``(before, after)``.
 
-    The items render before the accordion, so only it knows its ``component_id=``, which it
-    inserts at these offsets. A trigger inside a nested ``{% accordion %}`` (already rendered,
-    and stamped by that one) is skipped: the scan counts ``<div>`` depth and leaves out
-    everything inside a nested accordion. Only offsets come back, never markup.
+    WAI-ARIA accordion pattern: the trigger names the panel it controls (``aria-controls``), and
+    that panel is always drawn, ``hidden`` while closed, so the reference never dangles (#4331:
+    the Django tag pointed at a panel it drew only when open; the native one had no
+    ``aria-controls``, panel ``id`` or ``role="region"``). ``accordion_id`` is escaped already.
     """
-    nested: list[bool] = []  # one entry per open <div>: is it a nested accordion?
-    ends: list[int] = []
-    for match in _ACCORDION_TOKEN.finditer(content):
-        token = match.group(0)
-        if token.startswith("</div"):
-            if nested:
-                nested.pop()
-        elif token.startswith("<div"):
-            nested.append(token.startswith('<div class="accordion"'))
-        elif not any(nested):
-            ends.append(match.end())
-    return ends
+    iid = attr_text(item_id or f"item-{index}")
+    trigger_id = f"{accordion_id}-trigger-{iid}"
+    panel_id = f"{accordion_id}-panel-{iid}"
+    open_cls = " dj-accordion-item--open" if is_open else ""
+    chevron_cls = " dj-accordion__chevron--open" if is_open else ""
+    before = (
+        f'<div class="dj-accordion-item{open_cls}">'
+        f'<button class="dj-accordion__trigger" id="{trigger_id}" '
+        f'aria-expanded="{"true" if is_open else "false"}" aria-controls="{panel_id}" '
+        f'dj-click="{attr_text(event)}" dj-value-value="{iid}"{cid_attr}>'
+        f"<span>{escape(title)}</span>"
+        f'<span class="dj-accordion__chevron{chevron_cls}" aria-hidden="true">&#9662;</span>'
+        f"</button>"
+        f'<div class="dj-accordion__content" id="{panel_id}" role="region" '
+        f'aria-labelledby="{trigger_id}"{"" if is_open else " hidden"}>'
+    )
+    return before, "</div></div>"
+
+
+def _accordion_item_standalone(payload: list[Any]) -> tuple[str, str]:
+    """An item as it draws itself, outside any accordion, from its marker's payload."""
+    item_id, title, own_open, own_event, _length = payload
+    return _accordion_item_parts(
+        _ACCORDION_DEFAULT_ID,
+        0,
+        item_id,
+        title,
+        bool(own_open),
+        own_event or _ACCORDION_DEFAULT_EVENT,
+        "",
+    )
+
+
+def _accordion_item_payload(text: str) -> list[Any] | None:
+    """The marker's payload, or ``None`` when it is not one an item wrote."""
+    try:
+        payload = _json.loads(bytes.fromhex(text).decode("utf-8"))
+    except (ValueError, TypeError):
+        return None
+    if (
+        isinstance(payload, list)
+        and len(payload) == 5
+        and isinstance(payload[1], str)
+        and isinstance(payload[4], int)
+        and not isinstance(payload[4], bool)
+        and payload[4] >= 0
+    ):
+        return payload
+    return None
 
 
 class AccordionHandler:
+    """``{% accordion %}``: the one renderer on both engines (#4331).
+
+    The Django node renders its body and calls :meth:`render_kwargs`, as the Rust engine calls
+    :meth:`render`. Every item of THIS accordion (at any depth of its body, inside ``{% if %}`` or
+    ``{% for %}`` too, but not inside a nested accordion, which redrew its own) is redrawn with the
+    accordion's ids, ``active``, ``event`` and ``component_id=``; any other body is kept as it is.
+    An item is open when the accordion's ``active`` names it or its own ``open=`` is true; its own
+    ``event=`` overrides the accordion's.
+    """
+
     def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
-        kw = _parse_args(args, context)
-        accordion_id = attr_text(kw.get("id", "accordion"))
-        # The triggers carry ``component_id=`` as the Django tag's do (#4134): only
-        # component_id_attr's output is inserted, every other byte of ``content`` is kept.
+        return self.render_kwargs(_parse_args(args, context), content)
+
+    def render_kwargs(self, kw: dict[str, object], content: str) -> str:
+        accordion_id = attr_text(kw.get("id", _ACCORDION_DEFAULT_ID))
+        active = kw.get("active", "")
+        event = kw.get("event", _ACCORDION_DEFAULT_EVENT)
         cid_attr = component_id_attr(kw.get("component_id"))
-        if cid_attr:
-            for end in reversed(_accordion_trigger_ends(content)):
-                content = content[:end] + cid_attr + content[end:]
-        return _safe(f'<div class="accordion" id="{accordion_id}">{content}</div>')
+        parts: list[str] = []
+        pos = 0
+        index = 0
+        while True:
+            match = _ACCORDION_ITEM_MARK.search(content, pos)
+            if match is None:
+                break
+            payload = _accordion_item_payload(match.group(1))
+            if payload is None:
+                parts.append(content[pos : match.end()])
+                pos = match.end()
+                continue
+            before, after = _accordion_item_standalone(payload)
+            body_start = match.end() + len(before)
+            body_end = body_start + payload[4]
+            if not (
+                content.startswith(before, match.end()) and content.startswith(after, body_end)
+            ):
+                # Not the markup the marker's item drew: kept as it is.
+                parts.append(content[pos : match.end()])
+                pos = match.end()
+                continue
+            item_id, title, own_open, own_event, _length = payload
+            is_open = bool(own_open) or (item_id or f"item-{index}") == active
+            new_before, new_after = _accordion_item_parts(
+                accordion_id, index, item_id, title, is_open, own_event or event, cid_attr
+            )
+            parts.append(content[pos : match.start()])
+            parts.append(new_before)
+            parts.append(content[body_start:body_end])
+            parts.append(new_after)
+            pos = body_end + len(after)
+            index += 1
+        parts.append(content[pos:])
+        return _safe(f'<div class="dj-accordion" id="{accordion_id}">{"".join(parts)}</div>')
 
 
 class AccordionItemHandler:
+    """``{% accordion_item %}``: the one renderer on both engines (#4331). It draws itself as a
+    standalone item behind a marker its ``{% accordion %}`` reads (``_ACCORDION_ITEM_MARK``)."""
+
     def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
-        kw = _parse_args(args, context)
-        title = conditional_escape(kw.get("title", ""))
-        item_id = attr_text(kw.get("id", ""))
-        event = attr_text(kw.get("event", "accordion_toggle"))
-        is_open = kw.get("open", False)
-        open_cls = "accordion-item--open" if is_open else ""
-        expanded = "true" if is_open else "false"
-        panel_hidden = "" if is_open else " hidden"
-        return _safe(
-            f'<div class="accordion-item {open_cls}">'
-            f'<button class="accordion-trigger" aria-expanded="{expanded}" '
-            f'dj-click="{event}" dj-value-value="{item_id}">'
-            f'<span class="accordion-title">{title}</span>'
-            f'<svg class="accordion-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">'
-            f'<polyline points="6 9 12 15 18 9"></polyline></svg>'
-            f"</button>"
-            f'<div class="accordion-panel"{panel_hidden}>{content}</div>'
-            f"</div>"
+        return self.render_kwargs(_parse_args(args, context), content)
+
+    def render_kwargs(self, kw: dict[str, object], content: str) -> str:
+        title = kw.get("title", "")
+        own_event = kw.get("event") or None
+        text = _json.dumps(
+            [kw.get("id", ""), str(title), bool(kw.get("open", False)), own_event, len(content)],
+            default=str,
+            separators=(",", ":"),
         )
+        # Drawn from the payload read back, as the accordion reads it, so the two always agree.
+        before, after = _accordion_item_standalone(_json.loads(text))
+        key = text.encode("utf-8").hex()
+        return _safe(f"<!--djust-accordion-item:{key}-->{before}{content}{after}")
 
 
 _CLASS_TOKEN = _re_filters.compile(r"[A-Za-z0-9_-]+")
@@ -2543,7 +2643,9 @@ class AppShellHandler:
     def _render_root_parts(
         self, args: list[str], content: str, context: dict[str, object]
     ) -> _RootLayoutParts:
-        kw = _parse_args(args, context)
+        return self._root_parts(_parse_args(args, context), content)
+
+    def _root_parts(self, kw: dict[str, object], content: str) -> _RootLayoutParts:
         # The Python tag's markup (``AppShellNode``): an attribute value is escaped whatever it
         # is marked as (#4009), and a falsy ``class`` adds no class (``class=None`` added "None").
         shell_id = attr_text(kw.get("id", "app-shell"))
@@ -2574,6 +2676,12 @@ class AppShellHandler:
 
     def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         return _root_layout_html(content, self._render_root_parts(args, content, context))
+
+    def render_kwargs(self, kw: dict[str, object], content: str) -> str:
+        """The Django engine's ``{% app_shell %}`` (#4331): the same markup from the tag's operands
+        as Python values. It takes no part in the Rust engine's root-proof protocol, which calls
+        ``_render_root_parts`` on the Rust engine's own render of the tag."""
+        return _root_layout_html(content, self._root_parts(kw, content))
 
 
 class AppSidebarHandler:
@@ -2831,10 +2939,19 @@ class FilterBarHandler:
 
 
 class FormArrayHandler:
-    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
-        kw = _parse_args(args, context)
+    """``{% form_array %}``: the one renderer of its markup on both engines (#4331).
+
+    The tag repeats its body once per row, with ``row``, ``row_index`` and ``forloop`` pushed
+    (#930), so its body cannot be rendered first: it takes the raw-body route on the Rust engine
+    (``RAW_BODY_TAGS``), where the Django node renders each row's body and hands the rendered rows
+    to :meth:`render_kwargs`, as it does under Django's engine. ``row_bodies`` is ``None`` for a
+    blank body: each row is then the default text input.
+    """
+
+    def render_kwargs(
+        self, kw: dict[str, object], rows: list[Any], row_bodies: list[str] | None
+    ) -> str:
         name = kw.get("name", "items")
-        rows = kw.get("rows", [{"value": ""}])
         min_rows = kw.get("min", 1)
         max_rows = kw.get("max", 10)
         add_event = kw.get("add_event", "add_row")
@@ -2842,11 +2959,11 @@ class FormArrayHandler:
         add_label = kw.get("add_label", "Add row")
         custom_class = kw.get("class", "")
 
-        e_name = escape(str(name))
-        e_add_event = escape(str(add_event))
-        e_remove_event = escape(str(remove_event))
+        e_name = attr_text(name)
+        e_add_event = attr_text(add_event)
+        e_remove_event = attr_text(remove_event)
         e_add_label = conditional_escape(str(add_label))
-        e_class = escape(str(custom_class))
+        e_class = attr_text(custom_class)
 
         try:
             min_rows = int(cast("str | int | float", _number(min_rows)))
@@ -2856,9 +2973,6 @@ class FormArrayHandler:
             max_rows = int(cast("str | int | float", _number(max_rows)))
         except (ValueError, TypeError):
             max_rows = 10
-
-        if not isinstance(rows, list):
-            rows = [{"value": ""}]
 
         classes = ["dj-form-array"]
         if e_class:
@@ -2871,9 +2985,6 @@ class FormArrayHandler:
 
         rows_html = []
         for i, row in enumerate(rows):
-            # ``value="..."`` is an attribute: escaped whatever the member is marked (a tuple
-            # ``rows=`` hands the handler its members as they are).
-            val = escape(str(row.get("value", "") if isinstance(row, dict) else row))
             remove_html = ""
             if can_remove:
                 remove_html = (
@@ -2881,10 +2992,18 @@ class FormArrayHandler:
                     f'dj-click="{e_remove_event}" dj-value-value="{i}" '
                     f'aria-label="Remove row {i + 1}">&times;</button>'
                 )
+            if row_bodies is not None:
+                # The row's body, rendered by the template engine with the row pushed.
+                cell = row_bodies[i]
+            else:
+                # ``value="..."`` is an attribute: escaped whatever the member is marked (#3904).
+                val = attr_text(row.get("value", "") if isinstance(row, Mapping) else row)
+                cell = (
+                    f'<input type="text" name="{e_name}[{i}]" value="{val}" '
+                    f'class="dj-form-array__input">'
+                )
             rows_html.append(
-                f'<div class="dj-form-array__row" data-index="{i}">'
-                f'<input type="text" name="{e_name}[{i}]" value="{val}" '
-                f'class="dj-form-array__input">{remove_html}</div>'
+                f'<div class="dj-form-array__row" data-index="{i}">{cell}{remove_html}</div>'
             )
 
         add_disabled = "" if can_add else " disabled"
@@ -2927,17 +3046,18 @@ NATIVE_BLOCK_HANDLERS = [
     ("toolbar", "endtoolbar", ToolbarHandler()),
     ("toolbar_overflow", "endtoolbar_overflow", ToolbarOverflowHandler()),
     ("filter_bar", "endfilter_bar", FilterBarHandler()),
-    ("form_array", "endform_array", FormArrayHandler()),
     ("page_header", "endpage_header", PageHeaderHandler()),
     ("page_header_actions", "endpage_header_actions", PageHeaderActionsHandler()),
 ]
 
 #: Block tags that take the raw-body route (their Django node reads its children, so the Rust engine
 #: cannot render the body first): ``tabs`` keeps only its ``tab`` children, ``split_pane`` parses two
-#: segments. Both were already registered this way before 2.0. The other children-reading parents
-#: keep their native twins (see the module docstring). Pinned by
+#: segments (both registered this way before 2.0), ``form_array`` renders its body once per row with
+#: the row pushed (#930; its native twin, which drew an input and dropped the body, is gone,
+#: #4331). The other children-reading parents keep their native twins (see the module docstring).
+#: Pinned by
 #: ``test_raw_body_tags_are_exactly_the_bridged_tags_that_read_their_children``.
-RAW_BODY_TAGS = frozenset({"split_pane", "tabs"})
+RAW_BODY_TAGS = frozenset({"form_array", "split_pane", "tabs"})
 
 #: Separator tokens of a raw-body tag (``{% pane %}`` inside ``{% split_pane %}``). For template path
 #: extraction the segments are one body rendered with the same context, so the separator is dropped.

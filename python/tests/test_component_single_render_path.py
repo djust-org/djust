@@ -15,7 +15,7 @@ What each class proves:
   parity harness's spread of inputs, or its divergence is listed here with its measured class and
   aspects (the parity ratchet holds the measurement).
 * ``TestLayoutParity``: the native layout handlers render the Python tags' markup for every argument
-  value in a spread, and the one documented difference is still the only one.
+  value in a spread, body outside the slots included (#4331).
 * ``TestTheParityIssuesAreGone``: the reproductions of the twin-drift issues whose twins are gone.
 * ``TestStableRenders``: every bridged tag renders the same bytes twice in a row (no per-render
   ids: a changing id is a patch on every LiveView turn), and a bridged tag's argument change is a
@@ -215,14 +215,14 @@ class TestLayoutParity:
                 assert 'onmouseover="' not in html, html
                 assert "&quot; onmouseover=&quot;" in html, html
 
-    def test_the_one_documented_difference_is_body_content_outside_the_slots(self):
-        """The native ``app_shell`` keeps body content that is not inside a slot tag, in template
-        order (it is what the root-proof protocol copies); the Python tag drops it. Nothing else
-        differs: with that content removed the two agree (the parametrized cases above)."""
+    def test_body_content_outside_the_slots_is_kept_by_both_engines(self):
+        """Body content that is not inside a slot tag is kept, in template order (it is what the
+        root-proof protocol copies). The Python tag dropped it until #4331, when its node became a
+        wrapper over ``AppShellHandler``."""
         src = "{% app_shell %}stray {{ num }}" + _BODY + "{% endapp_shell %}"
         native, python = _rust_render(src, _CTX), _django(src, _CTX)
-        assert "stray 7" in native and "stray" not in python
-        assert native.replace("stray 7", "") == python
+        assert "stray 7" in native
+        assert native == python
 
 
 # --------------------------------------------------------------------------- #

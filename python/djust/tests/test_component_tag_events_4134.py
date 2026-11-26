@@ -674,27 +674,30 @@ def test_a_nested_native_accordion_keeps_its_own_component_id():
     assert "djust-accordion-cid" not in html
 
 
-#: ``{% accordion_item id="q" title="Q" %}x{% endaccordion_item %}`` on the Rust engine, as
-#: ``main`` renders it (cf89695e5): nothing of #4134 may reach a standalone item.
-_STANDALONE_ITEM = (
-    '<div class="accordion-item "><button class="accordion-trigger" aria-expanded="false" '
-    'dj-click="accordion_toggle" dj-value-value="q"><span class="accordion-title">Q</span>'
-    '<svg class="accordion-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" '
-    'stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline>'
-    '</svg></button><div class="accordion-panel" hidden>x</div></div>'
+#: ``{% accordion_item id="q" title="Q" %}x{% endaccordion_item %}`` drawn as a standalone item,
+#: after the marker its accordion reads (#4331: one renderer on both engines, see
+#: ``test_accordion_form_array_app_shell_single_impl_4331.py``). Nothing of #4134 reaches it.
+_ITEM_MARKUP = (
+    '<div class="dj-accordion-item"><button class="dj-accordion__trigger" '
+    'id="accordion-trigger-q" aria-expanded="false" aria-controls="accordion-panel-q" '
+    'dj-click="accordion_toggle" dj-value-value="q"><span>Q</span>'
+    '<span class="dj-accordion__chevron" aria-hidden="true">&#9662;</span></button>'
+    '<div class="dj-accordion__content" id="accordion-panel-q" role="region" '
+    'aria-labelledby="accordion-trigger-q" hidden>x</div></div>'
 )
 
 
-def test_a_standalone_native_accordion_item_is_byte_identical_to_main():
+def test_a_standalone_native_accordion_item_carries_no_component_id():
     html = _rust('{% accordion_item id="q" title="Q" %}x{% endaccordion_item %}')
-    assert html == _STANDALONE_ITEM
-    assert "<!--" not in html
+    assert html.startswith("<!--djust-accordion-item:")
+    assert html.endswith("-->" + _ITEM_MARKUP)
+    assert "data-component-id" not in html
 
 
 def test_an_accordion_without_component_id_renders_its_items_unchanged():
     item = '{% accordion_item id="q" title="Q" %}x{% endaccordion_item %}'
     html = _rust("{% accordion %}" + item + "{% endaccordion %}")
-    assert html == '<div class="accordion" id="accordion">' + _STANDALONE_ITEM + "</div>"
+    assert html == '<div class="dj-accordion" id="accordion">' + _ITEM_MARKUP + "</div>"
 
 
 def test_a_nested_accordion_without_component_id_is_not_stamped_by_the_outer_one():
