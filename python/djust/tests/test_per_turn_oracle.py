@@ -409,6 +409,63 @@ MODELS_SCRIPT = [
 ]
 
 
+# --- a model that enters a plain list (plain_model_scans, #4325) -----------------------
+
+
+class ModelScan(_Base):
+    """A list of plain dicts that a handler, then ``get_context_data``, gives a
+    Model. The snapshot calls the list plain until the Model is in it; the sync
+    must scan it again whenever one can have been added since the walk."""
+
+    exposure_policy = "explicit"
+    template = (
+        "<div dj-root><ul>{% for r in rows %}<li>{{ r.first_name }}|"
+        "{% for g in r.groups.all %}{{ g.name }}{% endfor %}</li>{% endfor %}</ul>"
+        "<i>{{ n }}</i></div>"
+    )
+    n = state(0)
+    rows = state(default_factory=list)
+
+    def mount(self, request, **kwargs):
+        self.rows = [{"first_name": "a"}, {"first_name": "b"}]
+
+    @event_handler()
+    def bump(self, **kwargs):
+        self.n += 1
+
+    @event_handler()
+    def add_model(self, **kwargs):
+        from django.contrib.auth.models import Group
+
+        user = User.objects.get(username="oracle-a")
+        user.groups.add(Group.objects.get_or_create(name="staff-g")[0])
+        self.rows.append(user)
+
+    @event_handler()
+    def add_dict(self, **kwargs):
+        self.rows.append({"first_name": "d%d" % len(self.rows)})
+
+
+MODEL_SCAN_SCRIPT = [
+    ("event", "bump"),
+    ("event", "add_dict"),
+    ("event", "add_model"),
+    ("event", "bump"),
+]
+
+
+class LateModelScan(ModelScan):
+    """The Model is added in ``get_context_data``, after the snapshot's walk."""
+
+    def get_context_data(self, **kwargs):
+        if self.n and not any(isinstance(r, User) for r in self.rows):
+            self.rows.append(User.objects.get(username="oracle-b"))
+        return super().get_context_data(**kwargs)
+
+
+LATE_MODEL_SCRIPT = [("event", "bump"), ("event", "add_dict"), ("event", "bump")]
+
+
 # --- temporary_assigns and a private attribute behind a derived value -----------------
 
 
@@ -993,6 +1050,8 @@ WS_CASES: List[Tuple[str, type, Script]] = [
     ("derived", Derived, DERIVED_SCRIPT),
     ("opaque", Opaque, OPAQUE_SCRIPT),
     ("models", Models, MODELS_SCRIPT),
+    ("model_scan", ModelScan, MODEL_SCAN_SCRIPT),
+    ("late_model_scan", LateModelScan, LATE_MODEL_SCRIPT),
     ("temporary_assigns", Feed, FEED_SCRIPT),
     ("private_attribute", Private, PRIVATE_SCRIPT),
     ("component", ComponentPage, COMPONENT_SCRIPT),
@@ -1750,6 +1809,15 @@ def _break_loop_item_render(patch: Any) -> None:
     patch.setattr(rust_bridge.RustBridgeMixin, "_sync_state_to_rust", sync)
 
 
+def _break_plain_model_scans(patch: Any) -> None:
+    from djust.mixins import rust_bridge
+
+    # As if every list were proved plain: the one holding a Model is never
+    # scanned, so the Model reaches the renderer un-normalized (a relation
+    # the template walks on it, which the normalized dict lacks, prints nothing).
+    patch.setattr(rust_bridge, "_plain_by_snapshot", lambda walks, key, value: type(value) is list)
+
+
 SABOTAGE = {
     "unchanged_save_skip": (_break_unchanged_save_skip, _reconnect_run),
     "contract_cache": (_break_contract_cache, _redeclared_run),
@@ -1768,6 +1836,10 @@ SABOTAGE = {
     "plain_sub_ids": (_break_plain_sub_ids, lambda: run_ws(Opaque, OPAQUE_SCRIPT)),
     "list_item_deltas": (_break_list_item_deltas, lambda: run_ws(Table, TABLE_SCRIPT)),
     "loop_item_render": (_break_loop_item_render, lambda: run_ws(IfTable, TABLE_SCRIPT)),
+    "plain_model_scans": (
+        _break_plain_model_scans,
+        lambda: run_ws(ModelScan, MODEL_SCAN_SCRIPT),
+    ),
     "snapshot_fingerprints": (
         _break_snapshot_fingerprints,
         lambda: run_ws(LateWriter, LATE_SCRIPT),

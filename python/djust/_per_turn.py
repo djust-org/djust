@@ -39,6 +39,12 @@ setting, and there is no supported way to do it.
                             index hashes the same and nothing else the body
                             reads changed (``LoopItemStore``, #4325). Off:
                             every item renders.
+``plain_model_scans``       The Rust sync does not scan a context list for a
+                            ``Model`` / ``QuerySet`` (``_holds_db_value``,
+                            ``_normalize_db_values``, the explicit JIT
+                            checks) when the post-event snapshot proved the
+                            very object plain data (#4325). Off: every list
+                            is scanned.
 ``unchanged_save_skip``     The automatic state (#4107) is not written to the
                             session when its encoding equals what the store
                             already holds (or, with nothing stored, what
@@ -79,6 +85,7 @@ ALL: FrozenSet[str] = frozenset(
         "snapshot_fingerprints",
         "list_item_deltas",
         "loop_item_render",
+        "plain_model_scans",
         "unchanged_save_skip",
         "compact_fingerprints",
         "digest_fingerprints",

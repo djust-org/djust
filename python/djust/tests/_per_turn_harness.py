@@ -144,6 +144,8 @@ def counting(monkeypatch: Any) -> Counts:
     spy(rust_bridge, "convert_for_render", "convert_for_render", walked=True)
     spy(state_pass, "_fused", "state_pass.fused_nodes")
     spy(rust_bridge, "normalize_django_value", "normalize_django_value")
+    spy(rust_bridge, "_normalize_db_values", "normalize_db_values")
+    spy(rust_bridge, "_holds_db_value", "holds_db_value")
 
     original_sub_ids = rust_bridge._collect_sub_ids
 

@@ -563,6 +563,23 @@ def _snapshot_walks_for_sync(
     return walks
 
 
+def _plain_by_snapshot(walks: Optional[Dict[int, SnapshotEntry]], key: str, value: Any) -> bool:
+    """Did the post-event snapshot prove *value* is plain data (#4325)?
+
+    ``entry[0] is value`` says the snapshot walked this very object, and
+    ``entry[2]`` that the walk found only exact ``dict`` / ``list`` / ``tuple``
+    nodes and exact builtin scalars. Plain data holds no ``Model``, ``QuerySet``,
+    form or ``SafeString`` at any depth, so the whole-list scans for them have
+    nothing to find. ``walks`` is None unless no application code ran from the
+    snapshot to the sync (``_snapshot_walks_for_sync``): that window is what
+    keeps an in-place write from slipping in after the walk.
+    """
+    if walks is None or not _per_turn.on("plain_model_scans"):
+        return False
+    entry = walks.get(id(value))
+    return entry is not None and entry[0] is value and bool(entry[2])
+
+
 #: A list shorter than this is sent whole: the delta saves nothing there.
 _ITEM_DELTA_MIN_LEN = 16
 
@@ -1438,8 +1455,11 @@ class RustBridgeMixin:
             # handle overlay (flag ``state_models_as_handles``). An explicit context
             # still holds them here, before the normalize loop below. Empty with the
             # flag off.
+            def _proved_plain(key: str, value: Any) -> bool:
+                return _plain_by_snapshot(snapshot_walks, key, value)
+
             _overlay_raw: Dict[str, Any] = (
-                _state_model_values(full_context)
+                _state_model_values(full_context, _proved_plain)
                 if type(full_context) is ExplicitRenderContext
                 else {}
             )
@@ -1507,6 +1527,7 @@ class RustBridgeMixin:
                 if _is_qs or (
                     isinstance(_val, (list, tuple))
                     and _val
+                    and not _proved_plain(_key, _val)
                     and any(isinstance(_r, _DjModel) for _r in _val)
                 ):
                     if _walk_paths is None:
@@ -1554,6 +1575,7 @@ class RustBridgeMixin:
                     for _key, _val in full_context.items()
                     if _key not in _explicit_jit_keys
                     and (type(_val) is dict or type(_val) is list)
+                    and not _proved_plain(_key, _val)
                     and not any(isinstance(_r, _DjModel) for _r in _val)
                     and _holds_db_value(_val)
                 ]
@@ -1589,6 +1611,8 @@ class RustBridgeMixin:
                             _raw_models_for_sidecar[_key] = _evaluated
 
             for _key, _val in list(full_context.items()):
+                if _proved_plain(_key, _val):
+                    continue  # nothing to normalize in plain data
                 _normalized = _normalize_db_values(_val)
                 if _normalized is not _val:
                     if type(full_context) is ExplicitRenderContext:

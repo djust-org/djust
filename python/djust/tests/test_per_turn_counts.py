@@ -353,6 +353,17 @@ async def test_list_item_deltas_gate_off(monkeypatch):
     assert now["changed_keys"] == off["changed_keys"] == [["items"]]
 
 
+async def test_plain_model_scans_gate_off(monkeypatch):
+    """A list the snapshot proved plain is not searched for a Model (#4325); off,
+    the sync scans it again (``_normalize_db_values``, ``_holds_db_value``)."""
+    now = await turn(monkeypatch, Table, "cell")
+    off = await turn(monkeypatch, Table, "cell", "plain_model_scans")
+    assert now.get("holds_db_value.calls", 0) == 0
+    assert off["holds_db_value.calls"] >= 1
+    assert now["normalize_db_values.calls"] < off["normalize_db_values.calls"]
+    assert now["changed_keys"] == off["changed_keys"]
+
+
 async def test_loop_item_render_gate_off(monkeypatch):
     """One changed cell re-renders one loop item in Rust; the other rows come
     from the per-item store (#4325). Off, every item renders. The frames are
