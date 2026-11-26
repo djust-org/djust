@@ -2069,7 +2069,8 @@ ITEM_PARAMETERS: dict[str, tuple[tuple[str, ...], bool]] = {
     "djust_components/export_dialog/columns": (("value",), True),
     "djust_components/export_dialog/formats": (("value",), False),
     "djust_components/fab/actions": (("aria-label", "dj-click"), True),
-    "djust_components/filter_select/options": (("value",), True),
+    # False since #4331 (D3): the one renderer escapes a marked-safe option label too.
+    "djust_components/filter_select/options": (("value",), False),
     "djust_components/form_array/rows": (("value",), False),
     "djust_components/file_tree/nodes": (("class", "data-name", "dj-value-name", "dj-value-type"), True),
     "djust_components/gantt_chart/tasks": (("fill",), True),
