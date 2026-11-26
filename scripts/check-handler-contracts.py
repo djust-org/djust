@@ -220,6 +220,9 @@ def main(argv=None):
     if not tag_files:
         tag_files = [
             ROOT / "python/djust/components/templatetags/djust_components.py",
+            # The native handlers are the one renderer of most tags since #4331, so their
+            # ``kw.get("..._event", default)`` reads are where those defaults live.
+            ROOT / "python/djust/components/rust_handlers.py",
         ]
 
     handler_files = []

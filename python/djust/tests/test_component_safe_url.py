@@ -121,8 +121,14 @@ def test_safe_url_sink_count_pinned():
         for f in ["djust_components.py", "_advanced.py", "_forms.py"]
     }
     total = sum(counts.values())
-    # 6 (djust_components: breadcrumb, citation, cookie-consent, 3×dj_nav)
-    # + 3 (_advanced: error-page, 2×breadcrumb) + 1 (_forms: form action) = 10.
-    # dj_nav had 4 until #3873: one node now draws a top-level link and a
-    # dropdown link (the class follows the depth), through one safe_url(href).
-    assert total >= 10, f"safe_url sink count dropped to {total} (expected >= 10): {counts}"
+    # 4 (djust_components: breadcrumb, citation, cookie-consent, kanban card link)
+    # + 3 (_advanced: error-page, 2×breadcrumb) + 1 (_forms: form action) = 8.
+    # dj_nav's sinks left this file in #4331: nav and sidebar draw through their native
+    # handlers, whose hrefs go through ``data_url_attr`` (pinned below).
+    assert total >= 8, f"safe_url sink count dropped to {total} (expected >= 8): {counts}"
+    handlers = (base.parent / "rust_handlers.py").read_text()
+    for href in (
+        'href="{data_url_attr(kw.get("href", "#"))}"',
+        'data_url_attr(kw.get("brand_href", "/"))',
+    ):
+        assert href in handlers, href
