@@ -692,7 +692,7 @@ def progress(
     size: Any = "md",
     color: Any = "primary",
     show_label: Any = True,
-) -> "dict[str, Any]":
+) -> str:
     """Render a progress bar.
 
     Args:
