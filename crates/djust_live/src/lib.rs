@@ -16,6 +16,7 @@ pub mod model_serializer;
 
 mod child_bindings;
 mod deferred_children;
+mod fingerprint;
 mod provenance_edits;
 use dashmap::DashMap;
 use djust_core::html_whitespace::is_html_whitespace_only;
@@ -8064,6 +8065,13 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dj_root_stamp_offsets, m)?)?;
     m.add_function(wrap_pyfunction!(collapse_inter_tag_whitespace, m)?)?;
     m.add_function(wrap_pyfunction!(fast_json_dumps, m)?)?;
+    // Native plain-data content digest for change detection (#4325).
+    m.add_function(wrap_pyfunction!(fingerprint::plain_digest, m)?)?;
+    m.add_function(wrap_pyfunction!(fingerprint::digest_rows_changed, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        fingerprint::_set_plain_digest_sabotage,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(resolve_template_inheritance, m)?)?;
     m.add_function(wrap_pyfunction!(resolve_relative_template_includes, m)?)?;
     m.add_function(wrap_pyfunction!(compute_template_hash, m)?)?;

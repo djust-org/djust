@@ -596,6 +596,59 @@ LATE_SCRIPT = [
 ]
 
 
+class BigLateWriter(_Base):
+    """A list long enough for the item delta, with native digests (#4325):
+    a row changed by the handler, a row changed by ``get_context_data`` after
+    the post-event snapshot (the snapshot's digests must not be reused), and a
+    row changed by ``handle_info`` between turns."""
+
+    exposure_policy = "explicit"
+    template = (
+        "<div dj-root><h1>{{ title }}</h1>{% for r in rows %}"
+        "<p>{{ r.label }}:{{ r.n }}:{{ r.on }}</p>{% endfor %}</div>"
+    )
+    title = state("a")
+    rows = state(default_factory=list)
+    _listen_channels = frozenset({"per_turn_oracle"})
+
+    def mount(self, request, **kwargs):
+        self.rows = [{"label": "r%d" % i, "n": i, "on": i % 2 == 0} for i in range(24)]
+
+    def get_context_data(self, **kwargs):
+        self.rows[5]["label"] = self.title.upper()
+        return super().get_context_data(**kwargs)
+
+    @event_handler()
+    def cell(self, **kwargs):
+        self.rows[7]["n"] += 1
+
+    @event_handler()
+    def flip(self, **kwargs):
+        # ``True`` to ``1`` and back: equal in Python, different on the page.
+        self.rows[8]["on"] = 1 if self.rows[8]["on"] is True else True
+
+    @event_handler()
+    def retitle(self, value: str = "b", **kwargs):
+        self.title = value
+
+    def handle_info(self, message):
+        RAN.append("notify")
+        self.rows[9]["n"] = message["payload"]["qty"]
+
+
+BIG_LATE_SCRIPT: List[Tuple[Any, ...]] = [
+    ("event", "cell"),
+    ("event", "retitle", {"value": "b"}),
+    ("event", "flip"),
+    ("notify", {"qty": 50}),
+    ("event", "cell"),
+    ("event", "flip"),
+    ("event", "retitle", {"value": "c"}),
+    ("notify", {"qty": 51}),
+    ("event", "cell"),
+]
+
+
 class HeldThing(_Base):
     """The framework's own context methods only, so the sync reuses the
     snapshot's walks. An object's attribute write is found when, and only
@@ -1005,6 +1058,7 @@ WS_CASES: List[Tuple[str, type, Script]] = [
     ("scalar_types", ScalarTypes, SCALAR_SCRIPT),
     ("dirty_tracking", Dirty, DIRTY_SCRIPT),
     ("late_writer", LateWriter, LATE_SCRIPT),
+    ("big_late_writer", BigLateWriter, BIG_LATE_SCRIPT),
     ("held_thing", HeldThing, HELD_SCRIPT),
 ]
 
@@ -1186,6 +1240,7 @@ ALONE_LABELS = (
     "tick",
     "scalar_types",
     "dirty_tracking",
+    "big_late_writer",
 )
 ALONE_CASES = [case for case in WS_CASES if case[0] in ALONE_LABELS]
 
@@ -1700,6 +1755,10 @@ def _break_compact_fingerprints(patch: Any) -> None:
     wrong = change_detection._BARE | {bool, float}
     patch.setattr(change_detection, "_BARE", wrong)
     patch.setattr(state_pass, "_BARE", wrong)
+    # Plain data takes the native digest (#4325), which builds no tree; the
+    # compact encoding is what its tree is when that is off. Turning it off
+    # changes no frame by itself (``test_each_shortcut_alone_changes_no_frame``).
+    patch.setattr(_per_turn, "disabled", _per_turn.disabled | {"native_fingerprints"})
 
 
 def _break_digest_fingerprints(patch: Any) -> None:
@@ -1708,6 +1767,31 @@ def _break_digest_fingerprints(patch: Any) -> None:
     # As if the digest dropped what it hashes: every fingerprint has the same
     # one, so every key that was kept reads as unchanged since the last sync.
     patch.setattr(change_detection, "fingerprint_digest", lambda fp: b"\0" * 16)
+
+    # The native digest of plain data (#4325) is a digest too: the same.
+    def constant(value: Any, budget: int, rows: bool = False) -> Any:
+        row_digests = b"\0" * 16 * len(value) if rows and type(value) is list else None
+        return b"\0" * 16, 0, row_digests
+
+    patch.setattr(change_detection, "_plain_digest", constant)
+
+
+def _break_native_fingerprints(patch: Any) -> None:
+    from djust import _rust, change_detection
+
+    real = change_detection._plain_digest
+
+    # As if the native encoding hashed a ``bool`` as the ``int`` it equals:
+    # ``[True]`` and ``[1]`` get one digest, so a turn that swaps them is
+    # taken for unchanged.
+    def bool_as_int(value: Any, budget: int, rows: bool = False) -> Any:
+        _rust._set_plain_digest_sabotage(1)
+        try:
+            return real(value, budget, rows)
+        finally:
+            _rust._set_plain_digest_sabotage(0)
+
+    patch.setattr(change_detection, "_plain_digest", bool_as_int)
 
 
 def _break_snapshot_fingerprints(patch: Any) -> None:
@@ -1777,6 +1861,10 @@ SABOTAGE = {
         lambda: run_ws(ScalarTypes, SCALAR_SCRIPT),
     ),
     "digest_fingerprints": (_break_digest_fingerprints, lambda: run_ws(Derived, DERIVED_SCRIPT)),
+    "native_fingerprints": (
+        _break_native_fingerprints,
+        lambda: run_ws(ScalarTypes, SCALAR_SCRIPT),
+    ),
     "deferred_save": (_break_deferred_save, _deferred_reconnect_run),
 }
 
