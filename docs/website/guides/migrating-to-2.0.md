@@ -1247,9 +1247,9 @@ old frame with `type` renamed to `kind`. The
   on the URL serves the new bundle.
 - **A service worker that caches the page can make the tab reload in a loop.**
   If it keeps serving the old page shell, the reloaded tab runs the old bundle
-  again. The server stops the loop: a second refusal of the same browser within
-  30 seconds gets no reload (the WebSocket closes with `4409`, the SSE stream
-  ends), and the page stays server-rendered without a live connection. Unregister
+  again. The server stops the loop: the third refusal of the same session
+  within 30 seconds gets no reload (the WebSocket closes with `4409`, the SSE
+  stream ends), and the page stays server-rendered without a live connection. Unregister
   the service worker or stop it caching the page shell and the djust bundle,
   and tell affected users to clear the site's data.
 - **Custom JavaScript that read raw frames must change.** Code that listened
@@ -1604,4 +1604,4 @@ removed setting at startup, and `exposure_policy = "legacy"`,
 module that states it is imported. `djust_exposure_inventory` lists any view
 still on `[policy: legacy]`; run `--fix` on it.
 
-<!-- generated-doc prose-sha256: 4bfd4c596fb1 -->
+<!-- generated-doc prose-sha256: 81d3a5903e67 -->

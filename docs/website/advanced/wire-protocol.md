@@ -117,12 +117,17 @@ bundle URLs carry `?v=<djust version>`, so the reload fetches the new bundle.
 **A cached page shell can make the reload loop.** A service worker or an HTTP
 cache that keeps serving the old page (and with it the old bundle) hands the
 reloaded tab the same outdated client, which is refused again. The server
-breaks that loop: it notes each refusal for 30 seconds in Django's default
-cache, keyed by the browser's session (its client IP when it has none), on
-all three wires. A second refusal of the same browser inside that window gets
-no `reload` frame: the WebSocket closes with `4409` alone, the SSE stream ends
-empty, and an HTTP POST gets the same `409` as before. The tab then stays on the
-server-rendered page without a live connection instead of reloading forever.
+breaks that loop: it counts the refusals that send a `reload` frame (the
+WebSocket mount verbs and the SSE stream GET) per session for 30 seconds, in
+Django's default cache. The first two in that window reload, so several old
+tabs of one browser all reload; the third gets no `reload` frame: the WebSocket
+closes with `4409` alone and the SSE stream ends empty. A current client treats
+a bare `4409` as a mismatch and applies its own 30-second guard, so the tab ends
+on the server-rendered page with a `djust:error` (`protocol_mismatch`) instead
+of reloading forever. A request with no session is never counted and always
+reloads; the count is never keyed on a client IP, which every user behind one
+proxy shares. POST refusals (`409`) are not counted.
+
 The remedy is on the client: unregister the service worker (or have its next
 version skip caching the page shell and the djust bundle), or clear the site's
 data in the browser. With a `DummyCache` as the default cache the breaker never

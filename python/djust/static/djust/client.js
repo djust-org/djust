@@ -1274,8 +1274,11 @@ async function dispatchCommonFrame(transport, data) {
         case 'reload':
             // Hot reload: file changed, refresh the page. A protocol reload
             // (#3658) goes through the loop guard.
-            if (data.reason === 'protocol') protocolMismatch(transport);
-            else window.location.reload();
+            if (data.reason === 'protocol') {
+                // The socket's 4409 close that follows needs no second verdict.
+                if (transport) transport._protocolReloadSocket = transport.ws || true;
+                protocolMismatch(transport);
+            } else window.location.reload();
             return true;
 
         default:
@@ -1812,7 +1815,7 @@ class LiveViewWebSocket {
             if (globalThis.djustDebug) console.log('[LiveView] WebSocket disconnected');
             this.viewMounted = false;
             // 4409: the server speaks another protocol (#3658). Its `reload`
-            // frame came first; reconnecting would only be refused again.
+            // frame usually came first; reconnecting would only be refused again.
             // (Named for the auth codes; a 4409 dispatches no auth event.)
             const authRefused = event.code === 4401 || event.code === 4403 || event.code === 4409;
             // Disable before notifying hooks: a refused session must not retry
@@ -1875,6 +1878,11 @@ class LiveViewWebSocket {
                 if (event.code !== 4409) window.dispatchEvent(new CustomEvent('djust:auth-refused', {
                     detail: { code: event.code, reason: event.reason || '', error_code: refusalCode }
                 }));
+                // A bare 4409 (no `reload` frame on this socket): the server's
+                // reload breaker tripped (#3658). The client's own 30 s guard
+                // decides between one reload and `djust:error` protocol_mismatch.
+                else if (this._protocolReloadSocket !== socket) protocolMismatch(this);
+                this._protocolReloadSocket = null;
                 return;
             }
 

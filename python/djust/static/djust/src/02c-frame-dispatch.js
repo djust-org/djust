@@ -272,8 +272,11 @@ async function dispatchCommonFrame(transport, data) {
         case 'reload':
             // Hot reload: file changed, refresh the page. A protocol reload
             // (#3658) goes through the loop guard.
-            if (data.reason === 'protocol') protocolMismatch(transport);
-            else window.location.reload();
+            if (data.reason === 'protocol') {
+                // The socket's 4409 close that follows needs no second verdict.
+                if (transport) transport._protocolReloadSocket = transport.ws || true;
+                protocolMismatch(transport);
+            } else window.location.reload();
             return true;
 
         default:

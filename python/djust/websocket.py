@@ -2524,15 +2524,14 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
     async def _refuse_outdated_client(self, data: Dict[str, Any]) -> None:
         """Make an outdated client reload: a ``reload`` frame, then close 4409 (#3658).
 
-        A second refusal of the same browser within ``RELOAD_BREAKER_SECONDS``
-        closes with 4409 alone: a cached page shell keeps serving the old
-        bundle, and another reload would loop (``_protocol.note_refusal``).
+        Past ``RELOAD_BREAKER_LIMIT`` refusals of one session within
+        ``RELOAD_BREAKER_SECONDS`` it closes with 4409 alone: a cached page
+        shell keeps serving the old bundle, and another reload would loop
+        (``_protocol.note_refusal``).
         """
         from ._protocol import anote_refusal, session_key_of
 
-        reload = await anote_refusal(
-            session_key_of(self.scope.get("session")), self._get_client_ip()
-        )
+        reload = await anote_refusal(session_key_of(self.scope.get("session")))
         logger.info(
             "WebSocket %s from a client speaking protocol %s (server speaks %s): %s",
             sanitize_for_log(str(data.get("type"))),

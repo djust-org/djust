@@ -24,13 +24,16 @@ check needs no code in the old bundle.
 
 **Reload breaker.** A service worker or a cache that keeps serving the old page
 shell would make the reload loop: the reloaded page runs the same old bundle and
-is refused again. So a refusal is noted for :data:`RELOAD_BREAKER_SECONDS`
-in Django's default cache, keyed by the browser's session key (its client IP
-when it has none), on all three transports. A second refusal inside that window
-sends no ``reload`` frame: the WebSocket closes with 4409 alone and the SSE
-stream ends empty (an HTTP POST gets the same 409 either way). The remedy is on
-the client: clear the site data, or unregister the service worker. With a
-``DummyCache`` the breaker never trips.
+is refused again. So the refusals that send a ``reload`` frame (the WebSocket
+mount verbs and the SSE stream GET) are counted per session for
+:data:`RELOAD_BREAKER_SECONDS` in Django's default cache. The first
+:data:`RELOAD_BREAKER_LIMIT` reload, so several old tabs of one browser all
+reload; the next gets no ``reload`` frame: the WebSocket closes with 4409 alone
+and the SSE stream ends empty. A request with no session is never counted and
+always reloads (a client IP would lump together everyone behind one proxy).
+POST refusals (409) are not counted. The remedy is on the client: clear the
+site data, or unregister the service worker. With a ``DummyCache`` the breaker
+never trips.
 
 ``settings.DJUST_ALLOW_MISSING_PROTOCOL = True`` accepts a request that names
 no version (a non-browser client, or a test that builds frames by hand). A
@@ -70,9 +73,12 @@ MOUNT_VERBS = frozenset({"mount", "mount_batch", "live_redirect_mount"})
 #: The ``code`` of the HTTP 409 envelope.
 MISMATCH_CODE = "protocol_mismatch"
 
-#: A second refusal of the same browser within this many seconds sends no
-#: ``reload`` frame (the reload-loop breaker).
+#: The window of the reload-loop breaker, in seconds.
 RELOAD_BREAKER_SECONDS = 30
+
+#: How many refusals of one session within the window still send ``reload``;
+#: the next one does not (the reload-loop breaker).
+RELOAD_BREAKER_LIMIT = 2
 
 
 def _allow_missing() -> bool:
@@ -131,15 +137,15 @@ def reload_frame() -> Dict[str, Any]:
     return {"type": "reload", "reason": "protocol", PROTOCOL_FIELD: PROTOCOL_VERSION}
 
 
-def _refusal_key(session_key: Optional[str], client_ip: Optional[str]) -> Optional[str]:
-    """The cache key that notes a refusal of this browser, or ``None``."""
-    if session_key:
-        ident = "s:" + session_key
-    elif client_ip:
-        ident = "ip:" + client_ip
-    else:
+def _refusal_key(session_key: Optional[str]) -> Optional[str]:
+    """The cache key that counts the refusals of this browser's session, or ``None``.
+
+    Keyed on the session only: a client IP is shared by every user behind one
+    proxy or NAT, so it would make one user's loop stop another user's reload.
+    """
+    if not session_key:
         return None
-    digest = hashlib.sha256(ident.encode("utf-8")).hexdigest()[:32]
+    digest = hashlib.sha256(session_key.encode("utf-8")).hexdigest()[:32]
     return "djust:protocol-refusal:" + digest
 
 
@@ -148,34 +154,38 @@ def _breaker_note_failed(exc: BaseException) -> bool:
     return True
 
 
-def note_refusal(session_key: Optional[str], client_ip: Optional[str]) -> bool:
-    """Note a refusal of this browser; ``True`` when it may be told to reload.
+def note_refusal(session_key: Optional[str]) -> bool:
+    """Count a refusal of this session; ``True`` while it may be told to reload.
 
-    ``False`` when the same browser (its session key, or its client IP when
-    it has none) was refused within :data:`RELOAD_BREAKER_SECONDS`: the old
-    bundle came back after the reload, so another reload would loop.
+    The first :data:`RELOAD_BREAKER_LIMIT` refusals of one session within
+    :data:`RELOAD_BREAKER_SECONDS` reload (several old tabs of one browser all
+    reload); the next one does not, because the old bundle keeps coming back
+    and another reload would loop. With no session nothing is counted and
+    the client always reloads.
     """
-    key = _refusal_key(session_key, client_ip)
+    key = _refusal_key(session_key)
     if key is None:
         return True
     try:
         from django.core.cache import cache
 
-        return bool(cache.add(key, 1, timeout=RELOAD_BREAKER_SECONDS))
-    except Exception as exc:  # noqa: BLE001 - a broken cache must not stop the refusal
+        cache.add(key, 0, timeout=RELOAD_BREAKER_SECONDS)
+        return int(cache.incr(key)) <= RELOAD_BREAKER_LIMIT
+    except Exception as exc:  # noqa: BLE001 - a broken cache must not stop the reload
         return _breaker_note_failed(exc)
 
 
-async def anote_refusal(session_key: Optional[str], client_ip: Optional[str]) -> bool:
+async def anote_refusal(session_key: Optional[str]) -> bool:
     """:func:`note_refusal` for an async caller."""
-    key = _refusal_key(session_key, client_ip)
+    key = _refusal_key(session_key)
     if key is None:
         return True
     try:
         from django.core.cache import cache
 
-        return bool(await cache.aadd(key, 1, timeout=RELOAD_BREAKER_SECONDS))
-    except Exception as exc:  # noqa: BLE001 - a broken cache must not stop the refusal
+        await cache.aadd(key, 0, timeout=RELOAD_BREAKER_SECONDS)
+        return int(await cache.aincr(key)) <= RELOAD_BREAKER_LIMIT
+    except Exception as exc:  # noqa: BLE001 - a broken cache must not stop the reload
         return _breaker_note_failed(exc)
 
 
@@ -212,6 +222,7 @@ __all__ = [
     "PROTOCOL_HEADER",
     "PROTOCOL_QUERY_PARAM",
     "PROTOCOL_VERSION",
+    "RELOAD_BREAKER_LIMIT",
     "RELOAD_BREAKER_SECONDS",
     "anote_refusal",
     "client_protocol_ok",

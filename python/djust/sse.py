@@ -76,7 +76,6 @@ from ._protocol import (
     anote_refusal,
     client_protocol_ok,
     mismatch_response,
-    note_refusal,
     reload_frame,
     request_protocol_ok,
     session_key_of,
@@ -1532,10 +1531,7 @@ class DjustSSEStreamView(View):
         # #3658: an outdated (cached) bundle. The stream yields the reload frame
         # every client obeys, then ends; no session is created or mounted.
         if not client_protocol_ok(request.GET.get(PROTOCOL_QUERY_PARAM)):
-            reload = await anote_refusal(
-                session_key_of(getattr(request, "session", None)),
-                _client_ip_from_request(request),
-            )
+            reload = await anote_refusal(session_key_of(getattr(request, "session", None)))
             logger.info(
                 "SSE: stream GET from a client speaking protocol %s (server speaks %s): %s",
                 sanitize_for_log(request.GET.get(PROTOCOL_QUERY_PARAM, "")),
@@ -1830,11 +1826,6 @@ class DjustSSEMessageView(View):
             return JsonResponse({"error": "Content-Type must be application/json"}, status=415)
         if not request_protocol_ok(request):
             # #3658: an outdated (cached) bundle; a new client reloads on the 409.
-            # Noted for the reload breaker like the other refusals.
-            note_refusal(
-                session_key_of(getattr(request, "session", None)),
-                _client_ip_from_request(request),
-            )
             return cast(HttpResponse, mismatch_response())
 
         session = _get_session(session_id)

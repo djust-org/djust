@@ -225,4 +225,36 @@ describe('close code 4409', () => {
         lv.connect();
         expect(sockets).toHaveLength(count);
     });
+
+    function connected() {
+        const ctx = page();
+        const lv = ctx.window.djust.liveViewInstance;
+        lv.enabled = true;
+        lv.ws = null;
+        lv.connect();
+        return { ...ctx, lv, socket: ctx.sockets[ctx.sockets.length - 1] };
+    }
+
+    it('a bare 4409 (the server breaker tripped) goes through the loop guard: reload', () => {
+        const { socket, reloads, errors } = connected();
+        socket.onclose({ code: 4409, reason: '' });
+        expect(reloads).toHaveLength(1);
+        expect(errors).toHaveLength(0);
+    });
+
+    it('a bare 4409 soon after a protocol reload reports protocol_mismatch instead', () => {
+        const { window, socket, reloads, errors } = connected();
+        window.sessionStorage.setItem('djust:protocol-reload', String(Date.now() - 1000));
+        socket.onclose({ code: 4409, reason: '' });
+        expect(reloads).toHaveLength(0);
+        expect(errors.map((e) => e.code)).toEqual(['protocol_mismatch']);
+    });
+
+    it('a 4409 after the reload frame on the same socket adds no second verdict', async () => {
+        const { lv, socket, reloads, errors } = connected();
+        await lv.handleMessage({ type: 'reload', reason: 'protocol', protocol: PROTOCOL });
+        socket.onclose({ code: 4409, reason: '' });
+        expect(reloads).toHaveLength(1);
+        expect(errors).toHaveLength(0);
+    });
 });
