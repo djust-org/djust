@@ -141,6 +141,18 @@ class IfTable(Table):
     )
 
 
+class NestedTable(Table):
+    """A row with a nested ``{% for %}`` over its tags (#4325): the item store
+    keeps it under ``loop_item_nested``."""
+
+    exposure_policy = "explicit"
+    template = (
+        '<div dj-root><p>{{ title }}</p><table>{% for row in items %}<tr id="row-{{ row.id }}">'
+        "<td>{{ row.sku }}</td><td>{{ row.qty }}</td>"
+        "<td>{% for t in row.tags %}<i>{{ t }}</i>{% endfor %}</td></tr>{% endfor %}</table></div>"
+    )
+
+
 async def turn(monkeypatch, view_class, event_name, *off) -> Dict[str, Any]:
     """The counts of ONE *event_name* turn on a warmed-up *view_class*."""
     with monkeypatch.context() as spies:
@@ -293,9 +305,13 @@ async def test_one_changed_cell_walks_the_list_three_times_not_four(monkeypatch)
     now = await turn(monkeypatch, Table, "cell")
     off = await turn(monkeypatch, Table, "cell", "plain_sub_ids", "snapshot_fingerprints")
     assert now["reply"] == off["reply"] == "patch"
-    # Before and after the handler, and once to convert for Rust.
+    # Before and after the handler, and once to convert for Rust. The two
+    # snapshot walks are native digests (#4325): no tree, no BLAKE2b digest.
     assert now["snapshot_assigns.calls"] == 2
     assert 2 * size <= now["fingerprint.snapshot.nodes"] < 2 * size + 500
+    assert 2 * size <= now["native.snapshot.nodes"] < 2 * size + 500
+    assert now.get("fingerprint_digest.calls", 0) == 0
+    assert now.get("native.sync.calls", 0) == 0
     # The conversion walks the changed row only (``list_item_deltas``, #4325).
     assert now["convert_for_render.nodes"] == harness.nodes(make_rows(ROWS)[0])
     assert now.get("fingerprint_and_convert.calls", 0) == 0
@@ -308,8 +324,10 @@ async def test_one_changed_cell_walks_the_list_three_times_not_four(monkeypatch)
     assert now["changed_keys"] == off["changed_keys"] == [["items"]]
     assert off["sent_keys"] == [["items"]] and now["sent_keys"] == [[]]
     assert now["update_state_items.rows"] == 1
-    assert off["fingerprint_and_convert.nodes"] == size
-    assert off.get("convert_for_render.calls", 0) == 0
+    # Off, the sync digests the list itself (natively, #4325) and converts it whole.
+    assert off["native.sync.nodes"] == size
+    assert off["convert_for_render.nodes"] == size
+    assert off.get("fingerprint_and_convert.calls", 0) == 0
 
 
 async def test_snapshot_fingerprints_gate_off(monkeypatch):
@@ -319,8 +337,11 @@ async def test_snapshot_fingerprints_gate_off(monkeypatch):
     size = harness.nodes(make_rows(ROWS))
     now = await turn(monkeypatch, Table, "cell")
     off = await turn(monkeypatch, Table, "cell", "snapshot_fingerprints")
-    assert off["fingerprint_and_convert.nodes"] == size
-    assert off.get("convert_for_render.calls", 0) == 0
+    # The sync takes the list's native digest itself (#4325) and converts it
+    # in a walk that builds no tree.
+    assert off["native.sync.nodes"] == size
+    assert off["convert_for_render.nodes"] == size
+    assert off.get("fingerprint_and_convert.calls", 0) == 0
     assert off.get("collect_sub_ids.calls", 0) == now.get("collect_sub_ids.calls", 0) == 0
     # Without the snapshot's walks there is no row delta either: the list goes whole.
     assert off["sent_keys"] == [["items"]]
@@ -354,6 +375,17 @@ async def test_list_item_deltas_gate_off(monkeypatch):
     assert now["changed_keys"] == off["changed_keys"] == [["items"]]
 
 
+async def test_plain_model_scans_gate_off(monkeypatch):
+    """A list the snapshot proved plain is not searched for a Model (#4325); off,
+    the sync scans it again (``_normalize_db_values``, ``_holds_db_value``)."""
+    now = await turn(monkeypatch, Table, "cell")
+    off = await turn(monkeypatch, Table, "cell", "plain_model_scans")
+    assert now.get("holds_db_value.calls", 0) == 0
+    assert off["holds_db_value.calls"] >= 1
+    assert now["normalize_db_values.calls"] < off["normalize_db_values.calls"]
+    assert now["changed_keys"] == off["changed_keys"]
+
+
 async def test_loop_item_render_gate_off(monkeypatch):
     """One changed cell re-renders one loop item in Rust; the other rows come
     from the per-item store (#4325). Off, every item renders. The frames are
@@ -363,6 +395,18 @@ async def test_loop_item_render_gate_off(monkeypatch):
     assert now["loop_item_store.hits"] == ROWS - 1
     assert now["loop_item_store.misses"] == 1
     assert off.get("loop_item_store.hits", 0) == 0
+
+
+async def test_loop_item_nested_gate_off(monkeypatch):
+    """Rows with a nested loop come from the per-item store too (#4325); off,
+    such a body is refused and every row renders. The frames are the same
+    either way (``test_per_turn_oracle.py``)."""
+    now = await turn(monkeypatch, NestedTable, "cell")
+    off = await turn(monkeypatch, NestedTable, "cell", "loop_item_nested")
+    assert now["loop_item_store.hits"] == ROWS - 1
+    assert now["loop_item_store.misses"] == 1
+    assert off.get("loop_item_store.hits", 0) == 0
+    assert now["reply"] == off["reply"]
 
 
 async def test_an_unrelated_change_does_not_walk_the_list_in_the_sync(monkeypatch):
@@ -375,8 +419,8 @@ async def test_an_unrelated_change_does_not_walk_the_list_in_the_sync(monkeypatc
     now = await turn(monkeypatch, Table, "retitle")
     off = await turn(monkeypatch, Table, "retitle", "snapshot_fingerprints")
     assert now["sent_keys"] == off["sent_keys"] == [["title"]]
-    assert now.get("fingerprint.sync.calls", 0) == 0
-    assert off["fingerprint.sync.nodes"] == size
+    assert now.get("fingerprint.sync.calls", 0) == now.get("native.sync.calls", 0) == 0
+    assert off["native.sync.nodes"] == size
     assert now.get("collect_sub_ids.ids", 0) <= 1
 
 
@@ -392,6 +436,26 @@ async def test_the_walk_grows_with_the_list_and_no_faster(monkeypatch):
         return nodes
 
     assert 3.8 < total(big) / total(small) < 4.1
+
+
+async def test_native_fingerprints_gate_off(monkeypatch):
+    """The snapshots take a native digest of the plain list (#4325): no
+    fingerprint tree and no BLAKE2b digest on the turn. Off, the two snapshot
+    walks build trees again, and the sync digests the post tree (the pre
+    tree's digest is the item delta's check that Rust holds the old list).
+    The same row is sent either way."""
+    size = harness.nodes(make_rows(ROWS))
+    now = await turn(monkeypatch, Table, "cell")
+    off = await turn(monkeypatch, Table, "cell", "native_fingerprints")
+    # The same walks, node for node, wherever they run.
+    assert now["fingerprint.snapshot.nodes"] == off["fingerprint.snapshot.nodes"]
+    assert off.get("native.snapshot.calls", 0) == 0
+    assert 2 * size <= off["fingerprint.snapshot.nodes"] < 2 * size + 500
+    assert now.get("fingerprint_digest.calls", 0) == 0
+    assert off["fingerprint_digest.calls"] >= 2
+    assert now["update_state_items.rows"] == off["update_state_items.rows"] == 1
+    assert now["sent_keys"] == off["sent_keys"] == [[]]
+    assert now["changed_keys"] == off["changed_keys"] == [["items"]]
 
 
 # --- #4107: a turn that changes nothing saved --------------------------------------

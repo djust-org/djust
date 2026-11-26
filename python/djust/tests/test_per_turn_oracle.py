@@ -223,6 +223,60 @@ class IfTable(Table):
     )
 
 
+class NestedTable(Table):
+    """A table whose rows hold nested loops (#4325 WP4): the per-item store
+    keeps each row with its inner loops, so an in-place change to an inner
+    list must still re-render that row."""
+
+    exposure_policy = "explicit"
+    template = (
+        "<div dj-root><h1>{{ title }}</h1>"
+        '<table>{% for row in items %}<tr id="row-{{ row.id }}"><td>{{ row.name }}</td>'
+        "<td>{% for t in row.tags %}{% if forloop.first %}<b>{{ t }}</b>{% else %}"
+        "{% for ch in t %}{{ ch }}{% endfor %}{% endif %}{{ forloop.parentloop.counter }}"
+        "{% empty %}-{% endfor %}</td></tr>{% endfor %}</table></div>"
+    )
+
+    @event_handler()
+    def retag(self, **kwargs):
+        # Same length, new content: only the row's value hash can tell.
+        self.items[5]["tags"][1] = self.items[5]["tags"][1] + "x"
+
+
+class NestedOuterTable(Table):
+    """The inner loop reads outer context (``title``): the per-item store must
+    refuse the body (#4325 WP4, ``reads_only_bound``), so a retitle re-renders
+    every row."""
+
+    exposure_policy = "explicit"
+    template = (
+        "<div dj-root><h1>{{ title }}</h1>"
+        '<table>{% for row in items %}<tr id="row-{{ row.id }}"><td>{{ row.name }}</td>'
+        "<td>{% for t in row.tags %}{{ title }}:{{ t }} {% endfor %}</td></tr>"
+        "{% endfor %}</table></div>"
+    )
+
+
+NESTED_OUTER_SCRIPT = [
+    ("event", "retitle"),
+    ("event", "cell"),
+    ("event", "retitle"),
+    ("event", "nested"),
+]
+
+
+NESTED_SCRIPT = [
+    ("event", "retag"),
+    ("event", "nested"),
+    ("event", "cell"),
+    ("event", "retag"),
+    ("event", "swap"),
+    ("event", "retitle"),
+    ("event", "rebind"),
+    ("event", "retag"),
+]
+
+
 TABLE_SCRIPT = [
     ("event", "cell"),
     ("event", "retitle"),
@@ -410,6 +464,63 @@ MODELS_SCRIPT = [
 ]
 
 
+# --- a model that enters a plain list (plain_model_scans, #4325) -----------------------
+
+
+class ModelScan(_Base):
+    """A list of plain dicts that a handler, then ``get_context_data``, gives a
+    Model. The snapshot calls the list plain until the Model is in it; the sync
+    must scan it again whenever one can have been added since the walk."""
+
+    exposure_policy = "explicit"
+    template = (
+        "<div dj-root><ul>{% for r in rows %}<li>{{ r.first_name }}|"
+        "{% for g in r.groups.all %}{{ g.name }}{% endfor %}</li>{% endfor %}</ul>"
+        "<i>{{ n }}</i></div>"
+    )
+    n = state(0)
+    rows = state(default_factory=list)
+
+    def mount(self, request, **kwargs):
+        self.rows = [{"first_name": "a"}, {"first_name": "b"}]
+
+    @event_handler()
+    def bump(self, **kwargs):
+        self.n += 1
+
+    @event_handler()
+    def add_model(self, **kwargs):
+        from django.contrib.auth.models import Group
+
+        user = User.objects.get(username="oracle-a")
+        user.groups.add(Group.objects.get_or_create(name="staff-g")[0])
+        self.rows.append(user)
+
+    @event_handler()
+    def add_dict(self, **kwargs):
+        self.rows.append({"first_name": "d%d" % len(self.rows)})
+
+
+MODEL_SCAN_SCRIPT = [
+    ("event", "bump"),
+    ("event", "add_dict"),
+    ("event", "add_model"),
+    ("event", "bump"),
+]
+
+
+class LateModelScan(ModelScan):
+    """The Model is added in ``get_context_data``, after the snapshot's walk."""
+
+    def get_context_data(self, **kwargs):
+        if self.n and not any(isinstance(r, User) for r in self.rows):
+            self.rows.append(User.objects.get(username="oracle-b"))
+        return super().get_context_data(**kwargs)
+
+
+LATE_MODEL_SCRIPT = [("event", "bump"), ("event", "add_dict"), ("event", "bump")]
+
+
 # --- temporary_assigns and a private attribute behind a derived value -----------------
 
 
@@ -594,6 +705,59 @@ LATE_SCRIPT = [
     ("event", "retitle", {"value": "b"}),
     ("event", "grow"),
     ("event", "retitle", {"value": "c"}),
+]
+
+
+class BigLateWriter(_Base):
+    """A list long enough for the item delta, with native digests (#4325):
+    a row changed by the handler, a row changed by ``get_context_data`` after
+    the post-event snapshot (the snapshot's digests must not be reused), and a
+    row changed by ``handle_info`` between turns."""
+
+    exposure_policy = "explicit"
+    template = (
+        "<div dj-root><h1>{{ title }}</h1>{% for r in rows %}"
+        "<p>{{ r.label }}:{{ r.n }}:{{ r.on }}</p>{% endfor %}</div>"
+    )
+    title = state("a")
+    rows = state(default_factory=list)
+    _listen_channels = frozenset({"per_turn_oracle"})
+
+    def mount(self, request, **kwargs):
+        self.rows = [{"label": "r%d" % i, "n": i, "on": i % 2 == 0} for i in range(24)]
+
+    def get_context_data(self, **kwargs):
+        self.rows[5]["label"] = self.title.upper()
+        return super().get_context_data(**kwargs)
+
+    @event_handler()
+    def cell(self, **kwargs):
+        self.rows[7]["n"] += 1
+
+    @event_handler()
+    def flip(self, **kwargs):
+        # ``True`` to ``1`` and back: equal in Python, different on the page.
+        self.rows[8]["on"] = 1 if self.rows[8]["on"] is True else True
+
+    @event_handler()
+    def retitle(self, value: str = "b", **kwargs):
+        self.title = value
+
+    def handle_info(self, message):
+        RAN.append("notify")
+        self.rows[9]["n"] = message["payload"]["qty"]
+
+
+BIG_LATE_SCRIPT: List[Tuple[Any, ...]] = [
+    ("event", "cell"),
+    ("event", "retitle", {"value": "b"}),
+    ("event", "flip"),
+    ("notify", {"qty": 50}),
+    ("event", "cell"),
+    ("event", "flip"),
+    ("event", "retitle", {"value": "c"}),
+    ("notify", {"qty": 51}),
+    ("event", "cell"),
 ]
 
 
@@ -991,9 +1155,13 @@ WS_CASES: List[Tuple[str, type, Script]] = [
     ("counter_server", ServerCounter, COUNTER_SCRIPT),
     ("counter_client", ClientCounter, COUNTER_SCRIPT),
     ("table", Table, TABLE_SCRIPT),
+    ("nested_table", NestedTable, NESTED_SCRIPT),
+    ("nested_outer_table", NestedOuterTable, NESTED_OUTER_SCRIPT),
     ("derived", Derived, DERIVED_SCRIPT),
     ("opaque", Opaque, OPAQUE_SCRIPT),
     ("models", Models, MODELS_SCRIPT),
+    ("model_scan", ModelScan, MODEL_SCAN_SCRIPT),
+    ("late_model_scan", LateModelScan, LATE_MODEL_SCRIPT),
     ("temporary_assigns", Feed, FEED_SCRIPT),
     ("private_attribute", Private, PRIVATE_SCRIPT),
     ("component", ComponentPage, COMPONENT_SCRIPT),
@@ -1006,6 +1174,7 @@ WS_CASES: List[Tuple[str, type, Script]] = [
     ("scalar_types", ScalarTypes, SCALAR_SCRIPT),
     ("dirty_tracking", Dirty, DIRTY_SCRIPT),
     ("late_writer", LateWriter, LATE_SCRIPT),
+    ("big_late_writer", BigLateWriter, BIG_LATE_SCRIPT),
     ("held_thing", HeldThing, HELD_SCRIPT),
 ]
 
@@ -1180,6 +1349,7 @@ async def test_websocket_frames_are_identical(monkeypatch, label, view_class, sc
 #: The cases each shortcut is also turned off alone on.
 ALONE_LABELS = (
     "table",
+    "nested_table",
     "derived",
     "processors",
     "counter_client",
@@ -1187,6 +1357,7 @@ ALONE_LABELS = (
     "tick",
     "scalar_types",
     "dirty_tracking",
+    "big_late_writer",
 )
 ALONE_CASES = [case for case in WS_CASES if case[0] in ALONE_LABELS]
 
@@ -1706,6 +1877,10 @@ def _break_compact_fingerprints(patch: Any) -> None:
     wrong = change_detection._BARE | {bool, float}
     patch.setattr(change_detection, "_BARE", wrong)
     patch.setattr(state_pass, "_BARE", wrong)
+    # Plain data takes the native digest (#4325), which builds no tree; the
+    # compact encoding is what its tree is when that is off. Turning it off
+    # changes no frame by itself (``test_each_shortcut_alone_changes_no_frame``).
+    patch.setattr(_per_turn, "disabled", _per_turn.disabled | {"native_fingerprints"})
 
 
 def _break_digest_fingerprints(patch: Any) -> None:
@@ -1714,6 +1889,31 @@ def _break_digest_fingerprints(patch: Any) -> None:
     # As if the digest dropped what it hashes: every fingerprint has the same
     # one, so every key that was kept reads as unchanged since the last sync.
     patch.setattr(change_detection, "fingerprint_digest", lambda fp: b"\0" * 16)
+
+    # The native digest of plain data (#4325) is a digest too: the same.
+    def constant(value: Any, budget: int, rows: bool = False) -> Any:
+        row_digests = b"\0" * 16 * len(value) if rows and type(value) is list else None
+        return b"\0" * 16, 0, row_digests
+
+    patch.setattr(change_detection, "_plain_digest", constant)
+
+
+def _break_native_fingerprints(patch: Any) -> None:
+    from djust import _rust, change_detection
+
+    real = change_detection._plain_digest
+
+    # As if the native encoding hashed a ``bool`` as the ``int`` it equals:
+    # ``[True]`` and ``[1]`` get one digest, so a turn that swaps them is
+    # taken for unchanged.
+    def bool_as_int(value: Any, budget: int, rows: bool = False) -> Any:
+        _rust._set_plain_digest_sabotage(1)
+        try:
+            return real(value, budget, rows)
+        finally:
+            _rust._set_plain_digest_sabotage(0)
+
+    patch.setattr(change_detection, "_plain_digest", bool_as_int)
 
 
 def _break_snapshot_fingerprints(patch: Any) -> None:
@@ -1756,6 +1956,47 @@ def _break_loop_item_render(patch: Any) -> None:
     patch.setattr(rust_bridge.RustBridgeMixin, "_sync_state_to_rust", sync)
 
 
+def _break_plain_model_scans(patch: Any) -> None:
+    from djust.mixins import rust_bridge
+
+    # As if every list were proved plain: the one holding a Model is never
+    # scanned, so the Model reaches the renderer un-normalized (a relation
+    # the template walks on it, which the normalized dict lacks, prints nothing).
+    patch.setattr(rust_bridge, "_plain_by_snapshot", lambda walks, key, value: type(value) is list)
+
+
+def _break_loop_item_nested(patch: Any) -> None:
+    from djust.mixins import rust_bridge
+
+    real = rust_bridge.RustBridgeMixin._sync_state_to_rust
+
+    # As if the store hashed a row without its inner lists: a nested loop over
+    # a changed inner list is served from the previous render.
+    def sync(self: Any, *args: Any, **kwargs: Any) -> Any:
+        rust_view = getattr(self, "_rust_view", None)
+        if rust_view is not None and hasattr(rust_view, "_set_loop_item_store_sabotage"):
+            rust_view._set_loop_item_store_sabotage(3)
+        return real(self, *args, **kwargs)
+
+    patch.setattr(rust_bridge.RustBridgeMixin, "_sync_state_to_rust", sync)
+
+
+def _break_nested_read_check(patch: Any) -> None:
+    from djust.mixins import rust_bridge
+
+    real = rust_bridge.RustBridgeMixin._sync_state_to_rust
+
+    # As if the store stored a nested-loop body without checking what it reads
+    # (sabotage 4): an inner loop reading outer context is served stale.
+    def sync(self: Any, *args: Any, **kwargs: Any) -> Any:
+        rust_view = getattr(self, "_rust_view", None)
+        if rust_view is not None and hasattr(rust_view, "_set_loop_item_store_sabotage"):
+            rust_view._set_loop_item_store_sabotage(4)
+        return real(self, *args, **kwargs)
+
+    patch.setattr(rust_bridge.RustBridgeMixin, "_sync_state_to_rust", sync)
+
+
 SABOTAGE = {
     "unchanged_save_skip": (_break_unchanged_save_skip, _reconnect_run),
     "contract_cache": (_break_contract_cache, _redeclared_run),
@@ -1774,6 +2015,14 @@ SABOTAGE = {
     "plain_sub_ids": (_break_plain_sub_ids, lambda: run_ws(Opaque, OPAQUE_SCRIPT)),
     "list_item_deltas": (_break_list_item_deltas, lambda: run_ws(Table, TABLE_SCRIPT)),
     "loop_item_render": (_break_loop_item_render, lambda: run_ws(IfTable, TABLE_SCRIPT)),
+    "plain_model_scans": (
+        _break_plain_model_scans,
+        lambda: run_ws(ModelScan, MODEL_SCAN_SCRIPT),
+    ),
+    "loop_item_nested": (
+        _break_loop_item_nested,
+        lambda: run_ws(NestedTable, NESTED_SCRIPT),
+    ),
     "snapshot_fingerprints": (
         _break_snapshot_fingerprints,
         lambda: run_ws(LateWriter, LATE_SCRIPT),
@@ -1783,6 +2032,10 @@ SABOTAGE = {
         lambda: run_ws(ScalarTypes, SCALAR_SCRIPT),
     ),
     "digest_fingerprints": (_break_digest_fingerprints, lambda: run_ws(Derived, DERIVED_SCRIPT)),
+    "native_fingerprints": (
+        _break_native_fingerprints,
+        lambda: run_ws(ScalarTypes, SCALAR_SCRIPT),
+    ),
     "deferred_save": (_break_deferred_save, _deferred_reconnect_run),
 }
 
@@ -1808,3 +2061,19 @@ async def test_a_shortcut_that_served_a_stale_value_fails_the_oracle(monkeypatch
             FLIPS["n"] = 0
             broken = await observe(run)
     assert as_bytes(honest) != as_bytes(broken), f"breaking {shortcut} changed no frame"
+
+
+async def test_a_nested_body_stored_without_its_read_check_fails_the_oracle(monkeypatch):
+    """``loop_item_nested`` rests on two checks: the row's value hash (its
+    sabotage above) and the scoped read check of the body (#4325 WP4). Broken
+    so that an inner loop reading ``title`` is stored, a retitle must leave
+    stale rows in a frame the ``nested_outer_table`` case compares."""
+    from django.test import override_settings
+
+    run = lambda: run_ws(NestedOuterTable, NESTED_OUTER_SCRIPT)  # noqa: E731
+    with harness.shortcuts(monkeypatch), override_settings(DJUST_STATE_SAVE_INTERVAL=0):
+        honest = await observe(run)
+        with monkeypatch.context() as patch:
+            _break_nested_read_check(patch)
+            broken = await observe(run)
+    assert as_bytes(honest) != as_bytes(broken), "skipping the nested read check changed no frame"

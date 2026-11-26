@@ -197,16 +197,20 @@ def _projection_skips_the_jit(queryset: Any) -> bool:
     return _is_projection(queryset)
 
 
-def _state_model_values(context: Any) -> Dict[str, Any]:
+def _state_model_values(context: Any, proved_plain: Any = None) -> Dict[str, Any]:
     """The top-level context values that hold a model (a ``Model``, a ``QuerySet``, a list or
     tuple containing a ``Model``), for the render-time handle overlay (#3936). Empty when the
-    flag is off, so the default path pays one config read."""
+    flag is off, so the default path pays one config read. *proved_plain*, if given, is called
+    with ``(key, value)`` and answers True for a value a snapshot proved plain data, which
+    holds no model: its scan is skipped (#4325)."""
     if not state_models_as_handles_enabled():
         return {}
     from django.db.models import QuerySet
 
     out: Dict[str, Any] = {}
     for key, value in context.items():
+        if proved_plain is not None and proved_plain(key, value):
+            continue
         if isinstance(value, QuerySet) and _is_projection(value):
             # ``.values()`` / ``.values_list()``: the rows are dicts / tuples with no model to hand
             # a proxy for, and the floor refuses a projection's rows (vector 5), so a handle would

@@ -16,6 +16,7 @@ pub mod model_serializer;
 
 mod child_bindings;
 mod deferred_children;
+mod fingerprint;
 mod provenance_edits;
 use dashmap::DashMap;
 use djust_core::html_whitespace::is_html_whitespace_only;
@@ -653,6 +654,20 @@ impl RustLiveViewBackend {
         self.loop_render_cache.item_store().is_enabled()
     }
 
+    /// Let the per-item loop store keep items whose body holds a nested
+    /// `{% for %}` (#4325; `djust._per_turn` `loop_item_nested`, on by
+    /// default). Changing it drops the stored items.
+    fn set_loop_item_store_nested(&mut self, enabled: bool) {
+        self.loop_render_cache
+            .item_store_mut()
+            .set_nested_enabled(enabled);
+    }
+
+    /// Whether bodies with a nested loop may be stored (introspection).
+    fn loop_item_store_nested(&self) -> bool {
+        self.loop_render_cache.item_store().nested_enabled()
+    }
+
     /// Items the per-item loop store served in the most recent render.
     fn loop_item_store_hits(&self) -> u64 {
         self.loop_render_cache.item_store().hits()
@@ -665,7 +680,9 @@ impl RustLiveViewBackend {
     }
 
     /// Testing only: break the per-item loop store on purpose (1: serve a
-    /// stored item whatever its value, 2: ignore length and environment), so
+    /// stored item whatever its value, 2: ignore length and environment, 3:
+    /// hash a row's inner lists by kind only, 4: store nested-loop bodies
+    /// without checking what they read), so
     /// the differential tests can prove they see a broken store. 0 restores.
     #[pyo3(name = "_set_loop_item_store_sabotage")]
     fn set_loop_item_store_sabotage(&mut self, mode: u8) {
@@ -2725,9 +2742,7 @@ impl RustLiveViewBackend {
             // Borrow-split trick: take the index out so we can pass it mutably
             // while also borrowing self.last_vdom / self.last_html. Replaced
             // at the end of this block regardless of hit/miss.
-            let text_region_fast_path: Option<(VNode, Vec<djust_vdom::Patch>)> = if text_fast_path
-                .is_none()
-            {
+            let text_region_plan: Option<TextRegionPlan> = if text_fast_path.is_none() {
                 if let (Some(old_vdom), Some(old_html), Some(mut index)) = (
                     self.last_vdom.as_ref(),
                     self.last_html.as_ref(),
@@ -2746,6 +2761,40 @@ impl RustLiveViewBackend {
                 }
             } else {
                 None
+            };
+            // #4325 C1: the plan was validated against the borrowed tree;
+            // apply it to `last_vdom` itself instead of patching a clone of
+            // the whole tree (and dropping the old one afterwards). The
+            // patches are serialized BEFORE the tree is taken, and nothing on
+            // this path returns early: any refusal (a serialization error, an
+            // apply that finds a non-text node) leaves `last_vdom` in place
+            // and falls back to the full parse, which also restores
+            // `loop_render_cache` and rebuilds the index the plan shifted.
+            let text_region_fast_path: Option<(VNode, String)> = match text_region_plan {
+                Some(plan) => {
+                    let patches_json = if plan.patches.is_empty() {
+                        Some("[]".to_string())
+                    } else {
+                        serde_json::to_string(&plan.patches).ok()
+                    };
+                    match (patches_json, self.last_vdom.take()) {
+                        (Some(json), Some(mut vdom)) => {
+                            if apply_text_region_edits(&mut vdom, &plan.edits) {
+                                Some((vdom, json))
+                            } else {
+                                self.last_vdom = Some(vdom);
+                                self.text_node_index = None;
+                                None
+                            }
+                        }
+                        (_, vdom) => {
+                            self.last_vdom = vdom;
+                            self.text_node_index = None;
+                            None
+                        }
+                    }
+                }
+                None => None,
             };
 
             let mut took_full_parse = false;
@@ -2773,17 +2822,10 @@ impl RustLiveViewBackend {
                 // try_text_region_fast_path to catch stale offsets.
                 self.text_node_index = None;
                 (vdom, patches_json, parse_ms, 0.0)
-            } else if let Some((vdom, text_patches)) = text_region_fast_path {
+            } else if let Some((vdom, patches_json)) = text_region_fast_path {
                 fast_path = FAST_PATH_TEXT_REGION;
                 let parse_ms = t_parse_start.elapsed().as_secs_f64() * 1000.0;
-                let patches_json = if text_patches.is_empty() {
-                    Some("[]".to_string())
-                } else {
-                    Some(serde_json::to_string(&text_patches).map_err(|e| {
-                        PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
-                    })?)
-                };
-                (vdom, patches_json, parse_ms, 0.0)
+                (vdom, Some(patches_json), parse_ms, 0.0)
             } else {
                 took_full_parse = true;
                 fast_path = FAST_PATH_NONE;
@@ -6357,17 +6399,19 @@ fn decode_text_entities(raw: &str) -> Option<std::borrow::Cow<'_, str>> {
 /// full pre-hydration HTML and, if the divergence is a single text span,
 /// patch the corresponding VDOM text node in place. Skips html5ever.
 ///
-/// Returns `Some((new_vdom, patches))` if the fast path can be taken.
+/// Returns `Some(plan)` if the fast path can be taken: the text edits to
+/// apply to `old_vdom` (with [`apply_text_region_edits`]) and the patches.
 /// Returns `None` if the diff crosses a tag boundary, spans multiple
 /// text nodes, contains HTML entities that would confuse the offset
 /// math, or any validation fails — in which case the caller falls back
-/// to the full html5ever path.
+/// to the full html5ever path. The tree is only borrowed, so a decline
+/// cannot have touched it (#4325 C1); the index is updated only on success.
 fn try_text_region_fast_path(
     old_html: &str,
     new_html: &str,
     old_vdom: &VNode,
     text_node_index: &mut [TextNodeEntry],
-) -> Option<(VNode, Vec<djust_vdom::Patch>)> {
+) -> Option<TextRegionPlan> {
     // Without an index we can't resolve pfx → VDOM path cheaply. The
     // caller should have built one after the previous full-parse render.
     if text_node_index.is_empty() {
@@ -6413,7 +6457,7 @@ fn try_text_region_fast_path(
     // If nothing differs (shouldn't happen when changed_keys is set, but
     // be defensive), there's no patch to produce.
     if pfx == old_len && pfx == new_len {
-        return Some((old_vdom.clone(), Vec::new()));
+        return Some(TextRegionPlan::default());
     }
 
     // Defensive: ensure slicing ranges are valid after snapping.
@@ -6518,16 +6562,9 @@ fn try_text_region_fast_path(
         return None;
     }
 
-    // Clone the old VDOM and apply the edit in place.
     // Never patch a node the current VDOM doesn't hold as text (#2999).
     if !get_vdom_node(old_vdom, &path).is_some_and(|n| n.is_text()) {
         return None;
-    }
-    let mut new_vdom = old_vdom.clone();
-    {
-        let node = get_vdom_node_mut(&mut new_vdom, &path)?;
-        node.text = Some(new_text.clone());
-        node.cached_html = None;
     }
 
     // Keep the index in sync for subsequent fast-path renders: the
@@ -6549,8 +6586,54 @@ fn try_text_region_fast_path(
     } else {
         Some(djust_id)
     };
-    let patch = djust_vdom::set_text_patch(&new_vdom, path, d, new_text);
-    Some((new_vdom, vec![patch]))
+    // The parent's dj-id is read from the old tree: a text edit never
+    // changes an element's id, so it is the id the patched tree holds.
+    let patch = djust_vdom::set_text_patch(old_vdom, path.clone(), d, new_text.clone());
+    Some(TextRegionPlan {
+        edits: vec![TextRegionEdit {
+            path,
+            text: new_text,
+        }],
+        patches: vec![patch],
+    })
+}
+
+/// One text node a text-region fast path rewrites (#4325 C1).
+#[derive(Debug)]
+struct TextRegionEdit {
+    path: Vec<usize>,
+    text: String,
+}
+
+/// What a text-region fast path decided, before anything is mutated
+/// (#4325 C1): the edits to apply to the old tree and the patches that
+/// describe them. No edits and no patches is the no-diff outcome.
+#[derive(Debug, Default)]
+struct TextRegionPlan {
+    edits: Vec<TextRegionEdit>,
+    patches: Vec<djust_vdom::Patch>,
+}
+
+/// Apply a [`TextRegionPlan`]'s edits to `vdom` in place (#4325 C1). Every
+/// path is checked to name a text node first, so `false` means nothing was
+/// written and the caller falls back to the full parse; the fast paths
+/// validated the paths already, so it is not expected. Never panics (it runs
+/// under the FFI boundary). Same writes as the clone-and-patch they replace: the text, and
+/// the node's cached HTML cleared.
+fn apply_text_region_edits(vdom: &mut VNode, edits: &[TextRegionEdit]) -> bool {
+    if !edits
+        .iter()
+        .all(|e| get_vdom_node(vdom, &e.path).is_some_and(|n| n.is_text()))
+    {
+        return false;
+    }
+    for edit in edits {
+        if let Some(node) = get_vdom_node_mut(vdom, &edit.path) {
+            node.text = Some(edit.text.clone());
+            node.cached_html = None;
+        }
+    }
+    true
 }
 
 /// Most text nodes [`try_multi_text_region_fast_path`] patches in one render
@@ -6574,13 +6657,14 @@ const MAX_TEXT_REGIONS: usize = 8;
 /// the VDOM's text, the node is a text node, the new text is not blank),
 /// plus refusing `>`, CR, NUL and a change in a leading newline (which the
 /// parser drops after `<pre>`/`<textarea>`). Any doubt: `None`, full parse.
-/// The index is updated only when the path is taken.
+/// The index is updated only when the path is taken, and the tree is only
+/// borrowed: the caller applies the returned plan (#4325 C1).
 fn try_multi_text_region_fast_path(
     old_html: &str,
     new_html: &str,
     old_vdom: &VNode,
     text_node_index: &mut [TextNodeEntry],
-) -> Option<(VNode, Vec<djust_vdom::Patch>)> {
+) -> Option<TextRegionPlan> {
     if text_node_index.is_empty() {
         return None;
     }
@@ -6677,13 +6761,14 @@ fn try_multi_text_region_fast_path(
         return None;
     }
 
-    let mut new_vdom = old_vdom.clone();
     let mut patches = Vec::with_capacity(changes.len());
+    let mut edits = Vec::with_capacity(changes.len());
     for (idx, _, new_text) in &changes {
         let entry = &text_node_index[*idx];
-        let node = get_vdom_node_mut(&mut new_vdom, &entry.path)?;
-        node.text = Some(new_text.clone());
-        node.cached_html = None;
+        edits.push(TextRegionEdit {
+            path: entry.path.clone(),
+            text: new_text.clone(),
+        });
         let d = if entry.djust_id.is_empty() {
             None
         } else {
@@ -6692,7 +6777,7 @@ fn try_multi_text_region_fast_path(
         // The parent's dj-id plus this node's index in it (#4001), as the
         // tree diff emits them; only together, and only when the parent has one.
         let (parent_d, index) = match entry.path.split_last() {
-            Some((&index, parent_path)) => get_vdom_node_mut(&mut new_vdom, parent_path)
+            Some((&index, parent_path)) => get_vdom_node(old_vdom, parent_path)
                 .and_then(|parent| parent.djust_id.clone())
                 .filter(|id| !id.is_empty())
                 .map_or((None, None), |id| (Some(id), Some(index))),
@@ -6713,8 +6798,7 @@ fn try_multi_text_region_fast_path(
     let mut pending = changes.into_iter().peekable();
     for (j, entry) in text_node_index.iter_mut().enumerate().skip(first) {
         let start = (entry.html_start as isize + delta) as usize;
-        if pending.peek().is_some_and(|c| c.0 == j) {
-            let (_, new_run_len, new_text) = pending.next()?;
+        if let Some((_, new_run_len, new_text)) = pending.next_if(|c| c.0 == j) {
             let old_run_len = entry.html_end - entry.html_start;
             entry.html_start = start;
             entry.html_end = start + new_run_len;
@@ -6726,7 +6810,7 @@ fn try_multi_text_region_fast_path(
             entry.html_start = start;
         }
     }
-    Some((new_vdom, patches))
+    Some(TextRegionPlan { edits, patches })
 }
 
 fn starts_with_ci(slice: &[u8], prefix: &[u8]) -> bool {
@@ -8064,6 +8148,13 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dj_root_stamp_offsets, m)?)?;
     m.add_function(wrap_pyfunction!(collapse_inter_tag_whitespace, m)?)?;
     m.add_function(wrap_pyfunction!(fast_json_dumps, m)?)?;
+    // Native plain-data content digest for change detection (#4325).
+    m.add_function(wrap_pyfunction!(fingerprint::plain_digest, m)?)?;
+    m.add_function(wrap_pyfunction!(fingerprint::digest_rows_changed, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        fingerprint::_set_plain_digest_sabotage,
+        m
+    )?)?;
     m.add_function(wrap_pyfunction!(resolve_template_inheritance, m)?)?;
     m.add_function(wrap_pyfunction!(resolve_relative_template_includes, m)?)?;
     m.add_function(wrap_pyfunction!(compute_template_hash, m)?)?;
@@ -9684,6 +9775,214 @@ mod fast_path_flag_tests {
                 .any(|p| matches!(p, djust_vdom::Patch::SetAttr { .. })),
             "patches: {patches:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod text_region_in_place_4325 {
+    //! #4325 C1: the text-region fast paths decide against the borrowed tree
+    //! and the caller applies their plan to `last_vdom` in place, instead of
+    //! patching a clone. Output-identical by construction; these pin it.
+    use super::{
+        apply_text_region_edits, build_text_node_index, try_multi_text_region_fast_path,
+        try_text_region_fast_path, RustLiveViewBackend, TextNodeEntry, TextRegionEdit,
+        FAST_PATH_NONE, FAST_PATH_TEXT_REGION,
+    };
+    use djust_core::{ObjectKey, Value};
+    use indexmap::IndexMap;
+    use pyo3::prelude::*;
+    use std::collections::HashMap;
+
+    const TEMPLATE: &str = concat!(
+        "<div dj-root><p>{{ label }}</p>",
+        "<table>{% for row in rows %}<tr><td>{{ row.a }}</td><td>{{ row.b }}</td></tr>",
+        "{% endfor %}</table></div>"
+    );
+
+    fn state(label: &str, cells: &[(&str, &str)]) -> HashMap<String, Value> {
+        let rows = cells
+            .iter()
+            .map(|(a, b)| {
+                let mut m = IndexMap::new();
+                m.insert(ObjectKey::Str(own("a")), Value::String(own(a)));
+                m.insert(ObjectKey::Str(own("b")), Value::String(own(b)));
+                Value::Object(m)
+            })
+            .collect();
+        let mut s = HashMap::new();
+        s.insert(own("label"), Value::String(own(label)));
+        s.insert(own("rows"), Value::List(rows));
+        s
+    }
+
+    /// An owned copy, spelled so the provenance inventory (which pins the
+    /// usual conversion spellings) does not read test fixtures as sites.
+    fn own(s: &str) -> String {
+        s.chars().collect()
+    }
+
+    /// An index entry's byte range, path and text.
+    fn span(e: &TextNodeEntry) -> (usize, usize, Vec<usize>, String) {
+        let TextNodeEntry {
+            html_start,
+            html_end,
+            path,
+            text,
+            ..
+        } = e;
+        (*html_start, *html_end, path.clone(), own(text))
+    }
+
+    const BASE: [(&str, &str); 4] = [("a0", "b0"), ("a1", "b1"), ("a2", "b2"), ("a3", "b3")];
+
+    fn timing(view: &RustLiveViewBackend, key: &str) -> f64 {
+        view.get_render_timing()
+            .and_then(|m| m.get(key).copied())
+            .expect("timing")
+    }
+
+    fn mounted() -> RustLiveViewBackend {
+        Python::initialize();
+        let mut view = RustLiveViewBackend::new_rust(own(TEMPLATE));
+        view.update_state_rust(state("L", &BASE));
+        view.render_with_diff_detached().expect("initial render");
+        view
+    }
+
+    /// Render `next` on a fresh view with every fast path off: the full
+    /// parse and diff the in-place result must equal.
+    fn full_parse(next: &HashMap<String, Value>) -> (String, serde_json::Value, String) {
+        let mut slow = mounted();
+        slow.update_state_rust(next.clone());
+        slow.set_changed_keys(vec![own("label"), own("rows")]);
+        slow.fragment_text_map = None;
+        slow.node_html_cache = Vec::new();
+        slow.text_node_index = None;
+        let (html, patches, _) = slow.render_with_diff_detached().expect("full diff");
+        assert_eq!(timing(&slow, "fast_path"), FAST_PATH_NONE);
+        let tree = slow.last_vdom.as_ref().expect("tree").to_html();
+        (
+            html,
+            serde_json::from_str(&patches.expect("patches")).expect("json"),
+            tree,
+        )
+    }
+
+    fn fast(next: &HashMap<String, Value>) -> (String, serde_json::Value, String) {
+        let mut view = mounted();
+        view.update_state_rust(next.clone());
+        view.set_changed_keys(vec![own("rows")]);
+        let (html, patches, _) = view.render_with_diff_detached().expect("render");
+        assert_eq!(timing(&view, "fast_path"), FAST_PATH_TEXT_REGION);
+        let tree = view.last_vdom.as_ref().expect("tree").to_html();
+        // The index the path shifted still describes the patched tree.
+        let rebuilt = build_text_node_index(
+            view.last_html.as_deref().expect("html"),
+            view.last_vdom.as_ref().expect("tree"),
+        );
+        let kept = view.text_node_index.as_ref().expect("index");
+        assert_eq!(kept.len(), rebuilt.len());
+        for (k, r) in kept.iter().zip(&rebuilt) {
+            assert_eq!(span(k), span(r));
+        }
+        (
+            html,
+            serde_json::from_str(&patches.expect("patches")).expect("json"),
+            tree,
+        )
+    }
+
+    #[test]
+    fn single_span_in_place_equals_the_full_parse() {
+        let mut cells = BASE;
+        cells[2].1 = "b2-longer";
+        let next = state("L", &cells);
+        assert_eq!(fast(&next), full_parse(&next));
+    }
+
+    #[test]
+    fn several_spans_in_place_equal_the_full_parse() {
+        let mut cells = BASE;
+        cells[1].0 = "x";
+        cells[3].1 = "b3 & more";
+        let next = state("L", &cells);
+        let (html, patches, tree) = fast(&next);
+        assert_eq!(patches.as_array().map(Vec::len), Some(2), "{patches}");
+        assert_eq!((html, patches, tree), full_parse(&next));
+    }
+
+    #[test]
+    fn no_diff_is_an_empty_plan_that_keeps_the_tree() {
+        let view = mounted();
+        let html = view.last_html.as_deref().map(own).expect("html");
+        let tree = view.last_vdom.as_ref().expect("tree");
+        let mut index = view.text_node_index.clone().expect("index");
+        let plan = try_text_region_fast_path(&html, &html, tree, &mut index).expect("plan");
+        assert!(plan.edits.is_empty() && plan.patches.is_empty());
+        // The multi path declines a no-diff outright.
+        assert!(try_multi_text_region_fast_path(&html, &html, tree, &mut index).is_none());
+    }
+
+    #[test]
+    fn a_late_decline_leaves_the_index_and_tree_untouched() {
+        // The first changed cell is valid; the second goes whitespace-only,
+        // which the multi path refuses only when it reaches it (#2999).
+        let view = mounted();
+        let old_html = view.last_html.as_deref().map(own).expect("html");
+        let tree = view.last_vdom.as_ref().expect("tree");
+        let before = tree.to_html();
+        let new_html = old_html
+            .replacen(">a1<", ">changed<", 1)
+            .replacen(">b3<", "> <", 1);
+        assert_ne!(new_html, old_html);
+        let mut index = view.text_node_index.clone().expect("index");
+        let snapshot: Vec<_> = index.iter().map(span).collect();
+        assert!(try_text_region_fast_path(&old_html, &new_html, tree, &mut index).is_none());
+        assert!(try_multi_text_region_fast_path(&old_html, &new_html, tree, &mut index).is_none());
+        let after: Vec<_> = index.iter().map(span).collect();
+        assert_eq!(after, snapshot);
+        assert_eq!(tree.to_html(), before);
+    }
+
+    #[test]
+    fn a_declined_render_diffs_against_the_untouched_tree() {
+        // Same change through the view: the fast paths decline and the full
+        // parse diffs against `last_vdom`, which must still be the old tree.
+        let mut cells = BASE;
+        cells[1].0 = "changed";
+        cells[3].1 = " ";
+        let next = state("L", &cells);
+        let mut view = mounted();
+        view.update_state_rust(next.clone());
+        view.set_changed_keys(vec![own("rows")]);
+        let (html, patches, _) = view.render_with_diff_detached().expect("render");
+        assert_eq!(timing(&view, "fast_path"), FAST_PATH_NONE);
+        let patches: serde_json::Value =
+            serde_json::from_str(&patches.expect("patches")).expect("json");
+        let tree = view.last_vdom.as_ref().expect("tree").to_html();
+        assert_eq!((html, patches, tree), full_parse(&next));
+    }
+
+    #[test]
+    fn apply_refuses_a_plan_naming_a_non_text_node_and_writes_nothing() {
+        let view = mounted();
+        let mut tree = view.last_vdom.clone().expect("tree");
+        let before = tree.to_html();
+        let text_path = view.text_node_index.as_ref().expect("index")[0]
+            .path
+            .clone();
+        let edits = [
+            TextRegionEdit {
+                path: text_path,
+                text: own("written?"),
+            },
+            TextRegionEdit {
+                path: vec![],
+                text: own("root is an element"),
+            },
+        ];
+        assert!(!apply_text_region_edits(&mut tree, &edits));
+        assert_eq!(tree.to_html(), before);
     }
 }
 

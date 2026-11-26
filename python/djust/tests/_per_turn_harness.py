@@ -140,10 +140,37 @@ def counting(monkeypatch: Any) -> Counts:
     spy(change_detection, "deep_fingerprint", "fingerprint.other", walked=True)
     spy(websocket, "deep_fingerprint", "fingerprint.snapshot", walked=True)
     spy(rust_bridge, "deep_fingerprint", "fingerprint.sync", walked=True)
+
+    # The native digest (#4325) is the same walk, done in Rust. One the
+    # snapshot takes is counted under ``fingerprint.snapshot`` like the Python
+    # walk it replaces, and under ``native.snapshot``; one the sync takes is
+    # ``native.sync`` only (it stands for ``deep_fingerprint`` or for the
+    # fingerprint half of ``fingerprint_and_convert``). A refused value is then
+    # walked in Python, which counts itself.
+    def native_spy(owner: Any, labels: Any) -> None:
+        original = getattr(owner, "native_digest")
+
+        def wrapper(value: Any, *args: Any, **kwargs: Any) -> Any:
+            out = original(value, *args, **kwargs)
+            if out is not None:
+                walked = nodes(value)
+                for label in labels:
+                    counts[label + ".calls"] += 1
+                    counts[label + ".nodes"] += walked
+            return out
+
+        wrapper.__wrapped__ = original  # type: ignore[attr-defined]
+        monkeypatch.setattr(owner, "native_digest", wrapper)
+
+    native_spy(websocket, ("fingerprint.snapshot", "native.snapshot"))
+    native_spy(rust_bridge, ("native.sync",))
+    spy(change_detection, "fingerprint_digest", "fingerprint_digest")
     spy(rust_bridge, "fingerprint_and_convert", "fingerprint_and_convert", walked=True)
     spy(rust_bridge, "convert_for_render", "convert_for_render", walked=True)
     spy(state_pass, "_fused", "state_pass.fused_nodes")
     spy(rust_bridge, "normalize_django_value", "normalize_django_value")
+    spy(rust_bridge, "_normalize_db_values", "normalize_db_values")
+    spy(rust_bridge, "_holds_db_value", "holds_db_value")
 
     original_sub_ids = rust_bridge._collect_sub_ids
 
