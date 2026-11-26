@@ -4116,7 +4116,16 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                         //       See `loop_cache::body_is_cacheable`.
                         // When disabled, `loop_caching_enabled` is `false` and the
                         // render path below is byte-identical to before #1967.
+                        //
+                        // Off, too, for a loop nested in an item the per-item
+                        // store will keep (#4325 WP4): its placeholders would be
+                        // stored with that item and served with no manifest
+                        // entry behind them.
                         let loop_caching_enabled = !R::TRACKED
+                            && !crate::loop_cache::with_active_item_store(|store| {
+                                store.is_storing()
+                            })
+                            .unwrap_or(false)
                             && crate::loop_cache::with_active_cache(|cache| {
                                 cache.body_cacheable(nodes, var_names)
                             })
@@ -4147,6 +4156,9 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                                 if context.raw_py_objects().is_some_and(|objects| {
                                     objects.contains_key("forloop")
                                         || var_names.iter().any(|v| objects.contains_key(v))
+                                        || crate::loop_cache::nested_loop_var_names(nodes)
+                                            .iter()
+                                            .any(|v| objects.contains_key(v))
                                 }) {
                                     return None;
                                 }
@@ -4585,8 +4597,18 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                             } else if let (Some(key), Some(hash)) = (item_slot, item_hash) {
                                 // #4325: render, and store unless the render
                                 // read anything live from Python.
+                                // `storing` keeps a nested loop's placeholders
+                                // out of the stored bytes (#4325 WP4); left
+                                // again before an error propagates.
                                 let live_before = djust_core::context::live_read_count();
-                                let html = render_nodes_output::<L, R>(nodes, ctx, loader)?;
+                                crate::loop_cache::with_active_item_store(|store| {
+                                    store.enter_storing()
+                                });
+                                let rendered = render_nodes_output::<L, R>(nodes, ctx, loader);
+                                crate::loop_cache::with_active_item_store(|store| {
+                                    store.leave_storing()
+                                });
+                                let html = rendered?;
                                 let pure = djust_core::context::live_read_count() == live_before;
                                 crate::loop_cache::with_active_item_store(|store| {
                                     if pure {

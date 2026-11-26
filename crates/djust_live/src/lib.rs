@@ -653,6 +653,20 @@ impl RustLiveViewBackend {
         self.loop_render_cache.item_store().is_enabled()
     }
 
+    /// Let the per-item loop store keep items whose body holds a nested
+    /// `{% for %}` (#4325; `djust._per_turn` `loop_item_nested`, on by
+    /// default). Changing it drops the stored items.
+    fn set_loop_item_store_nested(&mut self, enabled: bool) {
+        self.loop_render_cache
+            .item_store_mut()
+            .set_nested_enabled(enabled);
+    }
+
+    /// Whether bodies with a nested loop may be stored (introspection).
+    fn loop_item_store_nested(&self) -> bool {
+        self.loop_render_cache.item_store().nested_enabled()
+    }
+
     /// Items the per-item loop store served in the most recent render.
     fn loop_item_store_hits(&self) -> u64 {
         self.loop_render_cache.item_store().hits()
@@ -665,7 +679,8 @@ impl RustLiveViewBackend {
     }
 
     /// Testing only: break the per-item loop store on purpose (1: serve a
-    /// stored item whatever its value, 2: ignore length and environment), so
+    /// stored item whatever its value, 2: ignore length and environment, 3:
+    /// hash a row's inner lists by kind only), so
     /// the differential tests can prove they see a broken store. 0 restores.
     #[pyo3(name = "_set_loop_item_store_sabotage")]
     fn set_loop_item_store_sabotage(&mut self, mode: u8) {

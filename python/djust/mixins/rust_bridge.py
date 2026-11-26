@@ -1984,6 +1984,9 @@ class RustBridgeMixin:
             set_item_store = getattr(self._rust_view, "set_loop_item_store_enabled", None)
             if set_item_store is not None:
                 set_item_store(_per_turn.on("loop_item_render"))
+            set_item_nested = getattr(self._rust_view, "set_loop_item_store_nested", None)
+            if set_item_nested is not None:
+                set_item_nested(_per_turn.on("loop_item_nested"))
             if (
                 snapshot_walks is not None
                 and prev_refs
