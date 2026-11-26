@@ -34,7 +34,9 @@ from ..change_detection import (
     ChangedKeys,
     SnapshotEntry,
     deep_fingerprint,
+    entry_retained,
     fingerprints_by_content,
+    native_digest,
     retained_fingerprint,
     warn_fingerprint_truncated,
 )
@@ -590,7 +592,8 @@ def _list_item_delta(
     """The rows of *value* to send to Rust instead of the whole list, or None (#4325).
 
     *post* and *pre* are the post- and pre-event snapshot's walks of this very
-    list (``SnapshotEntry``: the object, its fingerprint tree, plain or not);
+    list (``SnapshotEntry``: the object, its fingerprint tree or native digest,
+    plain or not, and with a native digest its per-row digests, #4325);
     *previous* is what the last sync kept of the key's fingerprint. The delta
     is sound only when all of these hold, and None sends the list whole:
 
@@ -610,6 +613,47 @@ def _list_item_delta(
         or not (post[2] and pre[2])
     ):
         return None
+    if post[3] is not None or pre[3] is not None:
+        indices = _native_changed_rows(value, post, pre, previous)
+    else:
+        indices = _tree_changed_rows(value, post, pre, previous)
+    if not indices or 4 * len(indices) > len(value):
+        return None
+    rows: List[Any] = []
+    for i in indices:
+        converted = convert_for_render(value[i], "%s.%d" % (key, i))
+        if converted is None or converted[0]:
+            return None
+        rows.append(converted[1])
+    return indices, rows
+
+
+def _native_changed_rows(
+    value: Any, post: SnapshotEntry, pre: SnapshotEntry, previous: Any
+) -> Optional[List[int]]:
+    """The changed rows by the snapshots' native per-row digests (#4325), or None.
+
+    Both walks must be native (a value's digest kind is a function of the
+    value, so a mixed pair means the list stopped or started being plain data:
+    sent whole), and the pre-event digest must be what the last sync kept.
+    """
+    from .._rust import digest_rows_changed
+
+    post_rows, pre_rows = post[4], pre[4]
+    if post[3] is None or pre[3] is None or post_rows is None or pre_rows is None:
+        return None
+    if len(post_rows) != 16 * len(value) or len(value) < _ITEM_DELTA_MIN_LEN:
+        return None
+    if previous != pre[3]:
+        return None
+    changed: Optional[List[int]] = digest_rows_changed(pre_rows, post_rows)
+    return changed
+
+
+def _tree_changed_rows(
+    value: Any, post: SnapshotEntry, pre: SnapshotEntry, previous: Any
+) -> Optional[List[int]]:
+    """The changed rows by comparing the snapshots' row trees, or None."""
     post_tree, pre_tree = post[1], pre[1]
     if (
         type(post_tree) is not tuple
@@ -625,16 +669,7 @@ def _list_item_delta(
         return None
     if len(value) < _ITEM_DELTA_MIN_LEN or previous != retained_fingerprint(pre_tree):
         return None
-    indices = [i for i, (a, b) in enumerate(zip(pre_rows, post_rows)) if a != b]
-    if not indices or 4 * len(indices) > len(value):
-        return None
-    rows: List[Any] = []
-    for i in indices:
-        converted = convert_for_render(value[i], "%s.%d" % (key, i))
-        if converted is None or converted[0]:
-            return None
-        rows.append(converted[1])
-    return indices, rows
+    return [i for i, (a, b) in enumerate(zip(pre_rows, post_rows)) if a != b]
 
 
 #: ``_request_scoped_fingerprint``'s answer for a value it does not fingerprint.
@@ -667,6 +702,12 @@ def _request_scoped_fingerprint(key: str, value: Any) -> Tuple[bool, Any, Any]:
 
     ONE statement of the rule for the Rust sync and the scoped component
     render's check, so the two cannot disagree (#1646).
+
+    These fingerprints stay tree digests, not native ones (#4325): they are
+    compared only with what this same function kept last turn
+    (``_trusted_request_scoped_fingerprints``), never with ``prev_fps``, so
+    the kind is consistent; and a processor's value is small, so one fused
+    walk is cheaper than a native digest plus a conversion walk.
     """
     kind = type(value)
     if kind in _EXACT_PLAIN_SCALARS:
@@ -1751,7 +1792,19 @@ class RustBridgeMixin:
                         # nothing ran since (#3999): its tree is this value's
                         # fingerprint. Converting it for Rust, when it is sent,
                         # is a walk that builds no fingerprint.
-                        fp = retained_fingerprint(entry[1])
+                        fp = entry_retained(entry)
+                        new_fps[key] = fp
+                        if convert:
+                            converted_walk = convert_for_render(value, key)
+                            if converted_walk is not None:
+                                converted_by_fp[key] = converted_walk
+                        return fp
+                    native = native_digest(value)
+                    if native is not None:
+                        # Plain data: its retained fingerprint is the native
+                        # digest (#4325, ``change_detection.content_digest``),
+                        # and converting it is a walk that builds no tree.
+                        fp = native[0]
                         new_fps[key] = fp
                         if convert:
                             converted_walk = convert_for_render(value, key)

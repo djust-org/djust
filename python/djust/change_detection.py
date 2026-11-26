@@ -39,6 +39,21 @@ digests, so what a socket keeps for change detection no longer grows with
 the state. Two fingerprints have equal digests exactly when they are equal
 (see :func:`fingerprint_digest` for the two deliberate differences, both of
 which only ever detect MORE).
+
+For PLAIN DATA (exact ``dict`` / ``list`` / ``tuple`` nodes and exact scalar
+leaves, within the depth cap and the budget) the digest is computed natively,
+in one Rust walk that builds no tree (:func:`native_digest`, #4325). The rule,
+stated once: **a container's retained fingerprint is its native digest when
+``djust._rust.plain_digest`` accepts the value, and the BLAKE2b digest of its
+tree otherwise.** That is a function of the value alone, so a pre/post, sync or
+cross-turn comparison never compares a native digest with a tree digest of the
+same value. The two kinds are domain-separated (the native hash starts with
+its own tag byte, under a per-process key), so a comparison across kinds, were
+one ever made, could only read as "changed": an extra sync, never a missed one.
+Every producer of a retained fingerprint for a value goes through
+:func:`content_digest` (or takes the native digest a snapshot already made of
+the very same object); :func:`retained_fingerprint` alone is only for a tree
+of a value :func:`native_digest` refused.
 """
 
 from __future__ import annotations
@@ -60,6 +75,8 @@ __all__ = [
     "fingerprint_digest",
     "retained_fingerprint",
     "deep_digest",
+    "content_digest",
+    "native_digest",
     "DIGEST_SIZE",
     "warn_fingerprint_truncated",
     "DEFAULT_BUDGET",
@@ -71,6 +88,7 @@ __all__ = [
 #: walk degrades to identity for whatever remains.
 DEFAULT_BUDGET = 20_000
 
+#: Mirrored by ``MAX_DEPTH`` in ``crates/djust_live/src/fingerprint.rs`` (#4325).
 _MAX_DEPTH = 32
 
 _IMMUTABLE_LEAVES = (str, int, float, bool, bytes, type(None))
@@ -288,22 +306,86 @@ def retained_fingerprint(fp: Hashable) -> Hashable:
     return fp
 
 
-def deep_digest(value: Any, budget: int = DEFAULT_BUDGET) -> Tuple[Any, bool]:
-    """``(retained fingerprint, truncated)`` of *value*.
+try:
+    from ._rust import plain_digest as _plain_digest
+except ImportError:  # pragma: no cover - an extension built before #4325
+    _plain_digest = None
 
-    On a truncated walk the first item is a fresh ``object()``: an incomplete
-    fingerprint proves nothing, so it is equal to nothing.
+_NATIVE_TYPES = (dict, list, tuple)
+
+
+def native_digest(
+    value: Any, budget: int = DEFAULT_BUDGET, rows: bool = False
+) -> Optional[Tuple[bytes, Optional[bytes]]]:
+    """``(digest, row_digests)`` of a plain-data container, natively, or None (#4325).
+
+    The 16-byte retained fingerprint of *value* when it is PLAIN DATA (what
+    ``deep_fingerprint(plain=...)`` calls plain) and fits *budget*; computed
+    by ``djust._rust.plain_digest`` in one walk, with no fingerprint tree.
+    With *rows* and a ``list`` root, ``row_digests`` is one ``bytes`` holding
+    a 16-byte digest per item, in order (``digest_rows_changed`` compares two).
+
+    None, and the caller walks in Python exactly as before, for anything else:
+    a scalar root, a set, a subclass, an object, a component's state, a value
+    past the depth cap, a cycle, a budget overrun (so the truncation warning
+    stays Python's), and whenever the ``native_fingerprints`` or
+    ``digest_fingerprints`` shortcut is off (with digests off, what is kept is
+    the tree, and a native digest would be the other kind).
     """
+    if (
+        type(value) not in _NATIVE_TYPES
+        or _plain_digest is None
+        or not _per_turn.on("native_fingerprints")
+        or not _per_turn.on("digest_fingerprints")
+    ):
+        return None
+    out = _plain_digest(value, budget, rows)
+    if out is None:
+        return None
+    return out[0], out[2]
+
+
+def content_digest(value: Any, budget: int = DEFAULT_BUDGET) -> Tuple[Any, bool]:
+    """``(retained fingerprint, truncated)`` of *value*: THE producer (#4325).
+
+    The native digest when :func:`native_digest` accepts *value*, else the
+    digest of its tree (:func:`retained_fingerprint`). On a truncated walk
+    the first item is a fresh ``object()``: an incomplete fingerprint proves
+    nothing, so it is equal to nothing.
+    """
+    native = native_digest(value, budget)
+    if native is not None:
+        return native[0], False
     fp, truncated = deep_fingerprint(value, budget)
     if truncated:
         return object(), True
     return retained_fingerprint(fp), False
 
 
+def deep_digest(value: Any, budget: int = DEFAULT_BUDGET) -> Tuple[Any, bool]:
+    """``(retained fingerprint, truncated)`` of *value*: :func:`content_digest`."""
+    return content_digest(value, budget)
+
+
 #: One container kept by an event snapshot for the sync of the same turn
-#: (#3999): ``(value, fingerprint tree, plain)``. ``value`` is the object
-#: itself, held so its ``id()`` cannot be reused while the entry lives.
-SnapshotEntry = Tuple[Any, Hashable, bool]
+#: (#3999, #4325): ``(value, fingerprint tree, plain, digest, row digests)``.
+#:
+#: * ``[0]`` is the object itself, held so its ``id()`` cannot be reused while
+#:   the entry lives;
+#: * ``[1]`` is its fingerprint tree, or None when the native digest was taken
+#:   instead (then ``[3]`` is set);
+#: * ``[2]`` is True when the walk found it plain data (always True with a
+#:   native digest, which only plain data has);
+#: * ``[3]`` is the native digest (:func:`native_digest`), which IS the
+#:   retained fingerprint of the value, or None;
+#: * ``[4]`` is the row digests of a list with a native digest, or None.
+SnapshotEntry = Tuple[Any, Optional[Hashable], bool, Optional[bytes], Optional[bytes]]
+
+
+def entry_retained(entry: SnapshotEntry) -> Any:
+    """The retained fingerprint of the object a :data:`SnapshotEntry` walked."""
+    native = entry[3]
+    return native if native is not None else retained_fingerprint(entry[1])
 
 
 class AssignsSnapshot(dict):  # type: ignore[type-arg]
