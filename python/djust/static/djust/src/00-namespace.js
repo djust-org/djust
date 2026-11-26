@@ -147,7 +147,7 @@ window.djust.wsUrl = function wsUrl() {
 // PROTOCOL_VERSION in python/djust/_protocol.py (a test compares the two). The
 // client sends it with every mount verb and fallback POST, and reloads the page
 // when the server names another (02c-frame-dispatch.js `protocolMismatch`).
-window.djust.PROTOCOL = 1;
+window.djust.PROTOCOL = 2;
 
 // ============================================================================
 // djLog: debug-gated console.log (#761)

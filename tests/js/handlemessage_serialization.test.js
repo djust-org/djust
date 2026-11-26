@@ -101,9 +101,9 @@ describe('handleMessage serialization (#1098)', () => {
                 return original(data);
             };
 
-            const p1 = ws.handleMessage({ type: 'noop', id: 1, delay: 30 });
-            const p2 = ws.handleMessage({ type: 'noop', id: 2, delay: 5 });
-            const p3 = ws.handleMessage({ type: 'noop', id: 3, delay: 1 });
+            const p1 = ws.handleMessage({ type: 'render', id: 1, delay: 30 });
+            const p2 = ws.handleMessage({ type: 'render', id: 2, delay: 5 });
+            const p3 = ws.handleMessage({ type: 'render', id: 3, delay: 1 });
 
             await Promise.all([p1, p2, p3]);
 
@@ -132,9 +132,9 @@ describe('handleMessage serialization (#1098)', () => {
                 return original(data);
             };
 
-            const p1 = ws.handleMessage({ type: 'noop', id: 1 });
-            const p2 = ws.handleMessage({ type: 'noop', id: 2, shouldThrow: true });
-            const p3 = ws.handleMessage({ type: 'noop', id: 3 });
+            const p1 = ws.handleMessage({ type: 'render', id: 1 });
+            const p2 = ws.handleMessage({ type: 'render', id: 2, shouldThrow: true });
+            const p3 = ws.handleMessage({ type: 'render', id: 3 });
 
             await Promise.all([p1, p2, p3]);
 
@@ -158,7 +158,7 @@ describe('handleMessage serialization (#1098)', () => {
                 return original(data);
             };
 
-            const p = ws.handleMessage({ type: 'noop' });
+            const p = ws.handleMessage({ type: 'render' });
             // Before await: drain has not completed
             expect(drained).toBe(false);
             await p;
@@ -193,8 +193,8 @@ describe('handleMessage serialization (#1098)', () => {
                 return original(data);
             };
 
-            const p1 = sse.handleMessage({ type: 'noop', id: 1, delay: 20 });
-            const p2 = sse.handleMessage({ type: 'noop', id: 2, delay: 1 });
+            const p1 = sse.handleMessage({ type: 'render', id: 1, delay: 20 });
+            const p2 = sse.handleMessage({ type: 'render', id: 2, delay: 1 });
 
             await Promise.all([p1, p2]);
 

@@ -140,8 +140,8 @@ describe('page shell fallback (#3036)', () => {
 
     it('only a mount frame can trigger it', async () => {
         const { dom, ws, loads } = await load('/items/');
-        await ws.handleMessage({ type: 'patch', patches: [], version: 2, page_shell: OTHER });
-        await ws.handleMessage({ type: 'page_metadata', action: 'title', value: 'x', page_shell: OTHER });
+        await ws.handleMessage({ type: 'render', patches: [], version: 2, page_shell: OTHER });
+        await ws.handleMessage({ type: 'render', page_shell: OTHER, effects: [{ kind: 'page_metadata', action: 'title', value: 'x' }] });
         expect(loads).toEqual([]);
         expect(dom.window.document.title).toBe('x');
     });

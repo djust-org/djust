@@ -69,7 +69,7 @@ function applyEmbeddedUpdate(data, transport) {
     return true;
 }
 
-/** Shared WS/SSE child response path; background frames cannot acknowledge an event. */
+/** A `render` frame's embedded-child part (`view_id`), on every wire; background frames cannot acknowledge an event. */
 async function handleEmbeddedResponse(data, transport) {
     // Capture ownership before morphing: the response may remove its trigger.
     const tracked = data.ref != null && _pendingEventOwners.get(data.ref) === transport;
@@ -84,48 +84,9 @@ async function handleEmbeddedResponse(data, transport) {
     if (!tracked || data.source === 'async') return true;
     const event = acknowledgeEventRequest(transport, data);
     if (event?.eventName && !data.async_pending) globalLoadingManager.stopLoading(event.eventName, event.trigger);
-    if (!hasPendingEventRequests(transport) && _tickBuffer.length > 0) {
-        await flushServerUpdates(transport);
-    }
+    // The frames held back meanwhile are flushed after this frame's effects
+    // (finishRenderFrame, 02c-frame-dispatch.js).
     return true;
-}
-
-/**
- * Apply the side-channel commands an HTTP fallback response carries: the
- * navigation the handler queued (live_patch / live_redirect, #3303; each entry
- * is a WebSocket-shaped navigation frame, and unconnected a live_redirect
- * becomes a full-page navigation), flash messages, page metadata, push events
- * (push_event / push_commands, each in the push_event frame's {event, payload}
- * shape) and a set_layout swap ({path, html}, the layout frame's shape). The
- * last two were dropped on HTTP before #3541. Shared by the page's own answers
- * and an embedded child's (#3104): one path, not two.
- */
-function applyHttpSideChannels(data) {
-    if (Array.isArray(data._navigation) && window.djust.navigation) {
-        data._navigation.forEach(function(frame) {
-            window.djust.navigation.handleNavigation(frame);
-        });
-    }
-    if (data._flash && window.djust.flash) {
-        data._flash.forEach(function(cmd) {
-            window.djust.flash.handleFlash(cmd);
-        });
-    }
-    if (data._page_metadata && window.djust.pageMetadata) {
-        data._page_metadata.forEach(function(cmd) {
-            window.djust.pageMetadata.handlePageMetadata(cmd);
-        });
-    }
-    if (Array.isArray(data._push_events)) {
-        // The WebSocket push_event case, per queued event.
-        // An upload event is held while the uploads chunk loads (#4007).
-        data._push_events.forEach(function(frame) {
-            _djustDispatchPushEvent(frame.event, frame.payload);
-        });
-    }
-    if (data._layout && window.djust.djLayout && typeof window.djust.djLayout.applyLayout === 'function') {
-        window.djust.djLayout.applyLayout(data._layout);
-    }
 }
 
 /**
@@ -402,9 +363,9 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
             if (!window.djust._mountReady) window.djust._mountReady = true;
             _refreshRenderParameterContracts(transport, data);
             reinitAfterDOMUpdate();
-        } else {
-            if (globalThis.djustDebug && !data._navigation) console.warn('[LiveView] Response has neither patches nor html!', data);
         }
+        // (No DOM part: an acknowledgement. Its effects are the caller's,
+        // applyRenderFrame in 02c-frame-dispatch.js, after this returns.)
 
         // A deferred save's catch-up (or a later committed turn) has reached
         // this owner's DOM. Do not clear saving status for rejected, malformed
@@ -431,8 +392,6 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
 
         // Handle form reset
         applyFormReset(data, triggerElement);
-
-        applyHttpSideChannels(data);
 
         // Forward debug info to debug panel (HTTP-only mode)
         if (data._debug && window.djustDebugPanel && typeof window.djustDebugPanel.processDebugInfo === 'function') {

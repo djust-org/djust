@@ -789,7 +789,7 @@ describe('#2705 — live_redirect is the view-replacement boundary', () => {
                 optimistic_rules: OPTIMISTIC_A});
         };
         h.redirectToB = async () => {
-            await h.deliver({type: 'navigation', action: 'live_redirect', path: '/b/'});
+            await h.deliver({type: 'render', effects: [{kind: 'navigation', action: 'live_redirect', path: '/b/'}]});
         };
         h.live = live;
         return h;
@@ -882,7 +882,7 @@ describe('#2705 — back/forward is the same boundary as live_redirect (#1646 tw
         await deliver({type: 'connect', protocol: PROTOCOL, session_id: 's2705b'});
         await deliver({type: 'mount', version: 1, view: 'test.V'});
         // Forward to B, whose handler is debounced; arm a timer there.
-        await deliver({type: 'navigation', action: 'live_redirect', path: '/b/'});
+        await deliver({type: 'render', effects: [{kind: 'navigation', action: 'live_redirect', path: '/b/'}]});
         await deliver({type: 'mount', version: 2, view: 'test.B',
             handler_config: {search: {debounce: {wait: 5}}},
             optimistic_rules: {search: {action: 'hide', selector: '#btn'}}});
@@ -942,7 +942,7 @@ it('#2705 a timer armed on view A cannot fire in the window between live_redirec
     await window.djust.handleEvent('search', {query: 'armed-on-a'});
     expect(sent).toHaveLength(0);
 
-    live().ws.onmessage({data: JSON.stringify({type: 'navigation', action: 'live_redirect', path: '/b/'})});
+    live().ws.onmessage({data: JSON.stringify({type: 'render', effects: [{kind: 'navigation', action: 'live_redirect', path: '/b/'}]})});
     await live()._inflight;
     expect(frames.filter(f => f.type === 'live_redirect_mount')).toHaveLength(1);
     // No reply yet: the clock runs out INSIDE the window.

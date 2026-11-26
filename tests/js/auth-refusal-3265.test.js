@@ -39,6 +39,9 @@ function harness() {
         cancelEventRequests: vi.fn(), takeServerUpdates: vi.fn(), clearOptimisticPending: vi.fn(),
         stripClientOwnedFrameFlags: () => {}, _recordParameterContractFrame: () => {},
         storeSignedSnapshot: () => {},
+        // The request registry (04-cache.js): a refusal's navigate effect
+        // rides a render frame that answers no request here.
+        acknowledgeEventRequest: () => null, hasPendingEventRequests: () => false, _tickBuffer: [],
         // From 00-namespace.js: publishes the deprecated window global.
         defineDeprecatedGlobal: () => {},
     };
@@ -119,7 +122,7 @@ describe('#3265 authentication refusal', () => {
     it.each(['/accounts/login/?next=%2Fprivate', 'https://auth.example/login'])('navigates to %s through actual socket dispatch', async target => {
         const h = harness();
         h.client.connect();
-        await h.receive({ type: 'navigate', to: target });
+        await h.receive({ type: 'render', effects: [{ kind: 'navigate', to: target }] });
         expect(h.window.location.href).toBe(target);
     });
 
@@ -128,14 +131,14 @@ describe('#3265 authentication refusal', () => {
         h.client.connect();
         let release;
         h.client._inflight = new Promise(resolve => { release = resolve; });
-        h.client.ws.onmessage({ data: JSON.stringify({ type: 'navigate', to: '/old-login/' }) });
+        h.client.ws.onmessage({ data: JSON.stringify({ type: 'render', effects: [{ kind: 'navigate', to: '/old-login/' }] }) });
         if (mode === 'navigation') h.client.disconnect();
         else h.client.ws.readyState = 3;
         h.client.connect();
         release();
         await h.client._inflight;
         expect(h.window.location.href).toBe('');
-        await h.receive({ type: 'navigate', to: '/current-login/' });
+        await h.receive({ type: 'render', effects: [{ kind: 'navigate', to: '/current-login/' }] });
         expect(h.window.location.href).toBe('/current-login/');
     });
 
@@ -145,7 +148,7 @@ describe('#3265 authentication refusal', () => {
         const old = h.client.ws;
         old.readyState = 3;
         h.client.connect();
-        old.onmessage({ data: JSON.stringify({ type: 'navigate', to: '/old-login/' }) });
+        old.onmessage({ data: JSON.stringify({ type: 'render', effects: [{ kind: 'navigate', to: '/old-login/' }] }) });
         await h.client._inflight;
         expect(h.client.stats.received).toBe(0);
         expect(h.window.location.href).toBe('');
@@ -157,7 +160,7 @@ describe('#3265 authentication refusal', () => {
         h.window.DEBUG_MODE = true;
         h.window.djust._simulatedLatency = 100;
         h.client.connect();
-        h.client.ws.onmessage({ data: JSON.stringify({ type: 'navigate', to: '/old-login/' }) });
+        h.client.ws.onmessage({ data: JSON.stringify({ type: 'render', effects: [{ kind: 'navigate', to: '/old-login/' }] }) });
         expect(h.timers).toHaveLength(1);
         h.client.ws.readyState = 3;
         h.client.connect();
@@ -170,7 +173,7 @@ describe('#3265 authentication refusal', () => {
     it('still applies a queued auth redirect when close arrives before its drain', async () => {
         const h = harness();
         h.client.connect();
-        h.client.ws.onmessage({ data: JSON.stringify({ type: 'navigate', to: '/login/' }) });
+        h.client.ws.onmessage({ data: JSON.stringify({ type: 'render', effects: [{ kind: 'navigate', to: '/login/' }] }) });
         h.close(h.client.ws, 4403);
         await h.client._inflight;
         expect(h.window.location.href).toBe('/login/');
@@ -182,7 +185,7 @@ describe('#3265 authentication refusal', () => {
     it.each(['javascript:alert(1)', 'data:text/html,bad', '//evil.example/', '/\\evil.example/', '/\t/evil.example/', null])('rejects unsafe target %s', async target => {
         const h = harness();
         h.client.connect();
-        await h.receive({ type: 'navigate', to: target });
+        await h.receive({ type: 'render', effects: [{ kind: 'navigate', to: target }] });
         expect(h.window.location.href).toBe('');
     });
 });

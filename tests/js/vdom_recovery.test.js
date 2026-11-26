@@ -146,7 +146,7 @@ describe('VDOM patch failure recovery', () => {
             ws.lastEventName = 'test_event';
             ws.lastTriggerElement = null;
             await ws.handleMessage({
-                type: 'patch',
+                type: 'render',
                 patches: [
                     { type: 'SetText', path: [999, 999], text: 'nonexistent' }
                 ],
@@ -179,7 +179,7 @@ describe('VDOM patch failure recovery', () => {
             // 2. Receive bad patches — triggers request_html
             ws.lastEventName = 'toggle';
             await ws.handleMessage({
-                type: 'patch',
+                type: 'render',
                 patches: [{ type: 'SetText', path: [999, 999], text: 'bad' }],
                 version: 2,
             });

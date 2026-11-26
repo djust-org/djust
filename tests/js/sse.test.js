@@ -217,9 +217,9 @@ describe('LiveViewSSE', () => {
         it('strips client-owned frame flags before dispatching (#2829)', async () => {
             const sse = new LiveViewSSE();
             global.stripClientOwnedFrameFlags.mockClear();
-            await sse.handleMessage({ type: 'patch', patches: [], version: 2 });
+            await sse.handleMessage({ type: 'render', patches: [], version: 2 });
             expect(global.stripClientOwnedFrameFlags).toHaveBeenCalledWith(
-                expect.objectContaining({ type: 'patch' }),
+                expect.objectContaining({ type: 'render' }),
             );
         });
 
@@ -233,16 +233,16 @@ describe('LiveViewSSE', () => {
             return JSON.parse(global.fetch.mock.calls[0][1].body).ref;
         }
 
-        it('calls handleServerResponse on patch message', async () => {
+        it('calls handleServerResponse on a render frame with patches', async () => {
             const ref = sendTracked('increment');
             await sse.handleMessage({
-                type: 'patch',
+                type: 'render',
                 patches: [],
                 version: 2,
                 ref,
             });
             expect(global.handleServerResponse).toHaveBeenCalledWith(
-                expect.objectContaining({ type: 'patch' }),
+                expect.objectContaining({ type: 'render' }),
                 'increment',
                 null,
                 sse
@@ -252,37 +252,43 @@ describe('LiveViewSSE', () => {
 
         it('a reply without a ref is applied but settles no request (#4309)', async () => {
             const ref = sendTracked('search');
-            await sse.handleMessage({ type: 'noop' });
-            await sse.handleMessage({ type: 'patch', patches: [], version: 2 });
+            await sse.handleMessage({ type: 'render' });
+            await sse.handleMessage({ type: 'render', patches: [], version: 2 });
             expect(global.globalLoadingManager.stopLoading).not.toHaveBeenCalled();
             expect(global.handleServerResponse).toHaveBeenCalledWith(
-                expect.objectContaining({ type: 'patch' }), undefined, undefined, sse
+                expect.objectContaining({ type: 'render' }), undefined, undefined, sse
             );
             expect(sse.lastEventName).toBe('search');
-            await sse.handleMessage({ type: 'noop', ref });
-            expect(global.globalLoadingManager.stopLoading).toHaveBeenCalledWith('search', null);
+            await sse.handleMessage({ type: 'render', ref });
+            // The acknowledgement settles the request; handleServerResponse
+            // (stubbed here) ends its loading state.
+            expect(global.handleServerResponse).toHaveBeenLastCalledWith(
+                expect.objectContaining({ ref }), 'search', null, sse
+            );
             expect(sse.lastEventName).toBeNull();
         });
 
-        it('calls handleServerResponse on html_update message', async () => {
+        it('calls handleServerResponse on a render frame with html', async () => {
             await sse.handleMessage({
-                type: 'html_update',
+                type: 'render',
                 html: '<div>hello</div>',
                 version: 3,
             });
             expect(global.handleServerResponse).toHaveBeenCalled();
         });
 
-        it('clears loading state on noop without async_pending', async () => {
+        it('a render acknowledgement (no DOM part) settles its event through handleServerResponse', async () => {
             const ref = sendTracked('search');
-            await sse.handleMessage({ type: 'noop', ref });
-            expect(global.globalLoadingManager.stopLoading).toHaveBeenCalledWith('search', null);
+            await sse.handleMessage({ type: 'render', ref });
+            expect(global.handleServerResponse).toHaveBeenCalledWith(
+                expect.objectContaining({ ref }), 'search', null, sse
+            );
             expect(sse.lastEventName).toBeNull();
         });
 
         it('keeps loading state on noop with async_pending=true', async () => {
             sse.lastEventName = 'generate';
-            await sse.handleMessage({ type: 'noop', async_pending: true });
+            await sse.handleMessage({ type: 'render', async_pending: true });
             // stopLoading should NOT be called
             expect(global.globalLoadingManager.stopLoading).not.toHaveBeenCalled();
         });

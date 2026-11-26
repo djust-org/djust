@@ -46,7 +46,7 @@ describe('reset_form on a noop frame', () => {
         input.value = 'typed';
         ws.sendEvent('add', {}, window.document.getElementById('go'));
         const frame = sent.filter((m) => m.type === 'event').pop();
-        await ws.handleMessage({ type: 'noop', source: 'event', event_name: 'add', ref: frame.ref, reset_form: true });
+        await ws.handleMessage({ type: 'render', source: 'event', event_name: 'add', ref: frame.ref, reset_form: true });
         expect(input.value).toBe('');
     });
 
@@ -58,7 +58,7 @@ describe('reset_form on a noop frame', () => {
         input.value = 'typed';
         ws.sendEvent('add', {}, window.document.getElementById('go'));
         const frame = sent.filter((m) => m.type === 'event').pop();
-        await ws.handleMessage({ type: 'noop', source: 'event', event_name: 'add', ref: frame.ref });
+        await ws.handleMessage({ type: 'render', source: 'event', event_name: 'add', ref: frame.ref });
         expect(input.value).toBe('typed');
     });
 
@@ -66,7 +66,7 @@ describe('reset_form on a noop frame', () => {
         const { window, input } = env();
         const sse = new window.djust.LiveViewSSE();
         input.value = 'typed';
-        await sse.handleMessage({ type: 'noop', source: 'event', event_name: 'add', reset_form: true });
+        await sse.handleMessage({ type: 'render', source: 'event', event_name: 'add', reset_form: true });
         expect(input.value).toBe('');
     });
 
@@ -76,7 +76,7 @@ describe('reset_form on a noop frame', () => {
         try {
             const input = page.win.document.getElementById('txt');
             input.value = 'typed';
-            await page.send('add', {}, { type: 'noop', source: 'event', event_name: 'add', reset_form: true },
+            await page.send('add', {}, { type: 'render', source: 'event', event_name: 'add', reset_form: true },
                 page.win.document.getElementById('go'));
             expect(input.value).toBe('');
         } finally { page.close(); }

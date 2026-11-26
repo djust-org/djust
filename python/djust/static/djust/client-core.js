@@ -148,7 +148,7 @@ window.djust.wsUrl = function wsUrl() {
 // PROTOCOL_VERSION in python/djust/_protocol.py (a test compares the two). The
 // client sends it with every mount verb and fallback POST, and reloads the page
 // when the server names another (02c-frame-dispatch.js `protocolMismatch`).
-window.djust.PROTOCOL = 1;
+window.djust.PROTOCOL = 2;
 
 // ============================================================================
 // djLog: debug-gated console.log (#761)
@@ -482,7 +482,7 @@ function applyEmbeddedUpdate(data, transport) {
     return true;
 }
 
-/** Shared WS/SSE child response path; background frames cannot acknowledge an event. */
+/** A `render` frame's embedded-child part (`view_id`), on every wire; background frames cannot acknowledge an event. */
 async function handleEmbeddedResponse(data, transport) {
     // Capture ownership before morphing: the response may remove its trigger.
     const tracked = data.ref != null && _pendingEventOwners.get(data.ref) === transport;
@@ -497,48 +497,9 @@ async function handleEmbeddedResponse(data, transport) {
     if (!tracked || data.source === 'async') return true;
     const event = acknowledgeEventRequest(transport, data);
     if (event?.eventName && !data.async_pending) globalLoadingManager.stopLoading(event.eventName, event.trigger);
-    if (!hasPendingEventRequests(transport) && _tickBuffer.length > 0) {
-        await flushServerUpdates(transport);
-    }
+    // The frames held back meanwhile are flushed after this frame's effects
+    // (finishRenderFrame, 02c-frame-dispatch.js).
     return true;
-}
-
-/**
- * Apply the side-channel commands an HTTP fallback response carries: the
- * navigation the handler queued (live_patch / live_redirect, #3303; each entry
- * is a WebSocket-shaped navigation frame, and unconnected a live_redirect
- * becomes a full-page navigation), flash messages, page metadata, push events
- * (push_event / push_commands, each in the push_event frame's {event, payload}
- * shape) and a set_layout swap ({path, html}, the layout frame's shape). The
- * last two were dropped on HTTP before #3541. Shared by the page's own answers
- * and an embedded child's (#3104): one path, not two.
- */
-function applyHttpSideChannels(data) {
-    if (Array.isArray(data._navigation) && window.djust.navigation) {
-        data._navigation.forEach(function(frame) {
-            window.djust.navigation.handleNavigation(frame);
-        });
-    }
-    if (data._flash && window.djust.flash) {
-        data._flash.forEach(function(cmd) {
-            window.djust.flash.handleFlash(cmd);
-        });
-    }
-    if (data._page_metadata && window.djust.pageMetadata) {
-        data._page_metadata.forEach(function(cmd) {
-            window.djust.pageMetadata.handlePageMetadata(cmd);
-        });
-    }
-    if (Array.isArray(data._push_events)) {
-        // The WebSocket push_event case, per queued event.
-        // An upload event is held while the uploads chunk loads (#4007).
-        data._push_events.forEach(function(frame) {
-            _djustDispatchPushEvent(frame.event, frame.payload);
-        });
-    }
-    if (data._layout && window.djust.djLayout && typeof window.djust.djLayout.applyLayout === 'function') {
-        window.djust.djLayout.applyLayout(data._layout);
-    }
 }
 
 /**
@@ -815,9 +776,9 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
             if (!window.djust._mountReady) window.djust._mountReady = true;
             _refreshRenderParameterContracts(transport, data);
             reinitAfterDOMUpdate();
-        } else {
-            if (globalThis.djustDebug && !data._navigation) console.warn('[LiveView] Response has neither patches nor html!', data);
         }
+        // (No DOM part: an acknowledgement. Its effects are the caller's,
+        // applyRenderFrame in 02c-frame-dispatch.js, after this returns.)
 
         // A deferred save's catch-up (or a later committed turn) has reached
         // this owner's DOM. Do not clear saving status for rejected, malformed
@@ -844,8 +805,6 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
 
         // Handle form reset
         applyFormReset(data, triggerElement);
-
-        applyHttpSideChannels(data);
 
         // Forward debug info to debug panel (HTTP-only mode)
         if (data._debug && window.djustDebugPanel && typeof window.djustDebugPanel.processDebugInfo === 'function') {
@@ -1049,10 +1008,11 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
 // The two socket transports receive the same wire frames. What they handle the
 // same way lives here, once, so a fix reaches both (#1646): the receipt-time
 // routing every frame passes through, the application of a frame addressed to
-// a view mounted beside the page view (#3252), and the side-channel frames.
+// a view mounted beside the page view (#3252), and the `render` frame (#3658).
 // Each transport keeps only what is specific to its wire: connection and
-// session frames, mount, event replies (the WebSocket buffers server-initiated
-// patches, #560) and errors.
+// session frames, mount, the WebSocket's buffering of server-initiated frames
+// (#560) and errors. The HTTP fallback applies its answers, which are `render`
+// frames too, through `applyRenderFrame`.
 
 // ----------------------------------------------------------------------------
 // Protocol version (#3658)
@@ -1152,12 +1112,135 @@ async function handleSlotFrame(transport, data, markMounted) {
         document.querySelectorAll('[dj-cloak]').forEach(el => el.removeAttribute('dj-cloak'));
         return;
     }
-    const applied = await withSlot(data.target_id, () => transport._handleMessageImpl(data, true));
+    // A `render` frame's DOM part is the view's; its effects are the page's
+    // (a slot's flash, title or navigation behaves as the page view's does), so
+    // they apply after the slot's context is left.
+    const render = data.type === 'render';
+    let held = false;
+    const applied = await withSlot(data.target_id, async () => {
+        if (!render) return transport._handleMessageImpl(data, true);
+        // The WebSocket holds a server-initiated frame while events are pending
+        // (#560); the version it may consume is the slot's.
+        held = !!transport._holdServerFrame?.(data);
+        if (!held) await applyRenderDom(transport, data);
+        return true;
+    });
+    if (held) return;
     if (applied === undefined) {
         // The view's container is gone (the page replaced it): its frames
         // have nowhere to go, but an event reply must still settle its request.
         const event = acknowledgeEventRequest(transport, data);
         if (event && event.eventName) globalLoadingManager.stopLoading(event.eventName, event.trigger);
+    }
+    if (render) await finishRenderFrame(transport, data);
+}
+
+// ----------------------------------------------------------------------------
+// The `render` frame (#3658)
+// ----------------------------------------------------------------------------
+// One frame per turn result, on every wire: a DOM part (at most one of
+// `patches`, `html`, or `view_id` + `html` for an embedded child; none is an
+// acknowledgement) and `effects`, the turn's side effects in the order the
+// server ranked them. The client applies the DOM part, then the effects in
+// array order, then the server-initiated frames it held back while this one's
+// event was pending.
+
+/** Server-initiated frames the WebSocket holds while its own events are pending (#560). */
+const _SERVER_TURN_SOURCES = ['tick', 'broadcast', 'async', 'push', 'notify'];
+
+/**
+ * Apply a frame's DOM part, with its acknowledgement and loading-state rules.
+ * `event`: the request an HTTP answer settles ({eventName, trigger}); a socket
+ * frame settles its own by `ref`.
+ */
+async function applyRenderDom(transport, data, event) {
+    // An embedded child's HTML (#3104): its wrapper keeps its owner. Resolves
+    // to whether it was applied (an HTTP lazy fill reads it).
+    if (data.view_id !== undefined) return handleEmbeddedResponse(data, transport);
+    if (event === undefined) event = acknowledgeEventRequest(transport, data);
+    // A frame with no DOM part that answers no request (a deferred or pushed
+    // effect) leaves the page's pending-event state alone.
+    if (event || data.reset_form || Array.isArray(data.patches) || typeof data.html === 'string') {
+        await handleServerResponse(data, event?.eventName, event?.trigger, transport);
+    }
+}
+
+/** After the DOM part: the effects, then what the WebSocket held back. */
+async function finishRenderFrame(transport, data) {
+    applyEffects(data.effects);
+    if (!hasPendingEventRequests(transport) && _tickBuffer.length > 0) {
+        if (globalThis.djustDebug) djLog('[LiveView] Flushing %d buffered frames', _tickBuffer.length);
+        await flushServerUpdates(transport);
+    }
+}
+
+/** Apply one `render` frame: the DOM part, then the effects. */
+async function applyRenderFrame(transport, data, event) {
+    const applied = await applyRenderDom(transport, data, event);
+    await finishRenderFrame(transport, data);
+    return applied;
+}
+
+/**
+ * Apply a frame's effects in order. A malformed list or entry, or a kind this
+ * client does not know (a newer server), is skipped; one never stops the rest.
+ * Each effect is the object its handler takes (the 1.x side-channel frame,
+ * with `type` renamed `kind`). A `switch`, never a lookup keyed on `kind`.
+ */
+function applyEffects(effects) {
+    if (effects === undefined || effects === null) return;
+    if (!Array.isArray(effects)) {
+        if (globalThis.djustDebug) console.warn('[LiveView] render frame effects is not a list; ignored');
+        return;
+    }
+    for (const effect of effects) {
+        if (!effect || typeof effect !== 'object') {
+            if (globalThis.djustDebug) console.warn('[LiveView] malformed effect skipped');
+            continue;
+        }
+        try {
+            applyEffect(effect);
+        } catch (error) {
+            console.error('[LiveView] effect %s failed:', String(effect.kind), error);
+        }
+    }
+}
+
+function applyEffect(effect) {
+    const djust = window.djust;
+    switch (effect.kind) {
+        case 'push_event':
+            // To window listeners and dj-hook handleEvent registrations. An
+            // upload event is held while the uploads chunk loads (#4007).
+            _djustDispatchPushEvent(effect.event, effect.payload);
+            break;
+        case 'flash':
+            if (djust.flash) djust.flash.handleFlash(effect);
+            break;
+        case 'page_metadata':
+            if (djust.pageMetadata) djust.pageMetadata.handlePageMetadata(effect);
+            break;
+        case 'layout':
+            if (djust.djLayout && typeof djust.djLayout.applyLayout === 'function') djust.djLayout.applyLayout(effect);
+            break;
+        case 'navigation':
+            // live_patch / live_redirect.
+            if (djust.navigation) djust.navigation.handleNavigation(effect);
+            break;
+        case 'navigate': {
+            // A full-page navigation (an auth or refusal redirect). The shared
+            // guard keeps this sink from an open redirect or a javascript: URL
+            // (#1646, finding #16).
+            const target = window.djust.safeNavigationTarget(effect.to);
+            if (target) {
+                window.location.href = target; // codeql[js/xss] -- validated via safeNavigationTarget
+            } else if (globalThis.djustDebug) {
+                console.warn('[LiveView] navigate target rejected: %s', String(effect.to));
+            }
+            break;
+        }
+        default:
+            if (globalThis.djustDebug) console.warn('[LiveView] unknown effect kind skipped: %s', String(effect.kind));
     }
 }
 
@@ -1167,9 +1250,8 @@ async function handleSlotFrame(transport, data, markMounted) {
  *
  * @param {Object} transport  The receiving transport.
  * @param {Object} data       The inbound frame.
- * @param {string} logPrefix  The transport's console prefix.
  */
-async function dispatchCommonFrame(transport, data, logPrefix) {
+async function dispatchCommonFrame(transport, data) {
     switch (data.type) {
         case 'view_refused':
             // A view beside the page view is refused (login, permission, an
@@ -1186,77 +1268,6 @@ async function dispatchCommonFrame(transport, data, logPrefix) {
             // Streaming partial DOM updates (LLM chat, live feeds)
             if (window.djust.handleStreamMessage) {
                 window.djust.handleStreamMessage(data);
-            }
-            return true;
-
-        case 'push_event':
-            // Server-pushed event for JS hooks
-            // ...and to dj-hook instances that registered via handleEvent.
-            // An upload event is held while the uploads chunk loads (#4007).
-            _djustDispatchPushEvent(data.event, data.payload);
-            // Clear loading state — when _skip_render is used, this is the
-            // only response the client gets (no patch/html_update follows).
-            globalLoadingManager.stopLoading(transport.lastEventName, transport.lastTriggerElement);
-            return true;
-
-        case 'embedded_update':
-            // Scoped HTML update for an embedded child LiveView
-            await handleEmbeddedResponse(data, transport);
-            return true;
-
-        case 'navigate': {
-            // Auth redirect (sent by the server when an auth check fails).
-            // Validate scheme/origin via the shared guard so this sink can't
-            // pivot to open-redirect / javascript: DOM-XSS (#1646, finding #16).
-            const navTarget = window.djust.safeNavigationTarget(data.to);
-            if (navTarget) {
-                window.location.href = navTarget; // codeql[js/xss] -- validated via safeNavigationTarget
-            } else if (globalThis.djustDebug) {
-                console.warn(logPrefix + ' navigate target rejected: %s', String(data.to));
-            }
-            return true;
-        }
-
-        case 'navigation':
-            // Server-side live_patch or live_redirect
-            if (window.djust.navigation) {
-                window.djust.navigation.handleNavigation(data);
-            }
-            return true;
-
-        case 'accessibility':
-            // Screen reader announcements from server
-            if (window.djust.accessibility) {
-                window.djust.accessibility.processAnnouncements(data.announcements);
-            }
-            return true;
-
-        case 'focus':
-            // Focus command from server
-            if (window.djust.accessibility) {
-                window.djust.accessibility.processFocus([data.selector, data.options]);
-            }
-            return true;
-
-        case 'flash':
-            // Flash message from server (put_flash / clear_flash)
-            if (window.djust.flash) {
-                window.djust.flash.handleFlash(data);
-            }
-            return true;
-
-        case 'page_metadata':
-            // Page metadata from server (page_title / page_meta)
-            if (window.djust.pageMetadata) {
-                window.djust.pageMetadata.handlePageMetadata(data);
-            }
-            return true;
-
-        case 'layout':
-            // Runtime layout switch (set_layout). The server sends it from the
-            // shared turn end, so it reaches both transports.
-            if (window.djust.djLayout && typeof window.djust.djLayout.applyLayout === 'function') {
-                window.djust.djLayout.applyLayout(data);
             }
             return true;
 
@@ -1529,12 +1540,13 @@ function storeSignedSnapshot(data, primaryViewPath) {
     // Server-originated turns (background results, ticks, pushes, NOTIFY)
     // commit declared state and carry the refreshed token for the primary
     // view, like event acknowledgements (ADR-038 E3). Child frames never do.
-    const serverTurn = ['async', 'tick', 'broadcast'].includes(data.source) &&
-        data.view === primaryViewPath && ['patch', 'html_update'].includes(data.type);
-    const eligible = revocation || serverTurn || data.type === 'mount' || (
-        data.source === 'event' && data.view === primaryViewPath &&
-        ['patch', 'html_update', 'noop'].includes(data.type)
-    );
+    // (An embedded child's frame, `view_id`, is never the page view's.)
+    const primaryRender = data.type === 'render' && data.view_id === undefined &&
+        data.view === primaryViewPath;
+    const serverTurn = primaryRender && ['async', 'tick', 'broadcast'].includes(data.source) &&
+        (Array.isArray(data.patches) || typeof data.html === 'string');
+    const eligible = revocation || serverTurn || data.type === 'mount' ||
+        (primaryRender && data.source === 'event');
     if (!eligible || typeof data.view !== 'string' || !data.view ||
         ['__proto__', 'constructor', 'prototype'].includes(data.view)) return;
     // #4164: the turn serial of the state this frame shows. A reconnect sends
@@ -2394,86 +2406,12 @@ class LiveViewWebSocket {
                 break;
             }
 
-            case 'patch':
-            case 'html_update': {
-                // Event sequencing (#560): if this is a server-initiated update
-                // (tick, broadcast, async) and we have pending user events,
-                // buffer it and apply after the event responses arrive. This
-                // prevents server pushes from consuming event loading state
-                // and ensures version numbers stay sequential.
-                const isServerInitiated = (
-                    data.source === 'tick' ||
-                    data.source === 'broadcast' ||
-                    data.source === 'async'
-                );
-                const isEventResponse = (
-                    !isServerInitiated && data.ref != null && _pendingEventOwners.get(data.ref) === this
-                );
-
-                if (!isEventResponse && isServerInitiated && hasPendingEventRequests(this)) {
-                    // Buffer server-initiated patch — will be applied after
-                    // all pending event responses arrive. Marked so the version
-                    // check treats the resulting gap as our own deferral rather
-                    // than a dropped patch (#2829). The marker is client-side
-                    // only and never goes back over the wire.
-                    const contiguous = (
-                        clientVdomVersion !== null &&
-                        typeof data.version === 'number' &&
-                        data.version === clientVdomVersion + 1
-                    );
-                    bufferServerUpdate(this, {
-                        ...data,
-                        _deferred: true,
-                        _versionConsumed: contiguous,
-                    }, data);
-                    // Consume the version HERE, at receipt — but ONLY when it is
-                    // CONTIGUOUS with the cursor. The frame has arrived and will
-                    // be applied on flush, so a contiguous version must already
-                    // be accounted for; otherwise the next in-order frame (an
-                    // event response arriving after this deferral) sees a
-                    // phantom gap in a sequence the server issued legitimately,
-                    // and forces a full-HTML recovery (#2829).
-                    //
-                    // Contiguity is the whole guard. Consuming a NON-contiguous
-                    // version would vouch for every version between the cursor
-                    // and this frame — frames the server allocated and never
-                    // shipped, the drop class `_hotreload_broadcast_suppressed`
-                    // exists for (#763/#2215/#2233). Silently accepting those
-                    // leaves the client permanently diverged with recovery never
-                    // firing.
-                    //
-                    // Declining the version is only half of it: the decision has
-                    // to SURVIVE to the flush, or the replay re-vouches for the
-                    // frame (that is what swallowed the drop on the noop-close
-                    // path, where the closing frame runs no strict check). So the
-                    // frame carries `_versionConsumed`, and the replay advances
-                    // the cursor only for frames whose version really was
-                    // consumed. A declined frame falls through to the strict
-                    // check and the loss still surfaces — via the closing frame,
-                    // or via the flush when the window closed with a noop.
-                    if (contiguous) {
-                        clientVdomVersion = data.version;
-                    }
-                    if (globalThis.djustDebug) {
-                        djLog('[LiveView] Buffered %s patch (v%s) — waiting for %d pending event(s)', String(data.source), String(data.version), _pendingEventRefs.size);
-                    }
-                    break;
-                }
-
-                // Determine event name and trigger for loading state
-                const event = acknowledgeEventRequest(this, data);
-                await handleServerResponse(data, event?.eventName, event?.trigger, this);
-
-                // After processing the event response, flush buffered
-                // patches only when ALL pending events have resolved.
-                if (isEventResponse && !hasPendingEventRequests(this) && _tickBuffer.length > 0) {
-                    if (globalThis.djustDebug) {
-                        djLog('[LiveView] Flushing ' + _tickBuffer.length + ' buffered patches');
-                    }
-                    await flushServerUpdates(this);
-                }
+            case 'render':
+                // One frame per turn result (#3658). A server-initiated one is
+                // held, effects included, while this page's events are pending.
+                if (this._holdServerFrame(data)) break;
+                await applyRenderFrame(this, data);
                 break;
-            }
 
             case 'html_recovery': {
                 // Server response to request_html — morph DOM with recovered HTML.
@@ -2577,29 +2515,6 @@ class LiveViewWebSocket {
                 }
                 break;
 
-            case 'noop': {
-                // Server acknowledged event but no DOM changes needed (auto-detected
-                // or explicit _skip_render). Clear loading state unless async pending.
-                const event = acknowledgeEventRequest(this, data);
-                const noopEvName = event?.eventName;
-                const noopTrigger = event?.trigger;
-                if (data.reset_form) applyFormReset(data, noopTrigger || null);
-
-                if (noopEvName) {
-                    if (!data.async_pending) {
-                        globalLoadingManager.stopLoading(noopEvName, noopTrigger);
-                    } else {
-                        if (globalThis.djustDebug) console.log('[LiveView] Keeping loading state — async work pending');
-                    }
-                }
-
-                // Flush buffered patches only when all pending events resolved
-                if (!hasPendingEventRequests(this) && _tickBuffer.length > 0) {
-                    await flushServerUpdates(this);
-                }
-                break;
-            }
-
             case 'presence_event':
                 // broadcast_to_presence() (and LiveCursorMixin's cursor_move)
                 // fanned out to every session in the presence group (#3501).
@@ -2692,13 +2607,63 @@ class LiveViewWebSocket {
                 break;
             default:
                 // The frames both transports apply alike (02c-frame-dispatch.js).
-                await dispatchCommonFrame(this, data, '[LiveView]');
+                await dispatchCommonFrame(this, data);
         }
     }
 
     /** A frame addressed to a view mounted beside the page view (#3252); see handleSlotFrame. */
     async _handleSlotFrame(data) {
         return handleSlotFrame(this, data, true);
+    }
+
+    /**
+     * Event sequencing (#560): hold a server-initiated `render` frame (a tick,
+     * broadcast, async result, push or NOTIFY turn) while this page's own
+     * events are pending, and apply it, effects included, once they settle.
+     * The server's pushes then neither consume an event's loading state nor
+     * overtake its answer. Returns true when the frame was held.
+     */
+    _holdServerFrame(data) {
+        if (!_SERVER_TURN_SOURCES.includes(data.source) || !hasPendingEventRequests(this)) return false;
+        // Marked so the version check treats the resulting gap as our own
+        // deferral rather than a dropped patch (#2829). The marker is
+        // client-side only and never goes back over the wire.
+        const contiguous = (
+            clientVdomVersion !== null &&
+            typeof data.version === 'number' &&
+            data.version === clientVdomVersion + 1
+        );
+        bufferServerUpdate(this, {
+            ...data,
+            _deferred: true,
+            _versionConsumed: contiguous,
+        }, data);
+        // Consume the version HERE, at receipt — but ONLY when it is
+        // CONTIGUOUS with the cursor. The frame has arrived and will be
+        // applied on flush, so a contiguous version must already be accounted
+        // for; otherwise the next in-order frame (an event response arriving
+        // after this deferral) sees a phantom gap in a sequence the server
+        // issued legitimately, and forces a full-HTML recovery (#2829).
+        //
+        // Contiguity is the whole guard. Consuming a NON-contiguous version
+        // would vouch for every version between the cursor and this frame —
+        // frames the server allocated and never shipped, the drop class
+        // `_hotreload_broadcast_suppressed` exists for (#763/#2215/#2233).
+        //
+        // Declining the version is only half of it: the decision has to
+        // SURVIVE to the flush, or the replay re-vouches for the frame. So the
+        // frame carries `_versionConsumed`, and the replay advances the cursor
+        // only for frames whose version really was consumed. A declined frame
+        // falls through to the strict check and the loss still surfaces — via
+        // the closing frame, or via the flush when the window closed with an
+        // acknowledgement that carries no DOM part.
+        if (contiguous) {
+            clientVdomVersion = data.version;
+        }
+        if (globalThis.djustDebug) {
+            djLog('[LiveView] Buffered %s frame (v%s) — waiting for %d pending event(s)', String(data.source), String(data.version), _pendingEventRefs.size);
+        }
+        return true;
     }
 
     /**
@@ -3486,12 +3451,10 @@ class LiveViewSSE {
                 break;
             }
 
-            case 'patch':
-            case 'html_update': {
-                const event = acknowledgeEventRequest(this, data);
-                await handleServerResponse(data, event?.eventName, event?.trigger, this);
+            case 'render':
+                // One frame per turn result (#3658): DOM part, then effects.
+                await applyRenderFrame(this, data);
                 break;
-            }
 
             case 'error':
                 console.error('[SSE] Server error:', data.error);
@@ -3522,20 +3485,9 @@ class LiveViewSSE {
                 if (data.source !== 'async') this._recoverFailedNavigation();
                 break;
 
-            case 'noop': {
-                const event = acknowledgeEventRequest(this, data);
-                if (data.reset_form) applyFormReset(data, event?.trigger || null);
-                if (event?.eventName) {
-                    if (!data.async_pending) {
-                        globalLoadingManager.stopLoading(event.eventName, event.trigger);
-                    }
-                }
-                break;
-            }
-
             default:
                 // The frames both transports apply alike (02c-frame-dispatch.js).
-                if (!(await dispatchCommonFrame(this, data, '[SSE]')) && globalThis.djustDebug) {
+                if (!(await dispatchCommonFrame(this, data)) && globalThis.djustDebug) {
                     console.log('[SSE] Unknown message type:', data.type);
                 }
         }
@@ -3826,7 +3778,7 @@ const _pendingTriggerEls = new Map();    // ref -> trigger element for loading s
 const _pendingEventResolvers = new Map(); // ref -> resolve() for Promise-based sendEvent (#1315)
 const _pendingEventOwners = new Map();   // ref -> transport instance
 const _pendingAsyncBatches = new Map();  // opaque server batch -> originating control
-const _tickBuffer = [];                  // buffered server-initiated patches during pending events
+const _tickBuffer = [];                  // server-initiated render frames held during pending events
 const _tickBufferOwners = new WeakMap();
 
 function hasPendingEventRequests(transport) {
@@ -3861,12 +3813,15 @@ async function flushServerUpdates(transport) {
     while (!hasPendingEventRequests(transport)) {
         const [frame] = takeServerUpdates(transport, 1);
         if (!frame) return;
-        // A frame buffered for a slot is replayed in that slot's context (#3252).
+        // A held `render` frame applies as it would have (#3658): its DOM
+        // part, in the context of its slot when it names one (#3252), then
+        // its effects, page-level. No nested flush: this loop is the flush.
         if (typeof frame.target_id === 'string' && frame.target_id) {
-            await withSlot(frame.target_id, () => handleServerResponse(frame, null, null, transport));
+            await withSlot(frame.target_id, () => applyRenderDom(transport, frame));
         } else {
-            await handleServerResponse(frame, null, null, transport);
+            await applyRenderDom(transport, frame);
         }
+        applyEffects(frame.effects);
     }
 }
 
@@ -8594,7 +8549,7 @@ function _renderTokenToSend() {
 function _noteRenderDigest(data, sent) {
     const whole = typeof data.html === 'string';
     const changed = whole || (Array.isArray(data.patches) && data.patches.length > 0)
-        || data.type === 'embedded_update';
+        || data.view_id !== undefined;
     // (An answer that changes the DOM and names no token needs no forgetting:
     // the DOM then has another shape than the token held, so none is sent.)
     if (typeof data.render_digest === 'string' && data.render_digest) {
@@ -9174,27 +9129,25 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
             data._applyIf = () => domShape(getLiveViewRoot()) === shape || !(data._applyIfRefused = true);
         }
         _noteRenderDigest(data, sentDigest);
-        if (data.type === 'embedded_update') {
-            // An embedded child's event: the server answers with the child's own
-            // HTML, as the socket transports do (#3104).
-            const filled = await handleEmbeddedResponse(data, _localEventTransport);
-            applyHttpSideChannels(data);
-            return filled;
-        } else {
-            // Each fallback request renders on a fresh server renderer, so a
-            // whole-page answer starts its own version count (v1) and is not
-            // the successor of the previous answer. Like a socket mount or an
-            // html_recovery frame, it re-bases the cursor instead of being
-            // checked against it. A patch answer of this transport carries no
-            // version at all (#4108): the server sends one only after matching
-            // the render digest this request echoed, which checks the content
-            // the patches apply to, not the order of answers. A patch answer
-            // that does carry a version is still checked against the cursor.
-            if (typeof data.html === 'string' && data.patches === undefined && data.version !== undefined) {
-                clientVdomVersion = null;
-            }
-            await handleServerResponse(data, eventName, triggerElement, _localEventTransport);
+        // Each fallback request renders on a fresh server renderer, so a
+        // whole-page answer starts its own version count (v1) and is not the
+        // successor of the previous answer. Like a socket mount or an
+        // html_recovery frame, it re-bases the cursor instead of being checked
+        // against it. A patch answer of this transport carries no version at
+        // all (#4108): the server sends one only after matching the render
+        // digest this request echoed, which checks the content the patches
+        // apply to, not the order of answers. A patch answer that does carry a
+        // version is still checked against the cursor.
+        if (data.view_id === undefined && typeof data.html === 'string' &&
+                data.patches === undefined && data.version !== undefined) {
+            clientVdomVersion = null;
         }
+        // The answer is a `render` frame (#3658), applied as the socket
+        // transports apply theirs: the DOM part (an embedded child's own HTML
+        // when it names `view_id`, #3104), then the effects. This request
+        // settles here, by name, not by `ref`. An embedded child's answer
+        // resolves to whether it was applied (an HTTP lazy fill reads it).
+        return await applyRenderFrame(_localEventTransport, data, {eventName, trigger: triggerElement});
 
     } catch (error) {
         if (!httpController?.signal.aborted) console.error('[LiveView] HTTP fallback failed:', error);
@@ -13320,9 +13273,10 @@ window.djust.lazyHydration = lazyHydrationManager;
 // `_activeSlot`, `_slotVersions`, `_mountedSlots`.
 
 // The frames the server addresses to a slot with ``target_id``. The others
-// (errors, upload progress, flash, ...) do not depend on a view's container.
+// (errors, upload progress, ...) do not depend on a view's container, and a
+// `render` frame's effects are page-level (handleSlotFrame).
 const _SLOT_FRAME_TYPES = new Set([
-    'mount', 'patch', 'html_update', 'html_recovery', 'embedded_update', 'child_update', 'sticky_update',
+    'mount', 'render', 'html_recovery', 'child_update', 'sticky_update',
 ]);
 
 // Slots that have had a mount and are still around, kept across a reconnect (a

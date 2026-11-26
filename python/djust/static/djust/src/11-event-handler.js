@@ -80,7 +80,7 @@ function _renderTokenToSend() {
 function _noteRenderDigest(data, sent) {
     const whole = typeof data.html === 'string';
     const changed = whole || (Array.isArray(data.patches) && data.patches.length > 0)
-        || data.type === 'embedded_update';
+        || data.view_id !== undefined;
     // (An answer that changes the DOM and names no token needs no forgetting:
     // the DOM then has another shape than the token held, so none is sent.)
     if (typeof data.render_digest === 'string' && data.render_digest) {
@@ -660,27 +660,25 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
             data._applyIf = () => domShape(getLiveViewRoot()) === shape || !(data._applyIfRefused = true);
         }
         _noteRenderDigest(data, sentDigest);
-        if (data.type === 'embedded_update') {
-            // An embedded child's event: the server answers with the child's own
-            // HTML, as the socket transports do (#3104).
-            const filled = await handleEmbeddedResponse(data, _localEventTransport);
-            applyHttpSideChannels(data);
-            return filled;
-        } else {
-            // Each fallback request renders on a fresh server renderer, so a
-            // whole-page answer starts its own version count (v1) and is not
-            // the successor of the previous answer. Like a socket mount or an
-            // html_recovery frame, it re-bases the cursor instead of being
-            // checked against it. A patch answer of this transport carries no
-            // version at all (#4108): the server sends one only after matching
-            // the render digest this request echoed, which checks the content
-            // the patches apply to, not the order of answers. A patch answer
-            // that does carry a version is still checked against the cursor.
-            if (typeof data.html === 'string' && data.patches === undefined && data.version !== undefined) {
-                clientVdomVersion = null;
-            }
-            await handleServerResponse(data, eventName, triggerElement, _localEventTransport);
+        // Each fallback request renders on a fresh server renderer, so a
+        // whole-page answer starts its own version count (v1) and is not the
+        // successor of the previous answer. Like a socket mount or an
+        // html_recovery frame, it re-bases the cursor instead of being checked
+        // against it. A patch answer of this transport carries no version at
+        // all (#4108): the server sends one only after matching the render
+        // digest this request echoed, which checks the content the patches
+        // apply to, not the order of answers. A patch answer that does carry a
+        // version is still checked against the cursor.
+        if (data.view_id === undefined && typeof data.html === 'string' &&
+                data.patches === undefined && data.version !== undefined) {
+            clientVdomVersion = null;
         }
+        // The answer is a `render` frame (#3658), applied as the socket
+        // transports apply theirs: the DOM part (an embedded child's own HTML
+        // when it names `view_id`, #3104), then the effects. This request
+        // settles here, by name, not by `ref`. An embedded child's answer
+        // resolves to whether it was applied (an HTTP lazy fill reads it).
+        return await applyRenderFrame(_localEventTransport, data, {eventName, trigger: triggerElement});
 
     } catch (error) {
         if (!httpController?.signal.aborted) console.error('[LiveView] HTTP fallback failed:', error);

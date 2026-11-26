@@ -208,7 +208,7 @@ describe('#1991 site B — real broadcast frame does not wipe an opted-out draft
         // carried on a broadcast frame — exactly the #1991 scenario. The frame
         // mirrors the server shape (websocket.py sends both source + broadcast).
         await ws.handleMessage({
-            type: 'patch',
+            type: 'render',
             source: 'broadcast',
             broadcast: true,
             version: 2,

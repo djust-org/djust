@@ -183,14 +183,14 @@ describe('frames addressed to a view', () => {
         await serve(page, mountFrame('app.Widget', 4, '<p dj-id="1">w1 text</p>', { target_id: 'w1' }));
         await serve(page, mountFrame('app.Widget', 9, '<p dj-id="1">w2 text</p>', { target_id: 'w2' }));
         await serve(page, {
-            type: 'patch', version: 5, target_id: 'w1', source: 'event',
+            type: 'render', version: 5, target_id: 'w1', source: 'event',
             patches: [{ type: 'SetText', path: [0], d: '1', text: 'w1 clicked' }],
         });
         expect(page.doc.getElementById('w1').textContent).toContain('w1 clicked');
         expect(page.doc.getElementById('w2').textContent).toContain('w2 text');
         // The page view's cursor is untouched: its next patch is v2.
         await serve(page, {
-            type: 'patch', version: 2, source: 'event',
+            type: 'render', version: 2, source: 'event',
             patches: [{ type: 'SetText', path: [0], d: '1', text: 'page clicked' }],
         });
         expect(page.doc.getElementById('page-text').textContent).toBe('page clicked');
@@ -267,12 +267,12 @@ describe('the page view\'s navigation snapshot', () => {
     it('is neither replaced nor revoked by a view of the same class beside it', async () => {
         const page = await mountedPage();
         await hydrated(page, 'w1');
-        await serve(page, { type: 'noop', source: 'event', view: 'app.Page',
+        await serve(page, { type: 'render', source: 'event', view: 'app.Page',
             state_snapshot_signed: 'page-token' });
         expect(page.win.djust._clientState['app.Page']).toBe('page-token');
         await serve(page, mountFrame('app.Page', 3, '<p dj-id="1">w1</p>',
             { target_id: 'w1', state_snapshot_signed: 'slot-token' }));
-        await serve(page, { type: 'patch', patches: [], version: 4, source: 'event', view: 'app.Page',
+        await serve(page, { type: 'render', patches: [], version: 4, source: 'event', view: 'app.Page',
             target_id: 'w1', state_snapshot_signed: null });
         expect(page.win.djust._clientState['app.Page']).toBe('page-token');
     });

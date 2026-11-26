@@ -2,7 +2,7 @@ import { readScript } from './coverage-support/instrument.js';
 /**
  * Tests for the shared client-side navigation scheme/origin guard
  * (src/02b-safe-nav.js) and its application at every location.href sink:
- *   - the `navigate` frame both transports share (src/02c-frame-dispatch.js)
+ *   - the `navigate` effect of the render frame both transports share (src/02c-frame-dispatch.js)
  *   - WS  `nav.to` mount_batch fallback (src/03-websocket.js)
  *   - handleLivePatch  cross-origin fallback (src/18-navigation.js)
  *   - handleLiveRedirect cross-origin + unresolved-view fallbacks
@@ -215,6 +215,10 @@ describe('SSE navigate handler — scheme guard (finding #16)', () => {
             storeSignedSnapshot: () => {},
             globalLoadingManager: { stopLoading: () => {} },
             dispatchPushEventToHooks: () => {},
+            // The request registry (04-cache.js): a navigate effect answers none.
+            acknowledgeEventRequest: () => null,
+            hasPendingEventRequests: () => false,
+            _tickBuffer: [],
         };
 
         // Install the shared helper first, then the SSE class, in this scope.
@@ -230,38 +234,38 @@ describe('SSE navigate handler — scheme guard (finding #16)', () => {
 
     it('navigates to a same-origin path', async () => {
         const { sse, getHref } = makeSse();
-        await sse.handleMessage({ type: 'navigate', to: '/login/' });
+        await sse.handleMessage({ type: 'render', effects: [{ kind: 'navigate', to: '/login/' }] });
         expect(getHref()).toBe('/login/');
     });
 
     it('navigates to a legit absolute https URL', async () => {
         const { sse, getHref } = makeSse();
-        await sse.handleMessage({ type: 'navigate', to: 'https://auth.example.com/login' });
+        await sse.handleMessage({ type: 'render', effects: [{ kind: 'navigate', to: 'https://auth.example.com/login' }] });
         expect(getHref()).toBe('https://auth.example.com/login');
     });
 
     it('does NOT navigate to a javascript: target', async () => {
         const { sse, getHref } = makeSse();
-        await sse.handleMessage({ type: 'navigate', to: 'javascript:alert(document.domain)' });
+        await sse.handleMessage({ type: 'render', effects: [{ kind: 'navigate', to: 'javascript:alert(document.domain)' }] });
         expect(getHref()).toBe('');
         expect(getHref()).not.toContain('javascript:');
     });
 
     it('does NOT navigate to a protocol-relative target', async () => {
         const { sse, getHref } = makeSse();
-        await sse.handleMessage({ type: 'navigate', to: '//evil.com/x' });
+        await sse.handleMessage({ type: 'render', effects: [{ kind: 'navigate', to: '//evil.com/x' }] });
         expect(getHref()).toBe('');
     });
 
     it('does NOT navigate to a backslash open-redirect (/\\evil.com)', async () => {
         const { sse, getHref } = makeSse();
-        await sse.handleMessage({ type: 'navigate', to: '/\\evil.com' });
+        await sse.handleMessage({ type: 'render', effects: [{ kind: 'navigate', to: '/\\evil.com' }] });
         expect(getHref()).toBe('');
     });
 
     it('does NOT navigate to a data: target', async () => {
         const { sse, getHref } = makeSse();
-        await sse.handleMessage({ type: 'navigate', to: 'data:text/html,<script>alert(1)</script>' });
+        await sse.handleMessage({ type: 'render', effects: [{ kind: 'navigate', to: 'data:text/html,<script>alert(1)</script>' }] });
         expect(getHref()).toBe('');
     });
 });
@@ -375,7 +379,7 @@ describe('WS and SSE navigate route through the same helper (#1646)', () => {
         // window.djust.safeNavigationTarget(...). Grep-pin the shared call
         // sites so a future edit that re-inlines a divergent guard fails.
         expect(wsSrc).toContain('window.djust.safeNavigationTarget(nav.to)');
-        expect(frameDispatchSrc).toContain('window.djust.safeNavigationTarget(data.to)');
+        expect(frameDispatchSrc).toContain('window.djust.safeNavigationTarget(effect.to)');
         // Neither transport keeps a navigate handler of its own.
         expect(sseSrc).not.toContain("case 'navigate'");
         expect(wsSrc).not.toContain("case 'navigate'");

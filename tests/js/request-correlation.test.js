@@ -13,12 +13,12 @@ it.each(['refresh', 'tick', 'db_notify'])(
             let completed = false;
             send().then(() => { completed = true; });
             await transport.handleMessage({
-                type: 'patch', patches: [], event_name: eventName, source: 'broadcast'
+                type: 'render', patches: [], event_name: eventName, source: 'broadcast'
             });
             expect(completed).toBe(false);
             expect(button.disabled).toBe(true);
             expect(dom.window.djust._getEventSeqState().tickBufferLength).toBe(1);
-            await transport.handleMessage({type: 'noop', ref: sent[0].ref});
+            await transport.handleMessage({type: 'render', ref: sent[0].ref});
             expect(completed).toBe(true);
             expect(button.disabled).toBe(false);
             expect(dom.window.djust._getEventSeqState().tickBufferLength).toBe(0);
@@ -33,7 +33,7 @@ it('a rate_limit_exceeded frame with its ref settles that request and flushes (#
         const first = send();
         let secondDone = false;
         send().then(() => { secondDone = true; });
-        await transport.handleMessage({type: 'patch', source: 'tick', patches: [],
+        await transport.handleMessage({type: 'render', source: 'tick', patches: [],
             event_name: 'refresh'});
         expect(dom.window.djust._getEventSeqState().tickBufferLength).toBe(1);
         // The other request's ref: only that request settles; the tick waits.
@@ -61,13 +61,13 @@ it('a server-initiated (async) error cannot cancel foreground work', async () =>
         });
         expect(completed).toBe(false);
         expect(button.disabled).toBe(true);
-        await transport.handleMessage({type: 'noop', ref: sent[0].ref});
+        await transport.handleMessage({type: 'render', ref: sent[0].ref});
         expect(completed).toBe(true);
         expect(button.disabled).toBe(false);
     } finally { dom.window.close(); }
 });
 
-it.each(['noop', 'error', 'embedded_update'])('disconnect during a %s drain drops later buffered effects', async type => {
+it.each(['render', 'error', 'embedded render'])('disconnect during a %s drain drops later buffered effects', async kind => {
     const {dom, transport, sent, send} = setup('LiveViewWebSocket');
     try {
         transport.ws.close = vi.fn();
@@ -78,25 +78,26 @@ it.each(['noop', 'error', 'embedded_update'])('disconnect during a %s drain drop
         }};
         send();
         for (const title of ['first', 'stale']) {
-            await transport.handleMessage({type: 'patch', source: 'tick', patches: [],
-                _page_metadata: [{title}]});
+            await transport.handleMessage({type: 'render', source: 'tick', patches: [],
+                effects: [{kind: 'page_metadata', title}]});
         }
-        await transport.handleMessage({type, ref: sent[0].ref, error: 'Rejected',
-            view_id: 'child', html: '<p>Updated</p>'});
+        await transport.handleMessage(kind === 'error'
+            ? {type: 'error', ref: sent[0].ref, error: 'Rejected'}
+            : {type: 'render', ref: sent[0].ref, ...(kind === 'render' ? {} : {view_id: 'child', html: '<p>Updated</p>'})});
         expect(applied).toEqual(['first']);
         expect(dom.window.djust._getEventSeqState().tickBufferLength).toBe(0);
     } finally { dom.window.close(); }
 });
 
-it.each(['noop', 'error'])('retains buffered state through an error until the remaining %s response', async lastType => {
+it.each(['render', 'error'])('retains buffered state through an error until the remaining %s response', async lastType => {
     const {dom, transport, sent, send} = setup('LiveViewWebSocket');
     try {
         dom.window.document.title = 'Before';
         dom.window.djust.pageMetadata = {handlePageMetadata: cmd => { dom.window.document.title = cmd.title; }};
         send();
         send();
-        await transport.handleMessage({type: 'patch', source: 'tick', patches: [],
-            _page_metadata: [{title: 'Updated'}]});
+        await transport.handleMessage({type: 'render', source: 'tick', patches: [],
+            effects: [{kind: 'page_metadata', title: 'Updated'}]});
         await transport.handleMessage({type: 'error', ref: sent[0].ref, error: 'Rejected'});
         expect(dom.window.djust._getEventSeqState().tickBufferLength).toBe(1);
         expect(dom.window.document.title).toBe('Before');
@@ -110,10 +111,10 @@ it('an unknown error reference cannot discard buffered updates', async () => {
     const {dom, transport, sent, send} = setup('LiveViewWebSocket');
     try {
         send();
-        await transport.handleMessage({type: 'patch', source: 'tick', patches: []});
+        await transport.handleMessage({type: 'render', source: 'tick', patches: []});
         await transport.handleMessage({type: 'error', ref: sent[0].ref + 100, error: 'Unknown'});
         expect(dom.window.djust._getEventSeqState().tickBufferLength).toBe(1);
-        await transport.handleMessage({type: 'noop', ref: sent[0].ref});
+        await transport.handleMessage({type: 'render', ref: sent[0].ref});
         expect(dom.window.djust._getEventSeqState().tickBufferLength).toBe(0);
     } finally { dom.window.close(); }
 });
@@ -128,14 +129,14 @@ it.each(['disconnect', 'error', 'reply', 'embedded'])('buffered updates retain t
         current.ws = {readyState: dom.window.WebSocket.OPEN, send: text => sent.push(JSON.parse(text)), close: vi.fn()};
         send();
         current.sendEvent('save', {}, button);
-        await current.handleMessage({type: 'patch', source: 'tick', patches: []});
+        await current.handleMessage({type: 'render', source: 'tick', patches: []});
         expect(dom.window.djust._getEventSeqState().tickBufferLength).toBe(1);
         if (action === 'disconnect') old.disconnect();
         if (action === 'error') await old.handleMessage({type: 'error', error: 'Old connection'});
         expect(dom.window.djust._getEventSeqState().tickBufferLength).toBe(1);
         await current.handleMessage(action === 'embedded'
-            ? {type: 'embedded_update', ref: sent[0].ref, view_id: 'child', html: '<p>Updated</p>'}
-            : {type: 'noop', ref: sent[0].ref});
+            ? {type: 'render', ref: sent[0].ref, view_id: 'child', html: '<p>Updated</p>'}
+            : {type: 'render', ref: sent[0].ref});
         expect(dom.window.djust._getEventSeqState().tickBufferLength).toBe(0);
         old.disconnect();
         current.disconnect();
@@ -172,7 +173,7 @@ function setup(name) {
     }
     function reply(index) {
         return transport.handleMessage({
-            type: 'embedded_update', ref: sent[index].ref, view_id: 'child', event_name: 'save',
+            type: 'render', ref: sent[index].ref, view_id: 'child', event_name: 'save',
             html: '<button id="save" dj-click="save" dj-loading.disable>Saved</button>',
         });
     }
@@ -225,12 +226,13 @@ describe.each(['LiveViewWebSocket', 'LiveViewSSE'])('%s request correlation', na
         } finally { dom.window.close(); }
     });
 
-    it.each(['noop', 'patch', 'html_update'])('correlates out-of-order %s acknowledgements', async type => {
+    it.each(['empty', 'patches'])('correlates out-of-order %s render acknowledgements', async part => {
         const {dom, transport, button, sent, send, loading} = setup(name);
         try {
             const first = send();
             const second = send();
-            const frame = index => ({type, ref: sent[index].ref, patches: [], source: 'event'});
+            const frame = index => ({type: 'render', ref: sent[index].ref, source: 'event', effects: [],
+                ...(part === 'patches' ? {patches: []} : {})});
             await transport.handleMessage(frame(1));
             await second;
             expect(button.disabled).toBe(true);
@@ -249,8 +251,8 @@ describe.each(['LiveViewWebSocket', 'LiveViewSSE'])('%s request correlation', na
         try {
             let done = false;
             send().then(() => { done = true; });
-            await transport.handleMessage({type: 'noop', ref: sent[0].ref + 100});
-            await transport.handleMessage({type: 'noop', ref: sent[0].ref, source: 'async'});
+            await transport.handleMessage({type: 'render', ref: sent[0].ref + 100});
+            await transport.handleMessage({type: 'render', ref: sent[0].ref, source: 'async'});
             expect(done).toBe(false);
             expect(button.disabled).toBe(true);
             expect(transport.lastTriggerElement).toBe(button);
@@ -262,10 +264,10 @@ describe.each(['LiveViewWebSocket', 'LiveViewSSE'])('%s request correlation', na
         try {
             button.parentElement.removeAttribute('data-djust-embedded');
             send();
-            await transport.handleMessage({type: 'patch', source: 'async', event_name: 'save', patches: []});
+            await transport.handleMessage({type: 'render', source: 'async', event_name: 'save', patches: []});
             expect(button.disabled).toBe(true);
             expect(loading.pendingEvents.has('save')).toBe(true);
-            await transport.handleMessage({type: 'noop', ref: sent[0].ref});
+            await transport.handleMessage({type: 'render', ref: sent[0].ref});
             expect(button.disabled).toBe(false);
         } finally { dom.window.close(); }
     });
@@ -290,10 +292,10 @@ describe.each(['LiveViewWebSocket', 'LiveViewSSE'])('%s request correlation', na
         try {
             let done = false;
             send().then(() => { done = true; });
-            await transport.handleMessage({type: 'patch', source: 'async', event_name: null, patches: []});
+            await transport.handleMessage({type: 'render', source: 'async', event_name: null, patches: []});
             expect(done).toBe(false);
             expect(button.disabled).toBe(true);
-            await transport.handleMessage({type: 'noop', ref: sent[0].ref});
+            await transport.handleMessage({type: 'render', ref: sent[0].ref});
             expect(done).toBe(true);
             expect(button.disabled).toBe(false);
         } finally { dom.window.close(); }
@@ -304,14 +306,14 @@ describe.each(['LiveViewWebSocket', 'LiveViewSSE'])('%s request correlation', na
         try {
             let completed = 0;
             send().then(() => { completed += 1; });
-            for (const type of ['noop', 'patch', 'embedded_update']) {
-                await transport.handleMessage({type, event_name: 'save', patches: [],
-                    view_id: 'child', html: '<button id="save" dj-click="save" dj-loading.disable>Save</button>'});
+            for (const part of [{}, {patches: []},
+                {view_id: 'child', html: '<button id="save" dj-click="save" dj-loading.disable>Save</button>'}]) {
+                await transport.handleMessage({type: 'render', event_name: 'save', ...part});
             }
             expect(completed).toBe(0);
             expect(dom.window.document.querySelector('#save').disabled).toBe(true);
             expect(transport.lastEventName).toBe('save');
-            await transport.handleMessage({type: 'noop', ref: sent[0].ref});
+            await transport.handleMessage({type: 'render', ref: sent[0].ref});
             expect(completed).toBe(1);
             expect(dom.window.document.querySelector('#save').disabled).toBe(false);
             expect(transport.lastEventName).toBeNull();
@@ -332,11 +334,11 @@ describe.each(['LiveViewWebSocket', 'LiveViewSSE'])('%s request correlation', na
         } finally { dom.window.close(); }
     });
 
-    it.each(['noop', 'patch'])('a %s with async_pending but no batch token leaves no loading stuck (#4309)', async type => {
+    it.each([['empty', {}], ['patches', {patches: []}]])('a %s render with async_pending but no batch token leaves no loading stuck (#4309)', async (_part, domPart) => {
         const {dom, transport, button, sent, send, loading} = setup(name);
         try {
             send();
-            await transport.handleMessage({type, ref: sent[0].ref, async_pending: true, patches: []});
+            await transport.handleMessage({type: 'render', ref: sent[0].ref, async_pending: true, ...domPart});
             expect(button.disabled).toBe(false);
             expect(loading.pendingEvents.size).toBe(0);
         } finally { dom.window.close(); }
@@ -346,10 +348,10 @@ describe.each(['LiveViewWebSocket', 'LiveViewSSE'])('%s request correlation', na
         const {dom, transport, button, sent, send, loading} = setup(name);
         try {
             const first = send();
-            await transport.handleMessage({type: 'noop', ref: sent[0].ref, async_pending: true, async_batch: 'batch-a'});
+            await transport.handleMessage({type: 'render', ref: sent[0].ref, async_pending: true, async_batch: 'batch-a'});
             await first;
             const second = send();
-            await transport.handleMessage({type: 'noop', ref: sent[1].ref, async_pending: true, async_batch: 'batch-b'});
+            await transport.handleMessage({type: 'render', ref: sent[1].ref, async_pending: true, async_batch: 'batch-b'});
             await second;
             await transport.handleMessage({type: 'async_complete', async_batch: 'batch-b'});
             expect(button.disabled).toBe(true);
@@ -368,7 +370,7 @@ describe.each(['LiveViewWebSocket', 'LiveViewSSE'])('%s request correlation', na
             // live_render stamps routing hints onto event-bearing descendants.
             button.setAttribute('data-djust-embedded', 'child');
             send();
-            await transport.handleMessage({type: 'embedded_update', ref: sent[0].ref,
+            await transport.handleMessage({type: 'render', ref: sent[0].ref,
                 view_id: 'child', async_pending: true, async_batch: 'owned-wrapper',
                 html: '<button id="save" dj-click="save" dj-loading.disable>Running</button>'});
             expect(button.hasAttribute('data-djust-embedded')).toBe(false);
@@ -382,7 +384,7 @@ describe.each(['LiveViewWebSocket', 'LiveViewSSE'])('%s request correlation', na
         const {dom, transport, button, sent, send} = setup(name);
         try {
             send();
-            await transport.handleMessage({type: 'noop', ref: sent[0].ref, async_pending: true, async_batch: 'owned'});
+            await transport.handleMessage({type: 'render', ref: sent[0].ref, async_pending: true, async_batch: 'owned'});
             const other = new dom.window.djust[name]();
             await other.handleMessage({type: 'async_complete', async_batch: 'owned'});
             expect(button.disabled).toBe(true);
@@ -396,7 +398,7 @@ describe.each(['LiveViewWebSocket', 'LiveViewSSE'])('%s request correlation', na
         try {
             if (transport.ws) transport.ws.close = vi.fn();
             send();
-            await transport.handleMessage({type: 'noop', ref: sent[0].ref, async_pending: true, async_batch: 'pending'});
+            await transport.handleMessage({type: 'render', ref: sent[0].ref, async_pending: true, async_batch: 'pending'});
             transport.disconnect();
             expect(button.disabled).toBe(false);
             expect(loading.pendingEvents.size).toBe(0);
@@ -407,14 +409,14 @@ describe.each(['LiveViewWebSocket', 'LiveViewSSE'])('%s request correlation', na
         const {dom, transport, button, sent, send} = setup(name);
         try {
             send();
-            await transport.handleMessage({type: 'noop', ref: sent[0].ref, async_pending: true, async_batch: 'failed'});
+            await transport.handleMessage({type: 'render', ref: sent[0].ref, async_pending: true, async_batch: 'failed'});
             let completed = false;
             send().then(() => { completed = true; });
             await transport.handleMessage({type: 'error', source: 'async', async_batch: 'failed', error: 'Task unavailable'});
             await transport.handleMessage({type: 'async_complete', async_batch: 'failed'});
             expect(completed).toBe(false);
             expect(button.disabled).toBe(true);
-            await transport.handleMessage({type: 'noop', ref: sent[1].ref});
+            await transport.handleMessage({type: 'render', ref: sent[1].ref});
             expect(completed).toBe(true);
             expect(button.disabled).toBe(false);
         } finally { dom.window.close(); }
@@ -426,7 +428,7 @@ describe.each(['LiveViewWebSocket', 'LiveViewSSE'])('%s request correlation', na
             const response = send();
             button.parentElement.remove();
             await reply(0);
-            expect((await response).type).toBe('embedded_update');
+            expect((await response).view_id).toBe('child');
             expect(loading.pendingEvents.size).toBe(0);
             expect(dom.window.djust._getEventSeqState().pendingEventRefs).toEqual([]);
         } finally { dom.window.close(); }

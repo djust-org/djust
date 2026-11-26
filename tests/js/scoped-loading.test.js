@@ -118,7 +118,7 @@ it('referenced replies isolate same-name events through the real WS client', asy
         manager.startLoading('save', right);
         const rightDone = transport.sendEvent('save', {view_id: 'right'}, right);
         await transport.handleMessage({
-            type: 'embedded_update', view_id: 'left', event_name: 'save', ref: sent[0].ref,
+            type: 'render', view_id: 'left', event_name: 'save', ref: sent[0].ref,
             html: '<button id="left" dj-click="save" dj-loading.disable>Saved</button>',
         });
         await leftDone;
@@ -126,7 +126,7 @@ it('referenced replies isolate same-name events through the real WS client', asy
         expect(manager.pendingEvents.has('save')).toBe(true);
         expect(transport.lastTriggerElement).toBe(right);
         await transport.handleMessage({
-            type: 'embedded_update', view_id: 'right', event_name: 'save', ref: sent[1].ref,
+            type: 'render', view_id: 'right', event_name: 'save', ref: sent[1].ref,
             html: '<button id="right" dj-click="save" dj-loading.disable>Saved</button>',
         });
         await rightDone;

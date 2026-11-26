@@ -131,7 +131,7 @@ describe('html_update morph and an open native dialog (#4286)', () => {
         ws.ws = new dom.window.WebSocket();
         ws.viewMounted = true;
         await ws.handleMessage({
-            type: 'html_update',
+            type: 'render',
             version: 2,
             event_name: 'typed',
             html:

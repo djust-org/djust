@@ -153,3 +153,17 @@ export const PROTOCOL = Number(
         fs.readFileSync('./python/djust/static/djust/src/00-namespace.js', 'utf-8'),
     )[1],
 );
+
+/**
+ * Build a `render` frame (#3658): one frame per turn result, on every wire.
+ * `effects` defaults to `[]`; every other field (`patches`, `html`,
+ * `view_id`, `version`, `ref`, `source`, `target_id`, ...) is passed through.
+ * An effect is the 1.x side-channel frame with `type` renamed `kind`, e.g.
+ * `{kind: 'flash', action: 'put', level: 'info', message: 'Saved'}`.
+ *
+ * @param {object} [fields]
+ * @returns {object}
+ */
+export function renderFrame(fields = {}) {
+    return { type: 'render', ...fields, effects: fields.effects ?? [] };
+}

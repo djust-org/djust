@@ -40,7 +40,7 @@ describe('beforeUpdate through DOM mutation entry points (#2816)', () => {
         const ws = new api.LiveViewWebSocket();
         ws.viewMounted = true;
         const html = `<section id="child"><p id="probe" dj-id="probe" dj-hook="Probe" title="changed">after</p></section><p id="sibling" dj-hook="Probe" ${special ? 'dj-update="ignore"' : ''}>outside</p>`;
-        await ws.handleMessage({ type: 'html_update', html });
+        await ws.handleMessage({ type: 'render', html });
         expect(calls).toEqual([['probe', 'before', null], ['sibling', 'outside', null]]);
         expect(doc.querySelector('#probe').textContent).toBe('after');
     });

@@ -28,7 +28,7 @@ describe.each(['LiveViewWebSocket', 'LiveViewSSE'])('%s child completion', trans
             const transport = new window.djust[transportName]();
             const right = window.document.querySelector('[data-djust-embedded="right"]');
             await transport.handleMessage({
-                type: 'embedded_update', source: 'async', view_id: 'left',
+                type: 'render', source: 'async', view_id: 'left',
                 event_name: 'begin', html: '<span>finished left</span>',
             });
             expect(window.document.querySelector('[data-djust-embedded="left"]').textContent)
@@ -52,7 +52,7 @@ describe.each(['LiveViewWebSocket', 'LiveViewSSE'])('%s child completion', trans
             transport.lastEventName = 'other';
             transport.lastTriggerElement = button;
             await transport.handleMessage({
-                type: 'embedded_update', source, view_id: 'left',
+                type: 'render', source, view_id: 'left',
                 event_name: 'begin', html: '<span>finished left</span>',
             });
             expect(button.disabled).toBe(true);
@@ -76,7 +76,7 @@ describe.each(['LiveViewWebSocket', 'LiveViewSSE'])('%s child completion', trans
             transport.lastEventName = 'other';
             transport.lastTriggerElement = button;
             await transport.handleMessage({
-                type: 'embedded_update', view_id: 'right', event_name: 'other',
+                type: 'render', view_id: 'right', event_name: 'other',
                 html: '<p>Saved</p>',
             });
             expect(window.document.querySelector('[data-djust-embedded="right"]').textContent)
@@ -103,7 +103,7 @@ it('resolves the matching WS event promise without consuming a newer event', asy
         const button = window.document.querySelector('button');
         transport.sendEvent('other', {view_id: 'right'}, button);
         const reply = {
-            type: 'embedded_update', ref: sent[0].ref, view_id: 'left',
+            type: 'render', ref: sent[0].ref, view_id: 'left',
             event_name: 'begin', html: '<span>done</span>',
         };
         await transport.handleMessage(reply);

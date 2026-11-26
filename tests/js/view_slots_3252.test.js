@@ -151,7 +151,7 @@ describe('frames addressed to a slot', () => {
 
         // The slots are numbered apart: w1 is at 4, w2 at 9, the page at 1.
         await serve(socket, {
-            type: 'patch', version: 5, target_id: 'w1', source: 'event',
+            type: 'render', version: 5, target_id: 'w1', source: 'event',
             patches: [{ type: 'SetText', path: [0], d: '1', text: 'w1 clicked' }],
         });
         expect(doc.getElementById('w1').textContent).toContain('w1 clicked');
@@ -159,13 +159,13 @@ describe('frames addressed to a slot', () => {
         expect(doc.getElementById('page-text').textContent).toBe('page');
 
         await serve(socket, {
-            type: 'patch', version: 10, target_id: 'w2', source: 'event',
+            type: 'render', version: 10, target_id: 'w2', source: 'event',
             patches: [{ type: 'SetText', path: [0], d: '1', text: 'w2 clicked' }],
         });
         expect(doc.getElementById('w2').textContent).toContain('w2 clicked');
         // The page view's cursor is untouched by either: its next patch is v2.
         await serve(socket, {
-            type: 'patch', version: 2, source: 'event',
+            type: 'render', version: 2, source: 'event',
             patches: [{ type: 'SetText', path: [0], d: '1', text: 'page clicked' }],
         });
         expect(doc.getElementById('page-text').textContent).toBe('page clicked');
@@ -179,7 +179,7 @@ describe('frames addressed to a slot', () => {
         const { socket, doc } = await pageWithHydratedLazies();
         await serve(socket, mountFrame('app.Widget', 4, '<p dj-id="1">w1 text</p>', { target_id: 'w1' }));
         await serve(socket, {
-            type: 'patch', version: 8, target_id: 'w1', source: 'event',
+            type: 'render', version: 8, target_id: 'w1', source: 'event',
             patches: [{ type: 'SetText', path: [0], d: '1', text: 'never applied' }],
         });
         expect(sentOf(socket, 'request_html')).toEqual([{ type: 'request_html', target_id: 'w1' }]);
@@ -198,7 +198,7 @@ describe('frames addressed to a slot', () => {
         const { socket, doc } = await pageWithHydratedLazies();
         await serve(socket, mountFrame('app.Widget', 4, '<p dj-id="1">w1 text</p>', { target_id: 'w1' }));
         await serve(socket, {
-            type: 'html_update', version: 5, target_id: 'w1', source: 'event',
+            type: 'render', version: 5, target_id: 'w1', source: 'event',
             html: '<div dj-root><p dj-id="1">w1 html</p></div>',
         });
         expect(doc.getElementById('w1').textContent).toContain('w1 html');
@@ -210,7 +210,7 @@ describe('frames addressed to a slot', () => {
         await serve(socket, mountFrame('app.Widget', 4, '<button id="gone-btn" dj-click="bump" dj-id="1">+</button>',
             { target_id: 'w1' }));
         doc.getElementById('w1').remove();
-        await serve(socket, { type: 'patch', version: 5, target_id: 'w1', patches: [], source: 'event' });
+        await serve(socket, { type: 'render', version: 5, target_id: 'w1', patches: [], source: 'event' });
         expect(win.djust.viewSlots.container('w1')).toBeNull();
     });
 });
@@ -673,7 +673,7 @@ describe('registered attribute lazy views over HTTP only (#3252)', () => {
             sent.push(body);
             const id = params.view_id;
             if (body.event === 'inc') counts[id]++;
-            return { ok: true, json: async () => ({type: 'embedded_update', view_id: id,
+            return { ok: true, json: async () => ({type: 'render', view_id: id,
                 html: '<span class="count">' + counts[id] + '</span><button dj-click="inc">+</button>'}) };
         };
         try {

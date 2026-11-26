@@ -95,7 +95,7 @@ describe('render token', () => {
         const page = await loadPage(PAGE('d0'));
         try {
             await bump(page, {patches: []});
-            await bump(page, {type: 'noop'});
+            await bump(page, {type: 'render'});
             expect((await bump(page, patch(1, 'd1'))).token).toBe(token('d0'));
         } finally { page.close(); }
     });

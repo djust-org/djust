@@ -41,7 +41,7 @@ it.each(['headers', 'body', 'navigation'])('drops an outgoing-page HTTP response
         dom.window.eval(client);
         let release;
         const gate = new Promise(resolve => { release = resolve; });
-        const data = {_page_metadata: [{title: 'stale'}]};
+        const data = {type: 'render', effects: [{kind: 'page_metadata', title: 'stale'}]};
         dom.window.djust.pageMetadata = {handlePageMetadata: cmd => { dom.window.document.title = cmd.title; }};
         dom.window.fetch = boundary === 'headers'
             ? () => gate

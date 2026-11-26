@@ -22,7 +22,7 @@ async function postedHeaders(dom) {
     let seen = null;
     win.fetch = async (_url, init) => {
         seen = init.headers;
-        return {ok: true, json: async () => ({type: 'noop'})};
+        return {ok: true, json: async () => ({type: 'render'})};
     };
     await win.djust.handleEvent('bump', {_targetElement: win.document.getElementById('go')});
     return seen;

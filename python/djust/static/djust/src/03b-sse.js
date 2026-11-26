@@ -355,12 +355,10 @@ class LiveViewSSE {
                 break;
             }
 
-            case 'patch':
-            case 'html_update': {
-                const event = acknowledgeEventRequest(this, data);
-                await handleServerResponse(data, event?.eventName, event?.trigger, this);
+            case 'render':
+                // One frame per turn result (#3658): DOM part, then effects.
+                await applyRenderFrame(this, data);
                 break;
-            }
 
             case 'error':
                 console.error('[SSE] Server error:', data.error);
@@ -391,20 +389,9 @@ class LiveViewSSE {
                 if (data.source !== 'async') this._recoverFailedNavigation();
                 break;
 
-            case 'noop': {
-                const event = acknowledgeEventRequest(this, data);
-                if (data.reset_form) applyFormReset(data, event?.trigger || null);
-                if (event?.eventName) {
-                    if (!data.async_pending) {
-                        globalLoadingManager.stopLoading(event.eventName, event.trigger);
-                    }
-                }
-                break;
-            }
-
             default:
                 // The frames both transports apply alike (02c-frame-dispatch.js).
-                if (!(await dispatchCommonFrame(this, data, '[SSE]')) && globalThis.djustDebug) {
+                if (!(await dispatchCommonFrame(this, data)) && globalThis.djustDebug) {
                     console.log('[SSE] Unknown message type:', data.type);
                 }
         }

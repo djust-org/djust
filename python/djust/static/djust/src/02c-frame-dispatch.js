@@ -6,10 +6,11 @@
 // The two socket transports receive the same wire frames. What they handle the
 // same way lives here, once, so a fix reaches both (#1646): the receipt-time
 // routing every frame passes through, the application of a frame addressed to
-// a view mounted beside the page view (#3252), and the side-channel frames.
+// a view mounted beside the page view (#3252), and the `render` frame (#3658).
 // Each transport keeps only what is specific to its wire: connection and
-// session frames, mount, event replies (the WebSocket buffers server-initiated
-// patches, #560) and errors.
+// session frames, mount, the WebSocket's buffering of server-initiated frames
+// (#560) and errors. The HTTP fallback applies its answers, which are `render`
+// frames too, through `applyRenderFrame`.
 
 // ----------------------------------------------------------------------------
 // Protocol version (#3658)
@@ -109,12 +110,135 @@ async function handleSlotFrame(transport, data, markMounted) {
         document.querySelectorAll('[dj-cloak]').forEach(el => el.removeAttribute('dj-cloak'));
         return;
     }
-    const applied = await withSlot(data.target_id, () => transport._handleMessageImpl(data, true));
+    // A `render` frame's DOM part is the view's; its effects are the page's
+    // (a slot's flash, title or navigation behaves as the page view's does), so
+    // they apply after the slot's context is left.
+    const render = data.type === 'render';
+    let held = false;
+    const applied = await withSlot(data.target_id, async () => {
+        if (!render) return transport._handleMessageImpl(data, true);
+        // The WebSocket holds a server-initiated frame while events are pending
+        // (#560); the version it may consume is the slot's.
+        held = !!transport._holdServerFrame?.(data);
+        if (!held) await applyRenderDom(transport, data);
+        return true;
+    });
+    if (held) return;
     if (applied === undefined) {
         // The view's container is gone (the page replaced it): its frames
         // have nowhere to go, but an event reply must still settle its request.
         const event = acknowledgeEventRequest(transport, data);
         if (event && event.eventName) globalLoadingManager.stopLoading(event.eventName, event.trigger);
+    }
+    if (render) await finishRenderFrame(transport, data);
+}
+
+// ----------------------------------------------------------------------------
+// The `render` frame (#3658)
+// ----------------------------------------------------------------------------
+// One frame per turn result, on every wire: a DOM part (at most one of
+// `patches`, `html`, or `view_id` + `html` for an embedded child; none is an
+// acknowledgement) and `effects`, the turn's side effects in the order the
+// server ranked them. The client applies the DOM part, then the effects in
+// array order, then the server-initiated frames it held back while this one's
+// event was pending.
+
+/** Server-initiated frames the WebSocket holds while its own events are pending (#560). */
+const _SERVER_TURN_SOURCES = ['tick', 'broadcast', 'async', 'push', 'notify'];
+
+/**
+ * Apply a frame's DOM part, with its acknowledgement and loading-state rules.
+ * `event`: the request an HTTP answer settles ({eventName, trigger}); a socket
+ * frame settles its own by `ref`.
+ */
+async function applyRenderDom(transport, data, event) {
+    // An embedded child's HTML (#3104): its wrapper keeps its owner. Resolves
+    // to whether it was applied (an HTTP lazy fill reads it).
+    if (data.view_id !== undefined) return handleEmbeddedResponse(data, transport);
+    if (event === undefined) event = acknowledgeEventRequest(transport, data);
+    // A frame with no DOM part that answers no request (a deferred or pushed
+    // effect) leaves the page's pending-event state alone.
+    if (event || data.reset_form || Array.isArray(data.patches) || typeof data.html === 'string') {
+        await handleServerResponse(data, event?.eventName, event?.trigger, transport);
+    }
+}
+
+/** After the DOM part: the effects, then what the WebSocket held back. */
+async function finishRenderFrame(transport, data) {
+    applyEffects(data.effects);
+    if (!hasPendingEventRequests(transport) && _tickBuffer.length > 0) {
+        if (globalThis.djustDebug) djLog('[LiveView] Flushing %d buffered frames', _tickBuffer.length);
+        await flushServerUpdates(transport);
+    }
+}
+
+/** Apply one `render` frame: the DOM part, then the effects. */
+async function applyRenderFrame(transport, data, event) {
+    const applied = await applyRenderDom(transport, data, event);
+    await finishRenderFrame(transport, data);
+    return applied;
+}
+
+/**
+ * Apply a frame's effects in order. A malformed list or entry, or a kind this
+ * client does not know (a newer server), is skipped; one never stops the rest.
+ * Each effect is the object its handler takes (the 1.x side-channel frame,
+ * with `type` renamed `kind`). A `switch`, never a lookup keyed on `kind`.
+ */
+function applyEffects(effects) {
+    if (effects === undefined || effects === null) return;
+    if (!Array.isArray(effects)) {
+        if (globalThis.djustDebug) console.warn('[LiveView] render frame effects is not a list; ignored');
+        return;
+    }
+    for (const effect of effects) {
+        if (!effect || typeof effect !== 'object') {
+            if (globalThis.djustDebug) console.warn('[LiveView] malformed effect skipped');
+            continue;
+        }
+        try {
+            applyEffect(effect);
+        } catch (error) {
+            console.error('[LiveView] effect %s failed:', String(effect.kind), error);
+        }
+    }
+}
+
+function applyEffect(effect) {
+    const djust = window.djust;
+    switch (effect.kind) {
+        case 'push_event':
+            // To window listeners and dj-hook handleEvent registrations. An
+            // upload event is held while the uploads chunk loads (#4007).
+            _djustDispatchPushEvent(effect.event, effect.payload);
+            break;
+        case 'flash':
+            if (djust.flash) djust.flash.handleFlash(effect);
+            break;
+        case 'page_metadata':
+            if (djust.pageMetadata) djust.pageMetadata.handlePageMetadata(effect);
+            break;
+        case 'layout':
+            if (djust.djLayout && typeof djust.djLayout.applyLayout === 'function') djust.djLayout.applyLayout(effect);
+            break;
+        case 'navigation':
+            // live_patch / live_redirect.
+            if (djust.navigation) djust.navigation.handleNavigation(effect);
+            break;
+        case 'navigate': {
+            // A full-page navigation (an auth or refusal redirect). The shared
+            // guard keeps this sink from an open redirect or a javascript: URL
+            // (#1646, finding #16).
+            const target = window.djust.safeNavigationTarget(effect.to);
+            if (target) {
+                window.location.href = target; // codeql[js/xss] -- validated via safeNavigationTarget
+            } else if (globalThis.djustDebug) {
+                console.warn('[LiveView] navigate target rejected: %s', String(effect.to));
+            }
+            break;
+        }
+        default:
+            if (globalThis.djustDebug) console.warn('[LiveView] unknown effect kind skipped: %s', String(effect.kind));
     }
 }
 
@@ -124,9 +248,8 @@ async function handleSlotFrame(transport, data, markMounted) {
  *
  * @param {Object} transport  The receiving transport.
  * @param {Object} data       The inbound frame.
- * @param {string} logPrefix  The transport's console prefix.
  */
-async function dispatchCommonFrame(transport, data, logPrefix) {
+async function dispatchCommonFrame(transport, data) {
     switch (data.type) {
         case 'view_refused':
             // A view beside the page view is refused (login, permission, an
@@ -143,77 +266,6 @@ async function dispatchCommonFrame(transport, data, logPrefix) {
             // Streaming partial DOM updates (LLM chat, live feeds)
             if (window.djust.handleStreamMessage) {
                 window.djust.handleStreamMessage(data);
-            }
-            return true;
-
-        case 'push_event':
-            // Server-pushed event for JS hooks
-            // ...and to dj-hook instances that registered via handleEvent.
-            // An upload event is held while the uploads chunk loads (#4007).
-            _djustDispatchPushEvent(data.event, data.payload);
-            // Clear loading state — when _skip_render is used, this is the
-            // only response the client gets (no patch/html_update follows).
-            globalLoadingManager.stopLoading(transport.lastEventName, transport.lastTriggerElement);
-            return true;
-
-        case 'embedded_update':
-            // Scoped HTML update for an embedded child LiveView
-            await handleEmbeddedResponse(data, transport);
-            return true;
-
-        case 'navigate': {
-            // Auth redirect (sent by the server when an auth check fails).
-            // Validate scheme/origin via the shared guard so this sink can't
-            // pivot to open-redirect / javascript: DOM-XSS (#1646, finding #16).
-            const navTarget = window.djust.safeNavigationTarget(data.to);
-            if (navTarget) {
-                window.location.href = navTarget; // codeql[js/xss] -- validated via safeNavigationTarget
-            } else if (globalThis.djustDebug) {
-                console.warn(logPrefix + ' navigate target rejected: %s', String(data.to));
-            }
-            return true;
-        }
-
-        case 'navigation':
-            // Server-side live_patch or live_redirect
-            if (window.djust.navigation) {
-                window.djust.navigation.handleNavigation(data);
-            }
-            return true;
-
-        case 'accessibility':
-            // Screen reader announcements from server
-            if (window.djust.accessibility) {
-                window.djust.accessibility.processAnnouncements(data.announcements);
-            }
-            return true;
-
-        case 'focus':
-            // Focus command from server
-            if (window.djust.accessibility) {
-                window.djust.accessibility.processFocus([data.selector, data.options]);
-            }
-            return true;
-
-        case 'flash':
-            // Flash message from server (put_flash / clear_flash)
-            if (window.djust.flash) {
-                window.djust.flash.handleFlash(data);
-            }
-            return true;
-
-        case 'page_metadata':
-            // Page metadata from server (page_title / page_meta)
-            if (window.djust.pageMetadata) {
-                window.djust.pageMetadata.handlePageMetadata(data);
-            }
-            return true;
-
-        case 'layout':
-            // Runtime layout switch (set_layout). The server sends it from the
-            // shared turn end, so it reaches both transports.
-            if (window.djust.djLayout && typeof window.djust.djLayout.applyLayout === 'function') {
-                window.djust.djLayout.applyLayout(data);
             }
             return true;
 
