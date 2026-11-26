@@ -1205,11 +1205,16 @@ test that targets the old markup needs the new selector:
 - **Django engine, `sidebar`, `nav_menu`, `toolbar`, `filter_bar`, `app_shell`.**
   They draw the native markup. `toolbar` groups its children between separators
   in `dj-toolbar__group`; the default `filter_bar` id is `filter-bar`; the
-  default `toolbar` id is `toolbar-<hash>`.
+  default `toolbar` id is `toolbar-<hash>` of its arguments, the same on every
+  render, so two toolbars with identical arguments share it (pass `id=`). Nested
+  sidebar links no longer carry `dj-sidebar__item--level-N`; indentation comes from
+  `dj-sidebar__submenu`.
 - **`accordion`.** The Rust engine renamed its classes to the `dj-accordion*`
   BEM classes the Django engine draws. The panel is always drawn and a closed one
   carries `hidden`; the header button has `aria-controls` and the panel
-  `role="region"`.
+  `role="region"`. Under the Django engine the bodies of closed panels are now
+  rendered and sent too, so do not put content there that the page must not see.
+- **`pagination`.** The Rust engine no longer draws the "Page X of Y" text.
 - **Standalone `sidebar_item`, `nav_item`, `accordion_item`.** Outside their
   parent tag they carry an invisible marker comment, so the Rust engine can tell
   where the item sits.
@@ -1558,4 +1563,4 @@ removed setting at startup, and `exposure_policy = "legacy"`,
 module that states it is imported. `djust_exposure_inventory` lists any view
 still on `[policy: legacy]`; run `--fix` on it.
 
-<!-- generated-doc prose-sha256: 571fec9b15e4 -->
+<!-- generated-doc prose-sha256: bf007fb2bd43 -->
