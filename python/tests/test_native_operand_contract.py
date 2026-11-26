@@ -377,6 +377,13 @@ READERS = {
             # ``NavMenuHandler``: the hex-encoded ``[id, href]`` marker each ``{% nav_item %}``
             # wrote into the menu's body, never an operand
             "_nav_key_matches",
+            # ``AccordionHandler`` (#4331): the hex-encoded ``[id, title, open, event, length]``
+            # marker each ``{% accordion_item %}`` wrote into the accordion's body, never an operand
+            "_accordion_item_payload",
+            # ``AccordionItemHandler.render_kwargs`` (#4331): decodes its own ``json.dumps`` of
+            # operands ``_parse_args`` / ``_python_operand`` already read (a round trip, so the
+            # standalone item and the accordion's redraw read the same payload)
+            "render_kwargs",
             # ``render_data_table`` (#3869): the DJANGO engine's ``{% data_table %}`` arguments,
             # already resolved once by Django's ``simple_tag``, made the shape the Rust engine
             # hands ``DataTableHandler``. Its ``json.loads`` decodes its own ``json.dumps`` of the
