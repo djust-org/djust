@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `djust.cdx.json` at v1.3.3 matched the advisory (bincode is unmaintained). The dependency,
   its lockfile entries, its SBOM components and the advisory's ignore entry in
   `osv-scanner.toml` are removed. Nothing else changes.
+- **`chrono` and `chrono-tz` unmaintained notices accepted on 1.3 (RUSTSEC-2026-0543, RUSTSEC-2026-0555).**
+  Both are informational (no known vulnerability, no fixed version). 2.0 replaces them with `jiff`
+  (#4222); 1.3 takes security fixes only, so `osv-scanner.toml` accepts the notices until 2027-03-31.
 
 ### Added
 

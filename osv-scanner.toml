@@ -6,3 +6,13 @@
 # id = "GHSA-xxxx-xxxx-xxxx"
 # ignoreUntil = 2026-12-31
 # reason = "Not reachable: … (#NNNN)"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0543"
+ignoreUntil = 2027-03-31
+reason = "chrono is flagged unmaintained (informational, no CVSS, no affected functions, no fixed version), not vulnerable. 2.0 replaces it with jiff (#4222); the 1.3 line takes security fixes only, so it keeps chrono and accepts the notice (#4219)."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0555"
+ignoreUntil = 2027-03-31
+reason = "chrono-tz is flagged unmaintained (informational, no CVSS, no affected functions, no fixed version), not vulnerable. 2.0 replaces it with jiff (#4222); the 1.3 line takes security fixes only, so it keeps chrono-tz and accepts the notice (#4219)."
