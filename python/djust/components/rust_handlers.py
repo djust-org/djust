@@ -1997,67 +1997,70 @@ class PageHeaderActionsHandler:
         return _safe(f'<div class="dj-page-header__actions">{content}</div>')
 
 
+_EMPTY_ACTIONS = _re_filters.compile(r'<div class="dj-page-header__actions">\s*</div>\s*')
+
+
+def render_page_header(kw: Mapping[str, object], breadcrumb_content: str, actions_html: str) -> str:
+    """The one ``{% page_header %}`` renderer, called by the handler and the Django tag (#4331).
+
+    ``kw`` holds plain operands (a ``mark_safe`` title is escaped, D3). ``actions_html`` is the
+    inner content of the actions slot; a slot that drew nothing draws no ``<div>`` at all."""
+    e_title = conditional_escape(str(kw.get("title", "")))
+    e_subtitle = conditional_escape(str(kw.get("subtitle", "")))
+    e_description = conditional_escape(str(kw.get("description", "")))
+    e_custom_class = attr_text(str(kw.get("custom_class", "")))
+
+    cls = "dj-page-header"
+    if e_custom_class:
+        cls += f" {e_custom_class}"
+
+    breadcrumb_html = ""
+    if breadcrumb_content.strip():
+        breadcrumb_html = f'<div class="dj-page-header__breadcrumb">{breadcrumb_content}</div>'
+    title_html = f'<h1 class="dj-page-header__title">{e_title}</h1>' if e_title else ""
+    subtitle_html = f'<p class="dj-page-header__subtitle">{e_subtitle}</p>' if e_subtitle else ""
+    description_html = (
+        f'<p class="dj-page-header__description">{e_description}</p>' if e_description else ""
+    )
+    actions_section = ""
+    if actions_html.strip():
+        actions_section = PageHeaderActionsHandler().render([], actions_html, {})
+
+    return _safe(
+        f'<header class="{cls}">'
+        f"{breadcrumb_html}"
+        f'<div class="dj-page-header__row">'
+        f'<div class="dj-page-header__text">'
+        f"{title_html}"
+        f"{subtitle_html}"
+        f"{description_html}"
+        f"</div>"
+        f"{actions_section}"
+        f"</div>"
+        f"</header>"
+    )
+
+
 class PageHeaderHandler:
     """Block handler for {% page_header title=... %}...{% endpage_header %}"""
 
     def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
-        title = kw.get("title", "")
-        subtitle = kw.get("subtitle", "")
-        description = kw.get("description", "")
-        custom_class = kw.get("custom_class", "")
-
-        e_title = conditional_escape(str(title))
-        e_subtitle = conditional_escape(str(subtitle))
-        e_description = conditional_escape(str(description))
-        e_custom_class = attr_text(str(custom_class))
-
-        cls = "dj-page-header"
-        if e_custom_class:
-            cls += f" {e_custom_class}"
-
-        # In the Rust engine, nested block tags render inline.
-        # page_header_actions renders its own wrapper div, so we need to
-        # separate actions from breadcrumb content.
-        actions_marker = '<div class="dj-page-header__actions">'
-        actions_section = ""
-        breadcrumb_content = content
-        if actions_marker in content:
-            idx = content.index(actions_marker)
-            breadcrumb_content = content[:idx]
-            actions_section = content[idx:]
-
-        # Breadcrumb slot
-        breadcrumb_html = ""
-        if breadcrumb_content.strip():
-            breadcrumb_html = f'<div class="dj-page-header__breadcrumb">{breadcrumb_content}</div>'
-
-        # Title
-        title_html = f'<h1 class="dj-page-header__title">{e_title}</h1>' if e_title else ""
-
-        # Subtitle
-        subtitle_html = ""
-        if e_subtitle:
-            subtitle_html = f'<p class="dj-page-header__subtitle">{e_subtitle}</p>'
-
-        # Description
-        description_html = ""
-        if e_description:
-            description_html = f'<p class="dj-page-header__description">{e_description}</p>'
-
-        return _safe(
-            f'<header class="{cls}">'
-            f"{breadcrumb_html}"
-            f'<div class="dj-page-header__row">'
-            f'<div class="dj-page-header__text">'
-            f"{title_html}"
-            f"{subtitle_html}"
-            f"{description_html}"
-            f"</div>"
-            f"{actions_section}"
-            f"</div>"
-            f"</header>"
-        )
+        # In the Rust engine, nested block tags render inline: page_header_actions draws its own
+        # wrapper div, so the actions are told from the breadcrumb content by that wrapper.
+        marker = '<div class="dj-page-header__actions">'
+        breadcrumb_content, actions_section = content, ""
+        if marker in content:
+            idx = content.index(marker)
+            breadcrumb_content, actions_section = content[:idx], content[idx:]
+        if _EMPTY_ACTIONS.fullmatch(actions_section):
+            actions_section = ""
+        html = render_page_header(kw, breadcrumb_content, "")
+        # The slot sits last in the row, after the text block.
+        tail = "</div></header>"
+        if actions_section and html.endswith(tail):
+            html = html[: -len(tail)] + actions_section + tail
+        return _safe(html)
 
 
 class SidebarHandler:

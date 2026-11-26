@@ -20,7 +20,6 @@ import itertools
 import json as _json
 import logging
 import re as _re
-import uuid
 from urllib.parse import urlencode
 from collections.abc import Sequence
 from collections.abc import Set as AbstractSet
@@ -6417,65 +6416,15 @@ class PageHeaderNode(template.Node):
         self.kwargs = kwargs
 
     def render(self, context: Any) -> SafeString:
-        kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
-        title = kw.get("title", "")
-        subtitle = kw.get("subtitle", "")
-        description = kw.get("description", "")
-        custom_class = kw.get("custom_class", "")
+        from djust.components.rust_handlers import render_page_header
 
-        e_title = conditional_escape(str(title))
-        e_subtitle = conditional_escape(str(subtitle))
-        e_description = conditional_escape(str(description))
-        e_custom_class = attr_text(str(custom_class))
-
+        kw = _plain_kwargs(self.kwargs, context)
         # Render child nodelist — this may include page_header_actions which
         # stashes its content in the context.
         context[_page_header_actions_key] = ""
         breadcrumb_content = self.nodelist.render(context)
         actions_html = context.get(_page_header_actions_key, "")
-
-        cls = "dj-page-header"
-        if e_custom_class:
-            cls += f" {e_custom_class}"
-
-        # Breadcrumb slot — any direct child content (not actions)
-        breadcrumb_html = ""
-        if breadcrumb_content.strip():
-            breadcrumb_html = f'<div class="dj-page-header__breadcrumb">{breadcrumb_content}</div>'
-
-        # Title
-        title_html = f'<h1 class="dj-page-header__title">{e_title}</h1>' if e_title else ""
-
-        # Subtitle
-        subtitle_html = ""
-        if e_subtitle:
-            subtitle_html = f'<p class="dj-page-header__subtitle">{e_subtitle}</p>'
-
-        # Description
-        description_html = ""
-        if e_description:
-            description_html = f'<p class="dj-page-header__description">{e_description}</p>'
-
-        # Actions
-        actions_section = ""
-        if actions_html.strip():
-            from djust.components.rust_handlers import PageHeaderActionsHandler
-
-            actions_section = PageHeaderActionsHandler().render([], actions_html, {})
-
-        return mark_safe(
-            f'<header class="{cls}">'
-            f"{breadcrumb_html}"
-            f'<div class="dj-page-header__row">'
-            f'<div class="dj-page-header__text">'
-            f"{title_html}"
-            f"{subtitle_html}"
-            f"{description_html}"
-            f"</div>"
-            f"{actions_section}"
-            f"</div>"
-            f"</header>"
-        )
+        return mark_safe(render_page_header(kw, breadcrumb_content, actions_html))
 
 
 @register.tag("page_header")
@@ -7093,7 +7042,7 @@ class _FilterControlNode(template.Node):
         controls = context.get(_FILTER_FRAME)
         if not isinstance(controls, list):
             return SafeString("")
-        controls.append((self.KIND, {k: _resolve(v, context) for k, v in self.kwargs.items()}))
+        controls.append((self.KIND, _plain_kwargs(self.kwargs, context)))
         return SafeString(_FILTER_SLOT)
 
 
@@ -7109,6 +7058,15 @@ class FilterSearchNode(_FilterControlNode):
     KIND = "search"
 
 
+def _plain_kwargs(kwargs: Any, context: Any) -> dict[str, Any]:
+    """A tag's resolved arguments as the native handler reads them (#4331, D3): a ``mark_safe``
+    string or a lazy string is the plain ``str`` it spells, so the one renderer escapes it, as it
+    does on the Rust engine."""
+    from djust.components.rust_handlers import _python_operand
+
+    return {k: _python_operand(_resolve(v, context)) for k, v in kwargs.items()}
+
+
 def render_filter_bar(
     kw: Any, controls: Any, *, default_id: Any = None, extra_html: Any = ""
 ) -> SafeString:
@@ -7117,14 +7075,12 @@ def render_filter_bar(
     ``kw`` is the bar's own resolved arguments; ``controls`` is a list of ``(kind, kwargs)``
     with ``kind`` one of ``select`` / ``date_range`` / ``search`` and ``kwargs`` the child
     tag's resolved arguments. The bar owns ``event`` and ``clear_event``: a child's own
-    ``event=`` is never read. ``default_id`` is the id used when the bar has none (the Django
-    tag draws a random one; the native handler passes a constant so a socket render does not
-    change it). ``extra_html`` is appended inside the controls row (the native handler keeps
+    ``event=`` is never read. ``default_id`` is the id used when the bar has none: the constant
+    ``filter-bar`` on both engines (#4331; the Django tag used to draw a random one, which a socket
+    re-render changed on every patch). ``extra_html`` is appended inside the controls row (the native handler keeps
     whatever else the template put in the bar; the Django tag has none).
     """
-    bar_id = kw.get(
-        "id", default_id if default_id is not None else f"filter-bar-{uuid.uuid4().hex[:8]}"
-    )
+    bar_id = kw.get("id", default_id if default_id is not None else "filter-bar")
     event = kw.get("event", "filter_change")
     custom_class = kw.get("class", "")
     clear_event = kw.get("clear_event", "filter_clear")
@@ -7225,7 +7181,7 @@ class FilterBarNode(template.Node):
         self.kwargs = kwargs
 
     def render(self, context: Any) -> SafeString:
-        kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
+        kw = _plain_kwargs(self.kwargs, context)
         controls: list[tuple[str, dict[str, Any]]] = []
         with context.push(**{_FILTER_FRAME: controls}):
             body = str(self.nodelist.render(context))
