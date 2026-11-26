@@ -45,6 +45,11 @@ setting, and there is no supported way to do it.
                             checks) when the post-event snapshot proved the
                             very object plain data (#4325). Off: every list
                             is scanned.
+``loop_item_nested``        That store also keeps items whose body holds a
+                            nested ``{% for %}`` reading only the loops'
+                            variables; a loop nested in an item being stored
+                            renders without the content cache (#4325). Off:
+                            such a body renders every item.
 ``unchanged_save_skip``     The automatic state (#4107) is not written to the
                             session when its encoding equals what the store
                             already holds (or, with nothing stored, what
@@ -93,6 +98,7 @@ ALL: FrozenSet[str] = frozenset(
         "list_item_deltas",
         "loop_item_render",
         "plain_model_scans",
+        "loop_item_nested",
         "unchanged_save_skip",
         "compact_fingerprints",
         "digest_fingerprints",

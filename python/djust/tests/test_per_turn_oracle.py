@@ -222,6 +222,38 @@ class IfTable(Table):
     )
 
 
+class NestedTable(Table):
+    """A table whose rows hold nested loops (#4325 WP4): the per-item store
+    keeps each row with its inner loops, so an in-place change to an inner
+    list must still re-render that row."""
+
+    exposure_policy = "explicit"
+    template = (
+        "<div dj-root><h1>{{ title }}</h1>"
+        '<table>{% for row in items %}<tr id="row-{{ row.id }}"><td>{{ row.name }}</td>'
+        "<td>{% for t in row.tags %}{% if forloop.first %}<b>{{ t }}</b>{% else %}"
+        "{% for ch in t %}{{ ch }}{% endfor %}{% endif %}{{ forloop.parentloop.counter }}"
+        "{% empty %}-{% endfor %}</td></tr>{% endfor %}</table></div>"
+    )
+
+    @event_handler()
+    def retag(self, **kwargs):
+        # Same length, new content: only the row's value hash can tell.
+        self.items[5]["tags"][1] = self.items[5]["tags"][1] + "x"
+
+
+NESTED_SCRIPT = [
+    ("event", "retag"),
+    ("event", "nested"),
+    ("event", "cell"),
+    ("event", "retag"),
+    ("event", "swap"),
+    ("event", "retitle"),
+    ("event", "rebind"),
+    ("event", "retag"),
+]
+
+
 TABLE_SCRIPT = [
     ("event", "cell"),
     ("event", "retitle"),
@@ -1100,6 +1132,7 @@ WS_CASES: List[Tuple[str, type, Script]] = [
     ("counter_server", ServerCounter, COUNTER_SCRIPT),
     ("counter_client", ClientCounter, COUNTER_SCRIPT),
     ("table", Table, TABLE_SCRIPT),
+    ("nested_table", NestedTable, NESTED_SCRIPT),
     ("derived", Derived, DERIVED_SCRIPT),
     ("opaque", Opaque, OPAQUE_SCRIPT),
     ("models", Models, MODELS_SCRIPT),
@@ -1292,6 +1325,7 @@ async def test_websocket_frames_are_identical(monkeypatch, label, view_class, sc
 #: The cases each shortcut is also turned off alone on.
 ALONE_LABELS = (
     "table",
+    "nested_table",
     "derived",
     "processors",
     "counter_client",
@@ -1902,6 +1936,22 @@ def _break_plain_model_scans(patch: Any) -> None:
     patch.setattr(rust_bridge, "_plain_by_snapshot", lambda walks, key, value: type(value) is list)
 
 
+def _break_loop_item_nested(patch: Any) -> None:
+    from djust.mixins import rust_bridge
+
+    real = rust_bridge.RustBridgeMixin._sync_state_to_rust
+
+    # As if the store hashed a row without its inner lists: a nested loop over
+    # a changed inner list is served from the previous render.
+    def sync(self: Any, *args: Any, **kwargs: Any) -> Any:
+        rust_view = getattr(self, "_rust_view", None)
+        if rust_view is not None and hasattr(rust_view, "_set_loop_item_store_sabotage"):
+            rust_view._set_loop_item_store_sabotage(3)
+        return real(self, *args, **kwargs)
+
+    patch.setattr(rust_bridge.RustBridgeMixin, "_sync_state_to_rust", sync)
+
+
 SABOTAGE = {
     "unchanged_save_skip": (_break_unchanged_save_skip, _reconnect_run),
     "contract_cache": (_break_contract_cache, _redeclared_run),
@@ -1923,6 +1973,10 @@ SABOTAGE = {
     "plain_model_scans": (
         _break_plain_model_scans,
         lambda: run_ws(ModelScan, MODEL_SCAN_SCRIPT),
+    ),
+    "loop_item_nested": (
+        _break_loop_item_nested,
+        lambda: run_ws(NestedTable, NESTED_SCRIPT),
     ),
     "snapshot_fingerprints": (
         _break_snapshot_fingerprints,

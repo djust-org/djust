@@ -1042,10 +1042,16 @@ pub fn with_active_cache<R>(f: impl FnOnce(&mut LoopRenderCache) -> R) -> Option
 //   the `env` string the renderer builds, which resets the entry when it
 //   changes;
 // * context reads: only bodies that read nothing but the loop variables and
-//   `forloop`, with no tag whose output depends on anything else and no
-//   nested loop (its parse-cache placeholders must never be stored)
+//   `forloop`, with no tag whose output depends on anything else
 //   (`body_is_item_storable`), and only for an outermost loop with no safety
 //   mark under its iterable (checked by the renderer each execution);
+// * a nested `{% for %}` (#4325 WP4): storable when its iterable and body
+//   read only the enclosing loops' variables, its own and `forloop` (each
+//   loop variable only inside the loop that binds it). While an item that
+//   will be stored renders, the store is `storing` and a nested loop does not
+//   use the content cache (#1967/#1970), so no parse-cache placeholder can
+//   be stored with the item. `djust._per_turn` `loop_item_nested` switches
+//   it (`RustLiveView.set_loop_item_store_nested`);
 // * Python: an item whose render made a live read is never stored.
 //
 // The store is on by default and switched by
@@ -1068,9 +1074,15 @@ struct StoredLoop {
 pub struct LoopItemStore {
     enabled: bool,
     /// Testing only: 1 serves a stored item whatever its value now is, 2
-    /// ignores the environment and length. Lets the differential tests prove
-    /// they see a broken store.
+    /// ignores the environment and length, 3 hashes a list inside an item
+    /// by its kind only (an in-place change to a row's inner list is then
+    /// missed). Lets the differential tests prove they see a broken store.
     sabotage: u8,
+    /// Bodies with a nested `{% for %}` are refused (#4325 WP4 switched off).
+    refuse_nested: bool,
+    /// Depth of item renders whose output will be stored: a nested loop
+    /// rendering under one must not emit parse-cache placeholders.
+    storing: u32,
     keys: (
         std::collections::hash_map::RandomState,
         std::collections::hash_map::RandomState,
@@ -1105,6 +1117,35 @@ impl LoopItemStore {
         self.sabotage = mode;
     }
 
+    /// Whether bodies with a nested `{% for %}` may be stored (#4325 WP4;
+    /// on by default). Changing it drops every verdict and stored item.
+    pub fn set_nested_enabled(&mut self, enabled: bool) {
+        if self.refuse_nested == enabled {
+            self.refuse_nested = !enabled;
+            self.clear();
+        }
+    }
+
+    pub fn nested_enabled(&self) -> bool {
+        !self.refuse_nested
+    }
+
+    /// An item whose output will be stored starts rendering.
+    pub fn enter_storing(&mut self) {
+        self.storing += 1;
+    }
+
+    /// ... and has finished (whether or not it rendered).
+    pub fn leave_storing(&mut self) {
+        self.storing = self.storing.saturating_sub(1);
+    }
+
+    /// Inside the render of an item that will be stored: a nested loop must
+    /// render its items in full, without the content cache's placeholders.
+    pub fn is_storing(&self) -> bool {
+        self.storing > 0
+    }
+
     pub fn clear(&mut self) {
         self.loops.clear();
         self.verdicts.clear();
@@ -1136,6 +1177,7 @@ impl LoopItemStore {
         self.render_no += 1;
         self.hits = 0;
         self.misses = 0;
+        self.storing = 0;
     }
 
     fn prune(&mut self) {
@@ -1165,7 +1207,7 @@ impl LoopItemStore {
         let storable = *self
             .verdicts
             .entry(body_sig)
-            .or_insert_with(|| body_is_item_storable(body, var_names));
+            .or_insert_with(|| body_is_item_storable_in(body, var_names, !self.refuse_nested));
         if !storable {
             return None;
         }
@@ -1194,30 +1236,51 @@ impl LoopItemStore {
 
     /// The keyed 128-bit hash of a plain item value; `None` when the value
     /// is not plain data (it is then rendered and never stored).
+    ///
+    /// One walk of the value feeds both keyed hashers (#4325 C2): the same
+    /// two 64-bit halves as hashing it once per key, at half the walking.
     pub fn item_hash(&self, value: &djust_core::Value) -> Option<u128> {
-        let mut a = self.keys.0.build_hasher();
-        let mut b = self.keys.1.build_hasher();
-        if !hash_plain(value, &mut a) || !hash_plain(value, &mut b) {
+        let mut tee = TeeHasher(self.keys.0.build_hasher(), self.keys.1.build_hasher());
+        if self.sabotage == 3 {
+            if !hash_plain_sabotaged(value, &mut tee) {
+                return None;
+            }
+        } else if !hash_plain(value, &mut tee) {
             return None;
         }
-        Some(((a.finish() as u128) << 64) | b.finish() as u128)
+        Some(((tee.0.finish() as u128) << 64) | tee.1.finish() as u128)
     }
 
-    /// The stored output for `index` if it was rendered from an equal value.
-    pub fn lookup(&mut self, key: u64, index: usize, hash: u128) -> Option<String> {
+    /// Hand the stored output for `index` to `emit` if it was rendered from
+    /// an equal value; `true` on a hit. The stored HTML is borrowed, not
+    /// cloned, so a hit costs no allocation (#4325 C2).
+    pub fn lookup_with(
+        &mut self,
+        key: u64,
+        index: usize,
+        hash: u128,
+        emit: impl FnOnce(&str),
+    ) -> bool {
         let found = self
             .loops
             .get(&key)
             .and_then(|l| l.items.get(index))
             .and_then(|slot| slot.as_ref())
             .filter(|(h, _)| *h == hash || self.sabotage == 1)
-            .map(|(_, html)| html.clone());
-        if found.is_some() {
+            .map(|(_, html)| html.as_str());
+        let hit = match found {
+            Some(html) => {
+                emit(html);
+                true
+            }
+            None => false,
+        };
+        if hit {
             self.hits += 1;
         } else {
             self.misses += 1;
         }
-        found
+        hit
     }
 
     pub fn store(&mut self, key: u64, index: usize, hash: u128, html: String) {
@@ -1281,19 +1344,123 @@ fn expr_filters_storable(expr: &str) -> bool {
 
 /// Is this loop body safe for the index-keyed store, given its loop
 /// variables? Only node kinds whose output is a function of the values they
-/// read, reading only the loop variables and `forloop`.
+/// read, reading only the loop variables and `forloop`. A nested
+/// `{% for %}` is allowed (#4325 WP4).
 pub fn body_is_item_storable(nodes: &[Node], var_names: &[String]) -> bool {
-    if !nodes.iter().all(node_is_item_storable) {
-        return false;
-    }
-    crate::parser::body_root_var_names(nodes)
-        .iter()
-        .all(|root| root == "forloop" || var_names.iter().any(|v| v == root))
+    body_is_item_storable_in(nodes, var_names, true)
 }
 
-fn node_is_item_storable(node: &Node) -> bool {
+/// [`body_is_item_storable`], with nested loops allowed only when `nested`.
+fn body_is_item_storable_in(nodes: &[Node], var_names: &[String], nested: bool) -> bool {
+    if !nodes.iter().all(|n| node_is_item_storable(n, nested)) {
+        return false;
+    }
+    if nested && nodes.iter().any(node_holds_for) {
+        return reads_only_bound(nodes, var_names);
+    }
+    roots_are_bound(nodes, var_names)
+}
+
+fn roots_are_bound(nodes: &[Node], bound: &[String]) -> bool {
+    crate::parser::body_root_var_names(nodes)
+        .iter()
+        .all(|root| root == "forloop" || bound.iter().any(|v| v == root))
+}
+
+/// Whether `node` is or holds a `{% for %}`.
+fn node_holds_for(node: &Node) -> bool {
+    matches!(node, Node::For { .. })
+        || node
+            .child_lists()
+            .into_iter()
+            .flatten()
+            .any(|children| children.iter().any(node_holds_for))
+}
+
+/// The scoped form of [`roots_are_bound`] for a body with nested loops
+/// (#4325 WP4). The root-name extraction keeps a loop's variables among the
+/// roots it reports, so a body reading `t` inside `{% for t in r.tags %}`
+/// would read as reading an outer `t`. This walks the loops instead: a
+/// loop's iterable and `{% empty %}` block are checked against the names
+/// bound around it, and its body against those plus its own variables. A
+/// `{% with %}` holding a loop binds its names for its body the same way.
+/// Every other node is checked whole when it holds no loop, or by its own
+/// expressions (its children emptied) and then its children.
+fn reads_only_bound(nodes: &[Node], bound: &[String]) -> bool {
+    nodes.iter().all(|node| {
+        if !node_holds_for(node) {
+            return roots_are_bound(std::slice::from_ref(node), bound);
+        }
+        match node {
+            Node::For {
+                var_names,
+                iterable,
+                reversed,
+                nodes,
+                empty_nodes,
+            } => {
+                let head = Node::For {
+                    var_names: Vec::new(),
+                    iterable: iterable.clone(),
+                    reversed: *reversed,
+                    nodes: Vec::new(),
+                    empty_nodes: Vec::new(),
+                };
+                let mut inner = bound.to_vec();
+                inner.extend(var_names.iter().cloned());
+                roots_are_bound(std::slice::from_ref(&head), bound)
+                    && reads_only_bound(nodes, &inner)
+                    && reads_only_bound(empty_nodes, bound)
+            }
+            Node::With { assignments, nodes } => {
+                let head = Node::With {
+                    assignments: assignments.clone(),
+                    nodes: Vec::new(),
+                };
+                let mut inner = bound.to_vec();
+                inner.extend(assignments.iter().map(|(name, _)| name.clone()));
+                roots_are_bound(std::slice::from_ref(&head), bound)
+                    && reads_only_bound(nodes, &inner)
+            }
+            other => {
+                let mut head = other.clone();
+                for children in head.child_lists_mut().into_iter().flatten() {
+                    children.clear();
+                }
+                roots_are_bound(std::slice::from_ref(&head), bound)
+                    && other
+                        .child_lists()
+                        .into_iter()
+                        .flatten()
+                        .all(|children| reads_only_bound(children, bound))
+            }
+        }
+    })
+}
+
+/// Every loop variable a nested `{% for %}` in `nodes` binds (#4325 WP4),
+/// for the renderer's check that no Python object is bound under a loop
+/// name.
+pub fn nested_loop_var_names(nodes: &[Node]) -> Vec<String> {
+    let mut names = Vec::new();
+    fn walk(nodes: &[Node], names: &mut Vec<String>) {
+        for node in nodes {
+            if let Node::For { var_names, .. } = node {
+                names.extend(var_names.iter().cloned());
+            }
+            for children in node.child_lists().into_iter().flatten() {
+                walk(children, names);
+            }
+        }
+    }
+    walk(nodes, &mut names);
+    names
+}
+
+fn node_is_item_storable(node: &Node, nested: bool) -> bool {
+    let storable = |nodes: &[Node]| nodes.iter().all(|n| node_is_item_storable(n, nested));
     match node {
-        Node::Located { nodes, .. } => nodes.iter().all(node_is_item_storable),
+        Node::Located { nodes, .. } => storable(nodes),
         Node::Text(_) | Node::Comment | Node::Load(_) | Node::TemplateTag(_) => true,
         Node::Variable(expr, filters, _) => {
             expr_filters_storable(expr)
@@ -1307,28 +1474,30 @@ fn node_is_item_storable(node: &Node) -> bool {
             true_nodes,
             false_nodes,
             ..
-        } => {
-            expr_filters_storable(condition)
-                && true_nodes.iter().all(node_is_item_storable)
-                && false_nodes.iter().all(node_is_item_storable)
-        }
-        // A nested loop is refused. Its own content cache (#1967/#1970) can
-        // emit parse-cache PLACEHOLDERS (`<dj-pc-…>`) in place of an inner
-        // item, which `render_with_diff` splices back from that render's
-        // manifest; storing the outer item's HTML kept the placeholders, and
-        // a later render served them with no manifest entry behind them, so
-        // the page showed literal `<dj-pc-…>` elements.
+        } => expr_filters_storable(condition) && storable(true_nodes) && storable(false_nodes),
+        // A nested loop (#4325 WP4), when allowed. Its own content cache
+        // (#1967/#1970) can emit parse-cache PLACEHOLDERS (`<dj-pc-…>`) in
+        // place of an inner item, which `render_with_diff` splices back from
+        // that render's manifest; stored with the outer item they were
+        // served later with no manifest entry behind them, so the page
+        // showed literal `<dj-pc-…>` elements. The renderer therefore turns
+        // the content cache off for a loop nested in an item being stored
+        // (`LoopItemStore::is_storing`). What the loop reads is checked by
+        // `reads_only_bound`.
+        Node::For {
+            iterable,
+            nodes,
+            empty_nodes,
+            ..
+        } if nested => expr_filters_storable(iterable) && storable(nodes) && storable(empty_nodes),
         Node::With { assignments, nodes } => {
-            assignments.iter().all(|(_, e)| expr_filters_storable(e))
-                && nodes.iter().all(node_is_item_storable)
+            assignments.iter().all(|(_, e)| expr_filters_storable(e)) && storable(nodes)
         }
-        Node::Spaceless { nodes } | Node::AutoEscape { nodes, .. } => {
-            nodes.iter().all(node_is_item_storable)
-        }
+        Node::Spaceless { nodes } | Node::AutoEscape { nodes, .. } => storable(nodes),
         Node::Filter { filters, nodes } => {
             filters.iter().all(|(name, arg)| {
                 filter_is_item_storable(name) && arg.as_deref().is_none_or(expr_filters_storable)
-            }) && nodes.iter().all(node_is_item_storable)
+            }) && storable(nodes)
         }
         Node::InlineIf {
             true_expr,
@@ -1446,6 +1615,54 @@ fn hash_body<H: Hasher>(nodes: &[Node], h: &mut H) {
     }
 }
 
+/// Feeds every write to two hashers, so one walk of a value yields both keyed
+/// halves of [`LoopItemStore::item_hash`] (#4325 C2). Each stable `Hasher`
+/// method is forwarded to the same method of both, so each half is exactly
+/// what hashing the value into that hasher alone produces (`write_str` and
+/// `write_length_prefix` are unstable to override; their defaults route
+/// through the forwarded methods, as `DefaultHasher`'s own do).
+struct TeeHasher<A, B>(A, B);
+
+macro_rules! tee_forward {
+    ($($method:ident: $ty:ty),* $(,)?) => {
+        $(
+            #[inline]
+            fn $method(&mut self, i: $ty) {
+                self.0.$method(i);
+                self.1.$method(i);
+            }
+        )*
+    };
+}
+
+impl<A: Hasher, B: Hasher> Hasher for TeeHasher<A, B> {
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        self.0.write(bytes);
+        self.1.write(bytes);
+    }
+
+    tee_forward!(
+        write_u8: u8,
+        write_u16: u16,
+        write_u32: u32,
+        write_u64: u64,
+        write_u128: u128,
+        write_usize: usize,
+        write_i8: i8,
+        write_i16: i16,
+        write_i32: i32,
+        write_i64: i64,
+        write_i128: i128,
+        write_isize: isize,
+    );
+
+    /// Not a combined hash: callers read the two halves directly.
+    fn finish(&self) -> u64 {
+        self.0.finish()
+    }
+}
+
 /// Hash a plain data value with a type tag per kind; `false` for anything
 /// that is not plain data (a live handle, an encoded object, a model, a
 /// dict view or named tuple, or a map with a non-scalar key).
@@ -1525,6 +1742,35 @@ fn hash_plain<H: Hasher>(value: &djust_core::Value, h: &mut H) -> bool {
     true
 }
 
+/// [`hash_plain`] broken on purpose (sabotage 3, #4325 WP4): a list or
+/// tuple below the top level hashes as its kind only, so an in-place change
+/// to a row's inner list keeps the row's hash.
+fn hash_plain_sabotaged<H: Hasher>(value: &djust_core::Value, h: &mut H) -> bool {
+    use djust_core::{ObjectKey, Value};
+    match value {
+        Value::Object(map) => {
+            10u8.hash(h);
+            map.len().hash(h);
+            for (key, item) in map {
+                match key {
+                    ObjectKey::Str(s) => s.hash(h),
+                    _ => return hash_plain(value, h),
+                }
+                match item {
+                    Value::List(_) | Value::Tuple(_) => 99u8.hash(h),
+                    other => {
+                        if !hash_plain(other, h) {
+                            return false;
+                        }
+                    }
+                }
+            }
+            true
+        }
+        other => hash_plain(other, h),
+    }
+}
+
 /// Run `f` with the active item store, if one is installed and enabled.
 /// Independent of the content-hash cache's own switch.
 pub fn with_active_item_store<R>(f: impl FnOnce(&mut LoopItemStore) -> R) -> Option<R> {
@@ -1538,4 +1784,250 @@ pub fn with_active_item_store<R>(f: impl FnOnce(&mut LoopItemStore) -> R) -> Opt
         return None;
     }
     Some(f(&mut cache.item_store))
+}
+
+#[cfg(test)]
+mod item_store_one_walk_4325 {
+    //! #4325 C2: `item_hash` walks a value once through a tee of both keyed
+    //! hashers, and a hit hands the stored HTML over by borrow. Both must
+    //! decide exactly as the two-walk, cloning versions did.
+    use super::{hash_plain, LoopItemStore, TeeHasher};
+    use djust_core::{ObjectKey, Value};
+    use indexmap::IndexMap;
+    use std::hash::{BuildHasher, Hasher};
+
+    /// The pre-C2 `item_hash`: one full walk per key.
+    fn two_walks(store: &LoopItemStore, value: &Value) -> Option<u128> {
+        let mut a = store.keys.0.build_hasher();
+        let mut b = store.keys.1.build_hasher();
+        if !hash_plain(value, &mut a) || !hash_plain(value, &mut b) {
+            return None;
+        }
+        Some(((a.finish() as u128) << 64) | b.finish() as u128)
+    }
+
+    fn values() -> Vec<Value> {
+        let mut row = IndexMap::new();
+        row.insert(ObjectKey::Str("id".into()), Value::Integer(-7));
+        row.insert(ObjectKey::Int(3), Value::Float(-0.0));
+        row.insert(ObjectKey::Bool(true), Value::Bool(false));
+        row.insert(ObjectKey::None, Value::None);
+        row.insert(
+            ObjectKey::Str("tags".into()),
+            Value::List(vec![
+                Value::String("été ↑".into()),
+                Value::SafeString("<b>x</b>".into()),
+                Value::Tuple(vec![
+                    Value::Decimal("1.50".into()),
+                    Value::BigInt("1".repeat(40)),
+                ]),
+            ]),
+        );
+        vec![
+            Value::None,
+            Value::Bool(true),
+            Value::Integer(i64::MIN),
+            Value::Float(f64::NAN),
+            Value::String(String::new()),
+            Value::String("a\u{0}b".into()),
+            Value::List(vec![]),
+            Value::Object(row),
+        ]
+    }
+
+    #[test]
+    fn the_tee_hash_equals_one_walk_per_key() {
+        let store = LoopItemStore::default();
+        for value in values() {
+            assert_eq!(
+                store.item_hash(&value),
+                two_walks(&store, &value),
+                "{value:?}"
+            );
+            assert!(store.item_hash(&value).is_some());
+        }
+        // Not plain data: refused by both.
+        let mut map = IndexMap::new();
+        map.insert(ObjectKey::Str("m".into()), Value::ModelName("app.M".into()));
+        let model = Value::Object(map);
+        assert_eq!(store.item_hash(&model), two_walks(&store, &model));
+    }
+
+    #[test]
+    fn every_forwarded_write_reaches_both_halves_as_it_would_alone() {
+        let store = LoopItemStore::default();
+        let mut tee = TeeHasher(store.keys.0.build_hasher(), store.keys.1.build_hasher());
+        let mut a = store.keys.0.build_hasher();
+        let mut b = store.keys.1.build_hasher();
+        macro_rules! both {
+            ($($call:ident($v:expr)),*) => {$(
+                tee.$call($v);
+                a.$call($v);
+                b.$call($v);
+            )*};
+        }
+        both!(
+            write(b"bytes"),
+            write_u8(1),
+            write_u16(2),
+            write_u32(3),
+            write_u64(4),
+            write_u128(5),
+            write_usize(6),
+            write_i8(-1),
+            write_i16(-2),
+            write_i32(-3),
+            write_i64(-4),
+            write_i128(-5),
+            write_isize(-6)
+        );
+        std::hash::Hash::hash("a str", &mut tee);
+        std::hash::Hash::hash("a str", &mut a);
+        std::hash::Hash::hash("a str", &mut b);
+        assert_eq!(tee.0.finish(), a.finish());
+        assert_eq!(tee.1.finish(), b.finish());
+    }
+
+    #[test]
+    fn lookup_with_serves_the_stored_bytes_and_counts_as_before() {
+        let mut store = LoopItemStore::default();
+        store.set_enabled(true);
+        store.begin_render();
+        let key = 42;
+        store
+            .loops
+            .entry(key)
+            .or_default()
+            .items
+            .resize_with(2, || None);
+        let value = Value::String("v".into());
+        let hash = store.item_hash(&value).expect("plain");
+        store.store(key, 0, hash, "<li>v</li>".into());
+
+        let mut out = String::new();
+        assert!(store.lookup_with(key, 0, hash, |h| out.push_str(h)));
+        assert_eq!(out, "<li>v</li>");
+        // A different value, an empty slot, an unknown loop: misses, no emit.
+        let other = store.item_hash(&Value::String("w".into())).expect("plain");
+        assert!(!store.lookup_with(key, 0, other, |_| panic!("emitted on a miss")));
+        assert!(!store.lookup_with(key, 1, hash, |_| panic!("emitted on a miss")));
+        assert!(!store.lookup_with(7, 0, hash, |_| panic!("emitted on a miss")));
+        assert_eq!((store.hits(), store.misses()), (1, 3));
+        // Sabotage 1 still serves whatever the value now is.
+        store.set_sabotage(1);
+        assert!(store.lookup_with(key, 0, other, |_| {}));
+    }
+}
+
+#[cfg(test)]
+mod nested_bodies_4325 {
+    //! #4325 WP4: a body holding a nested `{% for %}` is storable when every
+    //! name it reads is bound by an enclosing loop of the item, in scope.
+    use super::{body_is_item_storable, body_is_item_storable_in, nested_loop_var_names};
+    use crate::parser::Node;
+
+    /// The body of the template's first (outermost) `{% for %}`.
+    fn outer_body(src: &str) -> Vec<Node> {
+        let tokens = crate::lexer::tokenize(src).expect("tokenize");
+        let nodes = crate::parser::parse(&tokens).expect("parse");
+        fn find(nodes: &[Node]) -> Option<Vec<Node>> {
+            nodes.iter().find_map(|n| match n {
+                Node::For { nodes, .. } => Some(nodes.clone()),
+                other => other
+                    .child_lists()
+                    .into_iter()
+                    .flatten()
+                    .find_map(|c| find(c)),
+            })
+        }
+        find(&nodes).expect("a for loop")
+    }
+
+    fn storable(src: &str) -> bool {
+        body_is_item_storable(&outer_body(src), &["r".to_owned()])
+    }
+
+    #[test]
+    fn a_nested_loop_over_the_item_is_storable() {
+        for src in [
+            "{% for r in items %}<ul>{% for t in r.tags %}<li>{{ t }}</li>{% endfor %}</ul>{% endfor %}",
+            "{% for r in items %}{% for t in r.tags %}{% if t %}{{ t.x }}{% endif %}\
+             {{ forloop.parentloop.counter }}{% empty %}none{{ r.a }}{% endfor %}{% endfor %}",
+            "{% for r in items %}{% for a, b in r.pairs reversed %}{{ a }}={{ b|default:r.z }}\
+             {% for c in b %}{{ c }}{{ a }}{% endfor %}{% endfor %}{% endfor %}",
+            "{% for r in items %}{% with ts=r.tags %}{% for t in ts %}{{ t }}{% endfor %}\
+             {% endwith %}{% endfor %}",
+            "{% for r in items %}{% if r.on %}{% for t in r.tags|dictsort:\"k\" %}{{ t.k }}\
+             {% endfor %}{% endif %}{% endfor %}",
+        ] {
+            assert!(storable(src), "{src}");
+        }
+    }
+
+    #[test]
+    fn a_nested_loop_reading_anything_else_is_refused() {
+        for src in [
+            // The iterable is outer context.
+            "{% for r in items %}{% for t in all_tags %}{{ t }}{% endfor %}{% endfor %}",
+            // The inner body reads outer context.
+            "{% for r in items %}{% for t in r.tags %}{{ prefix }}{{ t }}{% endfor %}{% endfor %}",
+            // A filter argument is outer context.
+            "{% for r in items %}{% for t in r.tags %}{{ t|default:fallback }}{% endfor %}{% endfor %}",
+            // An inner loop variable read after its loop is the outer `t`.
+            "{% for r in items %}{% for t in r.tags %}{{ t }}{% endfor %}{{ t }}{% endfor %}",
+            // ... or in the `{% empty %}` block, where it is not bound.
+            "{% for r in items %}{% for t in r.tags %}{% empty %}{{ t }}{% endfor %}{% endfor %}",
+            // ... or in the iterable of its own loop.
+            "{% for r in items %}{% for t in t.children %}{{ t }}{% endfor %}{% endfor %}",
+            // A with-bound name read outside its with.
+            "{% for r in items %}{% with ts=r.tags %}{% for t in ts %}{{ t }}{% endfor %}\
+             {% endwith %}{{ ts }}{% endfor %}",
+            // A tag that carries state across items, inside the inner loop.
+            "{% for r in items %}{% for t in r.tags %}{% cycle 'a' 'b' %}{% endfor %}{% endfor %}",
+            // A clock-dependent filter on the inner iterable.
+            "{% for r in items %}{% for t in r.tags|random %}{{ t }}{% endfor %}{% endfor %}",
+        ] {
+            assert!(!storable(src), "{src}");
+        }
+    }
+
+    #[test]
+    fn switched_off_a_nested_loop_is_refused_and_flat_bodies_are_unchanged() {
+        let nested =
+            outer_body("{% for r in items %}{% for t in r.tags %}{{ t }}{% endfor %}{% endfor %}");
+        let r = ["r".to_owned()];
+        assert!(body_is_item_storable_in(&nested, &r, true));
+        assert!(!body_is_item_storable_in(&nested, &r, false));
+        for (src, expected) in [
+            (
+                "{% for r in items %}{% if r.on %}{{ r.a }}{% endif %}{% endfor %}",
+                true,
+            ),
+            (
+                "{% for r in items %}{{ prefix }}{{ r.a }}{% endfor %}",
+                false,
+            ),
+            (
+                "{% for r in items %}{% with x=r.a %}{{ x }}{% endwith %}{% endfor %}",
+                true,
+            ),
+        ] {
+            let body = outer_body(src);
+            assert_eq!(body_is_item_storable_in(&body, &r, true), expected, "{src}");
+            assert_eq!(
+                body_is_item_storable_in(&body, &r, false),
+                expected,
+                "{src}"
+            );
+        }
+    }
+
+    #[test]
+    fn nested_loop_var_names_lists_every_inner_binding() {
+        let body = outer_body(
+            "{% for r in items %}{% if r.on %}{% for a, b in r.p %}{% for c in b %}{% endfor %}\
+             {% endfor %}{% endif %}{% endfor %}",
+        );
+        assert_eq!(nested_loop_var_names(&body), ["a", "b", "c"]);
+    }
 }

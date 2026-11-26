@@ -140,6 +140,18 @@ class IfTable(Table):
     )
 
 
+class NestedTable(Table):
+    """A row with a nested ``{% for %}`` over its tags (#4325): the item store
+    keeps it under ``loop_item_nested``."""
+
+    exposure_policy = "explicit"
+    template = (
+        '<div dj-root><p>{{ title }}</p><table>{% for row in items %}<tr id="row-{{ row.id }}">'
+        "<td>{{ row.sku }}</td><td>{{ row.qty }}</td>"
+        "<td>{% for t in row.tags %}<i>{{ t }}</i>{% endfor %}</td></tr>{% endfor %}</table></div>"
+    )
+
+
 async def turn(monkeypatch, view_class, event_name, *off) -> Dict[str, Any]:
     """The counts of ONE *event_name* turn on a warmed-up *view_class*."""
     with monkeypatch.context() as spies:
@@ -382,6 +394,18 @@ async def test_loop_item_render_gate_off(monkeypatch):
     assert now["loop_item_store.hits"] == ROWS - 1
     assert now["loop_item_store.misses"] == 1
     assert off.get("loop_item_store.hits", 0) == 0
+
+
+async def test_loop_item_nested_gate_off(monkeypatch):
+    """Rows with a nested loop come from the per-item store too (#4325); off,
+    such a body is refused and every row renders. The frames are the same
+    either way (``test_per_turn_oracle.py``)."""
+    now = await turn(monkeypatch, NestedTable, "cell")
+    off = await turn(monkeypatch, NestedTable, "cell", "loop_item_nested")
+    assert now["loop_item_store.hits"] == ROWS - 1
+    assert now["loop_item_store.misses"] == 1
+    assert off.get("loop_item_store.hits", 0) == 0
+    assert now["reply"] == off["reply"]
 
 
 async def test_an_unrelated_change_does_not_walk_the_list_in_the_sync(monkeypatch):
