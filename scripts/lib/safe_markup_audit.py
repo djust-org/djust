@@ -354,12 +354,6 @@ AUDITED: dict[tuple[str, str], Audit] = {
         (DC, "_THEME_TOGGLE_MODES = (", "<module>"),
         (DC, "e_current = attr_text(current)"),
     ),
-    (DC, "PageHeaderNode.render"): S(
-        1,
-        "title, subtitle, description and class escaped (attr_text / escape in an attribute, conditional_escape in text: #4009); the breadcrumb and actions slots are rendered nodelists",
-        (DC, "e_title = conditional_escape(str(title))"),
-        (DC, "breadcrumb_content = self.nodelist.render(context)"),
-    ),
     (DC, "render_dropdown_menu"): S(
         1,
         "label, event, class and align escaped (attr_text / escape in an attribute, conditional_escape in text: #4009); items come from render_menu_item (labels escaped, href through url_attr); a block body is the rendered tag body",
@@ -374,6 +368,12 @@ AUDITED: dict[tuple[str, str], Audit] = {
     # --- the Rust-native handlers (#3820): `_safe(...)` is a sink since the wrapper sinks, so
     # these are the handlers whose markup the guard still cannot prove. Every other handler
     # (about 90 call sites) is proved by the guard. ---
+    (RH, "render_page_header"): S(
+        1,
+        "title, subtitle, description and class escaped (attr_text / conditional_escape: #4009); the breadcrumb and actions slots are rendered tag bodies (#4331)",
+        (RH, 'e_title = conditional_escape(str(kw.get("title", "")))'),
+        (RH, 'e_custom_class = attr_text(str(kw.get("custom_class", "")))'),
+    ),
     (RH, "_root_layout_html"): S(
         1,
         "the one renderer of the four core layout handlers (AppShell, AppSidebar, AppHeader, AppContent): it joins, in the order `_render_root_parts` lists them, byte slices of `content` and wrapper text. `content` is the block body the engine hands a handler as an already-rendered SafeString (registry.rs, call_block_handler_with_py_sidecar and call_core_root_layout, #2379; pinned by test_safe_markup_guard_3820.py), and a slice is cut where `_layout_body_part` put it: at the UTF-8 offsets of str positions, so no character is split. The wrapper text is constant markup, except AppShellHandler's opening tag, whose id and class are escaped with attr_text (whatever they are marked as, #4009)",
@@ -497,10 +497,10 @@ AUDITED: dict[tuple[str, str], Audit] = {
     ),
     (RH, "PageHeaderHandler.render"): S(
         1,
-        'title, subtitle and description through conditional_escape (text), the class through attr_text; `content` (the rendered block body) is cut at the first literal `<div class="dj-page-header__actions">` (the wrapper page_header_actions renders), so each half starts or ends at that tag and escaped data cannot spell it',
-        (RH, "actions_marker = '<div class=\"dj-page-header__actions\">'"),
-        (RH, "breadcrumb_content = content[:idx]"),
-        (RH, "e_custom_class = attr_text(str(custom_class))"),
+        'html is render_page_header output (its operands escaped, its own audited sink); `content` (the rendered block body) is cut at the first literal `<div class="dj-page-header__actions">` (the wrapper page_header_actions renders), and the actions half is spliced in only before the fixed closing tail, so escaped data cannot spell either boundary (#4331)',
+        (RH, "marker = '<div class=\"dj-page-header__actions\">'"),
+        (RH, 'html = render_page_header(kw, breadcrumb_content, "")'),
+        (RH, 'tail = "</div></header>"'),
     ),
     (RH, "DataTableHandler.render_kwargs"): S(
         1,
