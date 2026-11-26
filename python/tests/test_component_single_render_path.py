@@ -228,33 +228,15 @@ class TestLayoutParity:
 # --------------------------------------------------------------------------- #
 # The kept twins against the Python tags
 
-#: Every kept twin that does not render its Python tag's markup, with the measured class and
-#: aspects of ``scripts/template-library-parity-baseline.csv`` (the harness renders a spread of
-#: keyword, hostile, marked-safe, literal, missing, ``None``, positional and no-argument calls).
-#: These are the known divergences, kept on purpose with their twin (see ``rust_handlers``), and
-#: owed a convergence: the native twin is the faster render (``badge`` ... ``pagination``) or the
-#: one that can render a Rust-only tag in its body (the children-reading block tags). A twin that
-#: starts or stops diverging fails here.
+#: Every native tag that does not render the same bytes under both engines, with the measured class
+#: of ``scripts/template-library-parity-baseline.csv`` (the harness renders a spread of keyword,
+#: hostile, marked-safe, literal, missing, ``None``, positional and no-argument calls). Since #4331
+#: every component tag has one renderer, so this is the documented exception list, not a backlog:
+#: ``filter_search`` outside a ``filter_bar`` draws nothing under the Django engine (its node only
+#: contributes to the bar) and a marker comment under the native one. Any other tag that starts
+#: diverging fails here.
 KNOWN_DIVERGENCES = {
-    "accordion": "DIFFERENT",
-    "accordion_item": "DIFFERENT",
-    "app_shell": "DIFFERENT",  # keeps body content outside the slot tags (root-proof copies it)
-    "avatar": "DIFFERENT",
-    "badge": "DIFFERENT",
-    "filter_bar": "DIFFERENT",  # draws what the body renders, not only direct children (#3878)
-    "filter_date_range": "DIFFERENT-escape-policy-only",
     "filter_search": "DIFFERENT",
-    "filter_select": "DIFFERENT-escape-policy-only",
-    "form_array": "DIFFERENT",
-    "nav_item": "DIFFERENT",  # draws a third level (#3873)
-    "nav_menu": "DIFFERENT-escape-policy-only",  # body (#3878); same classes since #4127
-    "page_header": "DIFFERENT-escape-policy-only",
-    "pagination": "DIFFERENT",
-    "progress": "DIFFERENT",
-    "sidebar": "DIFFERENT",
-    "sidebar_item": "DIFFERENT",
-    "sidebar_section": "DIFFERENT-escape-policy-only",
-    "toolbar": "DIFFERENT",
 }
 
 
@@ -277,7 +259,11 @@ class TestKeptTwins:
         measured = _baseline()[name]
         assert measured == KNOWN_DIVERGENCES.get(name, "IDENTICAL"), (name, measured)
 
-    def test_every_listed_divergence_is_a_kept_twin(self):
+    def test_every_native_tag_is_identical_but_the_documented_exceptions(self):
+        baseline = _baseline()
+        assert {n: baseline[n] for n in NATIVE if baseline[n] != "IDENTICAL"} == KNOWN_DIVERGENCES
+
+    def test_every_listed_divergence_is_a_native_tag(self):
         assert set(KNOWN_DIVERGENCES) <= NATIVE
 
     def test_every_bridged_tag_is_identical(self):
