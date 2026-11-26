@@ -68,6 +68,18 @@ from django.utils.decorators import method_decorator
 from django.views import View
 from django.views.decorators.csrf import csrf_exempt
 
+from ._protocol import (
+    PROTOCOL_FIELD,
+    PROTOCOL_HEADER,
+    PROTOCOL_QUERY_PARAM,
+    PROTOCOL_VERSION,
+    anote_refusal,
+    client_protocol_ok,
+    mismatch_response,
+    reload_frame,
+    request_protocol_ok,
+    session_key_of,
+)
 from .rate_limit import ConnectionRateLimiter
 from .security import sanitize_for_log
 from .serialization import DjangoJSONEncoder
@@ -943,7 +955,7 @@ class SSESession:
                         self.view_instance = None
                         self.shutdown()
                     else:
-                        await self.runtime._flush_all_pending()
+                        await self.runtime._flush_all_pending("mount")
                 finally:
                     if untrack_after_mount:
                         # Same-room navigation: the new page joined the room as
@@ -1448,6 +1460,21 @@ def _sse_content_type_is_json(request: HttpRequest) -> bool:
     return content_type == "application/json"
 
 
+def _protocol_reload_stream(reload: bool = True) -> HttpResponse:
+    """A stream of one ``reload`` frame for an outdated client (#3658), then its end.
+
+    ``reload=False`` (the breaker tripped, ``_protocol.note_refusal``): the
+    stream ends with no frame.
+    """
+    response = HttpResponse(
+        f"data: {json.dumps(reload_frame())}\n\n" if reload else "",
+        content_type="text/event-stream; charset=utf-8",
+    )
+    response["Cache-Control"] = "no-cache"
+    response[PROTOCOL_HEADER] = str(PROTOCOL_VERSION)
+    return response
+
+
 class DjustSSEStreamView(View):
     """
     GET endpoint that establishes an SSE stream and mounts the LiveView.
@@ -1500,6 +1527,18 @@ class DjustSSEStreamView(View):
         view_path = request.GET.get("view")
         if not view_path:
             return JsonResponse({"error": "Missing required ?view= parameter"}, status=400)
+
+        # #3658: an outdated (cached) bundle. The stream yields the reload frame
+        # every client obeys, then ends; no session is created or mounted.
+        if not client_protocol_ok(request.GET.get(PROTOCOL_QUERY_PARAM)):
+            reload = await anote_refusal(session_key_of(getattr(request, "session", None)))
+            logger.info(
+                "SSE: stream GET from a client speaking protocol %s (server speaks %s): %s",
+                sanitize_for_log(request.GET.get(PROTOCOL_QUERY_PARAM, "")),
+                PROTOCOL_VERSION,
+                "reload" if reload else "no reload (refused again within the breaker window)",
+            )
+            return _protocol_reload_stream(reload)
 
         # ---- Owner binding (Finding #24) ----
         # Capture the creating principal so event/message POSTs can be verified
@@ -1686,7 +1725,12 @@ class DjustSSEStreamView(View):
                 return  # the response was closed before streaming began
             try:
                 # Send connection acknowledgment immediately
-                yield f"data: {json.dumps({'type': 'sse_connect', 'session_id': session_id})}\n\n"
+                connect = {
+                    "type": "sse_connect",
+                    "session_id": session_id,
+                    PROTOCOL_FIELD: PROTOCOL_VERSION,
+                }
+                yield f"data: {json.dumps(connect)}\n\n"
 
                 # Drain any messages already queued before streaming begins (the
                 # "mount"/"error"/"navigate" pushed synchronously above). When the
@@ -1780,6 +1824,9 @@ class DjustSSEMessageView(View):
             return HttpResponseForbidden("Origin not allowed")
         if not _sse_content_type_is_json(request):
             return JsonResponse({"error": "Content-Type must be application/json"}, status=415)
+        if not request_protocol_ok(request):
+            # #3658: an outdated (cached) bundle; a new client reloads on the 409.
+            return cast(HttpResponse, mismatch_response())
 
         session = _get_session(session_id)
         if not session:

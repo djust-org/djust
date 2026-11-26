@@ -15,6 +15,7 @@ from django.utils.functional import SimpleLazyObject
 from djust import LiveView, event_handler
 from djust.decorators import state
 from djust.sse import DjustSSEMessageView, DjustSSEStreamView, _sse_sessions
+from djust.tests._frames import frame_matches
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -187,7 +188,7 @@ async def test_replacement_rechecks_current_post_permissions():
             access="denied",
         )
         frames = drain(session)
-        assert any(frame.get("type") in {"error", "navigate"} for frame in frames), frames
+        assert any(frame_matches(frame, {"error", "navigate"}) for frame in frames), frames
         assert not any(frame.get("type") == "mount" for frame in frames)
         assert old_runtime.view_instance is None
         assert session.runtime.view_instance is None

@@ -216,8 +216,8 @@ def _wrote_the_session(view: Any) -> bool:
 
 
 def _navigates(view: Any) -> bool:
-    pending = getattr(view, "_pending_navigation", None)
-    return bool(pending) if isinstance(pending, list) else False
+    has_pending = getattr(view, "_has_pending", None)
+    return bool(has_pending("navigation")) if callable(has_pending) else False
 
 
 def save_mode(view: Any, transport: Any, *, source: str, async_result: bool = False) -> str:

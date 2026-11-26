@@ -31,10 +31,9 @@ from typing import Dict, List, Tuple
 
 import pytest
 from django.template import Context, Template, TemplateSyntaxError
-
 from djust.live_view import LiveView
 from djust.testing import with_live_session
-
+from djust.tests._frames import legacy_type
 
 # ---------------------------------------------------------------------------
 # HTML attribute parsing helpers — identical to test_live_render_tag.py so
@@ -601,8 +600,8 @@ class TestStickyUpdateFrame:
         assert frame["version"] == 7
         assert len(frame["patches"]) == 1
         # Ensure the frame is NOT disguised as a root-level patch.
-        assert frame["type"] != "patch"
-        assert frame["type"] != "html_update"
+        assert legacy_type(frame) != "patch"
+        assert legacy_type(frame) != "html_update"
 
 
 # ---------------------------------------------------------------------------
@@ -691,7 +690,7 @@ class TestStickyHoldOrdering:
 
         asyncio.run(_emit_sequence())
 
-        types_in_order = [f.get("type") for f in sent_frames]
+        types_in_order = [legacy_type(f) for f in sent_frames]
         assert "sticky_hold" in types_in_order
         assert "mount" in types_in_order
         sticky_hold_idx = types_in_order.index("sticky_hold")
@@ -738,8 +737,8 @@ class TestLiveRedirectRequestResolverMatch:
         the returned request exposes ``resolver_match.kwargs["pk"]``
         matching the request path (not the old one).
         """
-        from django.urls import path
         from django.http import HttpResponse
+        from django.urls import path
         from djust.websocket import LiveViewConsumer
 
         def _view(request, pk):
@@ -779,10 +778,11 @@ class TestLiveRedirectRequestResolverMatch:
         """Fix #3: ``Resolver404`` path returns None so the caller
         drops all staged stickys rather than silently carrying stale
         auth context."""
-        import types
         import sys
-        from django.urls import path
+        import types
+
         from django.http import HttpResponse
+        from django.urls import path
         from djust.websocket import LiveViewConsumer
 
         def _view(request):

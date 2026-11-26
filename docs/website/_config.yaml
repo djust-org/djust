@@ -574,6 +574,11 @@ navigation:
         file: advanced/security.md
         order: 4
         level: advanced
+      - title: Wire Protocol
+        slug: wire-protocol
+        file: advanced/wire-protocol.md
+        order: 5
+        level: advanced
 
   - title: API Reference
     slug: api

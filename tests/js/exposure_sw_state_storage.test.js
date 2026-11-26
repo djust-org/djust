@@ -171,9 +171,9 @@ describe('ADR-038 E1: service-worker state-snapshot sink', () => {
             state_snapshot_signed: TOKEN });
         // A child view's event, a background render and an error frame each
         // carry a token of their own. None may displace the primary token.
-        await env.send({ type: 'patch', source: 'event', view: 'app.views.Child',
+        await env.send({ type: 'render', source: 'event', view: 'app.views.Child',
             patches: [], state_snapshot_signed: 'CHILD_TOKEN_SENTINEL' });
-        await env.send({ type: 'patch', source: 'background', view: VIEW,
+        await env.send({ type: 'render', source: 'background', view: VIEW,
             patches: [], state_snapshot_signed: 'BACKGROUND_TOKEN_SENTINEL' });
         await env.send({ type: 'error', source: 'event', view: VIEW,
             error: 'x', state_snapshot_signed: 'ERROR_TOKEN_SENTINEL' });
@@ -194,7 +194,7 @@ describe('ADR-038 E1: service-worker state-snapshot sink', () => {
         expect(persistedBytes(env.store).join('\n')).toContain(TOKEN);
 
         // An authorized primary-view acknowledgement revokes with null.
-        await env.send({ type: 'noop', source: 'event', view: VIEW,
+        await env.send({ type: 'render', source: 'event', view: VIEW,
             state_snapshot_signed: null });
         await env.navigateAway();
 

@@ -23,6 +23,7 @@ from django.test import override_settings
 
 from djust.live_view import LiveView
 from djust.testing import LiveViewTestClient
+from djust.tests._frames import legacy_type
 from djust.wizard import WizardMixin
 
 
@@ -316,7 +317,7 @@ async def test_a_dj_submit_next_step_event_over_a_real_websocket():
             for _ in range(6):
                 frame = await socket.receive_json_from()
                 frames.append(frame)
-                if frame.get("type") in {"patch", "html_update", "error", "noop"}:
+                if legacy_type(frame) in {"patch", "html_update", "error", "noop"}:
                     break
             assert not any(f.get("type") == "error" for f in frames), frames
             assert "prefs" in json.dumps(frames), frames

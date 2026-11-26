@@ -31,6 +31,7 @@ from django.test import override_settings
 
 from djust import LiveView, event_handler
 from djust.push import push_to_view
+from djust.tests._frames import frame_matches, legacy_type
 from djust.uploads import FRAME_CHUNK, FRAME_COMPLETE, UploadMixin
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
@@ -150,7 +151,7 @@ async def _until(communicator, *types, timeout=PATIENCE):
     seen = []
     while True:
         seen.append(await communicator.receive_json_from(timeout=deadline - loop.time()))
-        if seen[-1].get("type") in types:
+        if frame_matches(seen[-1], types):
             return seen
 
 
@@ -178,7 +179,7 @@ async def _reply(communicator, ref, timeout=PATIENCE):
     deadline = loop.time() + timeout
     while True:
         frame = await communicator.receive_json_from(timeout=deadline - loop.time())
-        if frame.get("type") in REPLIES and frame.get("ref") == ref:
+        if frame_matches(frame, REPLIES) and frame.get("ref") == ref:
             return frame
 
 
@@ -190,7 +191,7 @@ async def _replies(communicator, *refs):
     deadline = loop.time() + PATIENCE
     while pending:
         frame = await communicator.receive_json_from(timeout=deadline - loop.time())
-        if frame.get("type") in REPLIES and frame.get("ref") in pending:
+        if frame_matches(frame, REPLIES) and frame.get("ref") in pending:
             pending.discard(frame["ref"])
             got[frame["ref"]] = frame
     return got
@@ -615,7 +616,7 @@ async def _sse_frame(stream, *types, ref=None, timeout=PATIENCE):
         if not chunk.startswith("data:"):
             continue
         frame = json.loads(chunk[len("data:") :])
-        if frame.get("type") in types and (ref is None or frame.get("ref") == ref):
+        if frame_matches(frame, types) and (ref is None or frame.get("ref") == ref):
             return frame
 
 
@@ -836,7 +837,7 @@ async def test_an_upload_to_a_busy_view_is_applied_in_order_not_dropped():
         frames = await _until(communicator, "upload_progress")
         while frames[-1].get("status") != "complete":
             frames += await _until(communicator, "upload_progress")
-        assert [f["type"] for f in frames if f["type"] == "error"] == []
+        assert [legacy_type(f) for f in frames if f["type"] == "error"] == []
         assert uploader._upload_manager._entries[ref].complete
     finally:
         RELEASE.set()

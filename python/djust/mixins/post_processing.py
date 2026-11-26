@@ -46,6 +46,20 @@ def _static_url(path: str) -> str:
         return f"/static/{path}"
 
 
+def _versioned_url(url: str) -> str:
+    """``url`` with ``v=<djust version>`` in its query (#3658).
+
+    A protocol reload fetches the bundle again; an unhashed static URL could be
+    served from the browser cache and loop the reload. A hashed Manifest URL
+    tolerates the query.
+    """
+    from urllib.parse import quote
+
+    from .. import __version__
+
+    return f"{url}{'&' if '?' in url else '?'}v={quote(str(__version__), safe='')}"
+
+
 def _mask_document_text(html: str) -> str:
     from .template import _mask_raw_text
 
@@ -239,12 +253,13 @@ class PostProcessingMixin:
         suffix = ".min.js" if use_min else ".js"
         full_bundle = config.get("client_bundle", "core") == "full"
         client_js_name = ("djust/client" if full_bundle else "djust/client-core") + suffix
-        client_js_url = _static_url(client_js_name)
+        client_js_url = _versioned_url(_static_url(client_js_name))
 
         chunks_attr = ""
         if not full_bundle:
             chunk_urls = {
-                name: _static_url(f"djust/chunks/{name}{suffix}") for name in CLIENT_CHUNKS
+                name: _versioned_url(_static_url(f"djust/chunks/{name}{suffix}"))
+                for name in CLIENT_CHUNKS
             }
             chunks_attr = f' data-djust-chunks="{escape(json.dumps(chunk_urls, sort_keys=True))}"'
 

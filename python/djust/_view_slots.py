@@ -112,17 +112,13 @@ PER_VIEW_ATTRS: Dict[str, Callable[[], Any]] = {
 }
 
 #: Frames whose effect is the page's, not one container's: the client acts on
-#: them wherever they came from, so they carry no ``target_id``.
+#: them wherever they came from, so they carry no ``target_id``. A ``render``
+#: frame's ``effects`` are page-level too, but its DOM part is the slot's, so it
+#: is addressed (#3658).
 PAGE_LEVEL_FRAMES = frozenset(
     {
-        "navigate",
-        "navigation",
-        "flash",
-        "page_metadata",
-        "layout",
         "reload",
         "hvr-applied",
-        "push_event",
         "presence_event",
         "sticky_hold",
         "rate_limit_exceeded",

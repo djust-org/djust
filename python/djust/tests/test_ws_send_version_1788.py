@@ -33,10 +33,10 @@ import re
 import pytest
 from asgiref.sync import sync_to_async
 
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
+from djust.tests._frames import legacy_type
 from djust.tests._source_scan import without_prose
-from djust import state
 
 
 class _WSVersionView(LiveView):
@@ -110,7 +110,7 @@ async def _receive_until(communicator, wanted_type, *, tries=6, timeout=30):
     last = None
     for _ in range(tries):
         last = await communicator.receive_json_from(timeout=timeout)
-        if last.get("type") == wanted_type:
+        if legacy_type(last) == wanted_type:
             return last
     return last
 
@@ -185,7 +185,7 @@ async def test_baseline_loss_html_update_stays_monotonic_no_recovery():
         # Normal diff event — should be a patch frame at m+1.
         await communicator.send_json_to({"type": "event", "event": "bump", "params": {}, "ref": 1})
         ev1 = await _receive_until(communicator, "patch")
-        assert ev1.get("type") == "patch", f"normal bump should patch, got {ev1!r}"
+        assert legacy_type(ev1) == "patch", f"normal bump should patch, got {ev1!r}"
         v1 = _frame_version(ev1)
         assert v1 == m + 1, f"first event must be m+1 ({m + 1}), got {v1!r}"
 
@@ -194,7 +194,7 @@ async def test_baseline_loss_html_update_stays_monotonic_no_recovery():
             {"type": "event", "event": "lose_baseline", "params": {}, "ref": 2}
         )
         ev2 = await _receive_until(communicator, "html_update")
-        assert ev2.get("type") == "html_update", (
+        assert legacy_type(ev2) == "html_update", (
             f"baseline-loss event must fall back to html_update; got {ev2!r}"
         )
         assert not ev2.get("patches"), "html_update fallback must carry no patches"
@@ -292,7 +292,7 @@ async def test_hotreload_frame_advances_consumer_counter_then_event_passes():
         await channel_layer.group_send("djust_hotreload", {"type": "hotreload", "file": "x.html"})
 
         hvr = await _receive_until(communicator, "patch")
-        assert hvr.get("type") == "patch" and hvr.get("hotreload") is True, (
+        assert legacy_type(hvr) == "patch" and hvr.get("hotreload") is True, (
             f"channel-layer hotreload must emit a hotreload patch frame; got {hvr!r}"
         )
         vh = _frame_version(hvr)
@@ -578,10 +578,11 @@ def test_every_client_checked_send_path_uses_next_version():
         and ast.unparse(n.value) == "transport.next_client_version"
         for n in ws_branch.orelse
     ), "push_state's SSE branch binds next_version to transport.next_client_version (#4256)."
-    assert stream_src.count('"version": next_version(') == 2, (
-        "StreamingMixin.push_state bypasses _send_update and sends patch + html_update "
-        "directly; both MUST stamp through the transport-chosen next_version (HIDDEN #2, "
-        f"#1788, #4256). Found {stream_src.count(chr(34) + 'version' + chr(34) + ': next_version(')} of 2."
+    # #3658: one render frame carries either DOM part, stamped at one site.
+    assert stream_src.count("version=next_version(") == 1, (
+        "StreamingMixin.push_state bypasses _send_update and sends its render frame "
+        "directly; it MUST stamp through the transport-chosen next_version (HIDDEN #2, "
+        f"#1788, #4256). Found {stream_src.count('version=next_version(')} of 1."
     )
 
 

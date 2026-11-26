@@ -324,7 +324,8 @@ def test_held_recovery_contracts_are_deflated_and_round_trip():
         "owners": [[None, None, 0]] + [[None, f"c{i}", 0] for i in range(100)],
     }
     frame = {
-        "type": "patch",
+        "type": "render",
+        "patches": [],
         "version": 3,
         "parameter_contracts": contracts,
         "parameter_contract_view": "x.V",

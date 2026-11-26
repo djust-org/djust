@@ -335,7 +335,7 @@ describe('hooks', () => {
                 sendEvent(event, params, trigger) {
                     sentMessages.push({ type: 'event', event, params });
                     expect(trigger).toBeNull();
-                    return Promise.resolve({ type: 'noop' });
+                    return Promise.resolve({ type: 'render' });
                 },
             };
 

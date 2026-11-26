@@ -12,12 +12,13 @@ from html import unescape as html_unescape
 import pytest
 from django.test import override_settings
 
+from djust import state
+from djust.tests._frames import legacy_type
 from djust.theming.gallery.catalogue import (
     component_description,
     component_preview_note,
     playground_options,
 )
-from djust import state
 
 pytestmark = pytest.mark.django_db
 
@@ -312,7 +313,7 @@ async def test_a_playground_chip_patches_only_the_preview():
         updated = await communicator.receive_json_from()
     finally:
         await communicator.disconnect()
-    assert updated.get("type") == "patch", updated
+    assert legacy_type(updated) == "patch", updated
     assert updated.get("timing", {}).get("scope") == "component", updated.get("timing")
     assert "btn-ghost" in str(updated["patches"])
 
@@ -439,7 +440,7 @@ class TestUsageWithEvents:
             before = page.view.render()
             assert "dj-click" in before or "dj-" in before, before
             assert page.event(event, **params) == 200
-            assert page.transport.sent[-1]["type"] != "noop", page.transport.sent[-1]
+            assert legacy_type(page.transport.sent[-1]) != "noop", page.transport.sent[-1]
             assert page.html != before
         finally:
             sys.modules.pop(module.__name__, None)
@@ -461,8 +462,9 @@ class TestUsageWithEvents:
     def test_every_usage_snippet_executes_without_placeholder_handlers(self):
         """The served ``views.py`` must be Python (a removed ``def mount(``
         line once left its body behind: IndentationError)."""
-        from djust.theming.gallery.component_registry import get_all_components_with_metadata
         from django.template import Context, Engine
+
+        from djust.theming.gallery.component_registry import get_all_components_with_metadata
 
         for component in get_all_components_with_metadata():
             name = component["name"]

@@ -36,6 +36,7 @@ from djust.decorators import state
 from djust.sse import DjustSSEMessageView, DjustSSEStreamView, _sse_sessions
 from djust.tenants.middleware import get_current_tenant
 from djust.tenants.resolvers import TenantInfo
+from djust.tests._frames import frame_matches
 
 pytestmark = [pytest.mark.django_db(transaction=True)]
 
@@ -354,7 +355,7 @@ async def _ws_until(communicator, *types, timeout=15.0):
         assert remaining > 0, "no frame of type %r; got %r" % (types, frames)
         frame = await communicator.receive_json_from(timeout=remaining)
         frames.append(frame)
-        if frame.get("type") in types:
+        if frame_matches(frame, types):
             return frames
 
 

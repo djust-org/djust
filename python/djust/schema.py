@@ -36,7 +36,7 @@ DIRECTIVES: List[Dict[str, Any]] = [
         "description": "Send form data to server on submit. The client calls e.preventDefault() but does not clear the form: "
         "it resets the form the event came from (the submitted form, or the form holding the element "
         "that sent the event; with neither, the view's only form, never one of several) only when the "
-        "server's answer carries reset_form, a noop answer included. FormMixin.reset_form() sets it "
+        "server's answer carries reset_form, an answer that changes nothing in the DOM included. FormMixin.reset_form() sets it "
         "(never automatically after a valid submit), and any @event_handler can request it with "
         "self.reset_submitted_form(), which sets the _should_reset_form flag.",
         "value": "handler_name",

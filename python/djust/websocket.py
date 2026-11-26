@@ -41,6 +41,14 @@ from ._background_render import (
     snapshot_delivers_nothing,
 )
 from ._automatic_state import turn_serial
+from ._protocol import (
+    MOUNT_VERBS,
+    PROTOCOL_CLOSE_CODE,
+    PROTOCOL_FIELD,
+    PROTOCOL_VERSION,
+    frame_protocol_ok,
+    reload_frame,
+)
 from ._render_operation import settle_render_operation
 from ._child_rendering import reconcile_child_render
 from . import _per_turn
@@ -837,6 +845,26 @@ def _echoed_ref(data: Dict[str, Any]) -> Dict[str, int]:
     return {}
 
 
+def broadcast_render_text(
+    patches_json: str, version: int, target_id: Optional[str], effects: List[Dict[str, Any]]
+) -> str:
+    """The broadcast ``render`` frame as text, with the Rust patch JSON spliced in.
+
+    Parses to exactly ``render_frame(patches=..., version=..., broadcast=True,
+    source="broadcast"[, target_id=...], effects=...)``: no ``fast_json_loads`` +
+    ``json.dumps`` round trip of the patches on the event loop (#3658 keeps it).
+    """
+    return (
+        '{"type":"render","patches":%s,"version":%d,"broadcast":true,'
+        '"source":"broadcast"%s,"effects":%s}'
+    ) % (
+        patches_json,
+        version,
+        ',"target_id":' + json.dumps(target_id) if target_id else "",
+        json.dumps(effects, cls=DjangoJSONEncoder) if effects else "[]",
+    )
+
+
 class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
     """
     WebSocket consumer for handling LiveView connections.
@@ -1038,137 +1066,63 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         target = getattr(self, "target_id", None)
         return f"{name}|{target}" if name and target else name
 
-    async def _flush_push_events(self) -> None:
+    # ------------------------------------------------------------------ #
+    # #3658 (TC9): one ``render`` frame per turn result. The view's queued
+    # effects (push events, flash, page metadata, layout, navigation) ride in
+    # its ``effects`` list, drained once in the canonical order
+    # (``djust._render_frame``). After the frame the ``defer()`` callbacks
+    # run; whatever they queued goes out in one effects-only frame
+    # (``source: "deferred"``).
+    # ------------------------------------------------------------------ #
+
+    async def _send_render(self, frame: Dict[str, Any], *views: Any, finish: bool = True) -> None:
+        """Send ``frame`` as a ``render`` frame carrying the queued effects.
+
+        ``frame`` holds the frame's fields (a legacy ``type`` key, if any, is
+        dropped). ``views`` are drained root first (default: the page view).
+        ``finish`` runs the ``defer()`` callbacks and sends their effects.
         """
-        Send any pending push_event messages queued by the view during handler execution.
+        from ._render_frame import adrain_effects, raise_collected, render_frame
 
-        Called after each _send_update to deliver server-pushed events to the client.
-        """
-        if not self.view_instance:
-            return
-        if not hasattr(self.view_instance, "_drain_push_events"):
-            return
-        events = self.view_instance._drain_push_events()
-        for event_name, payload in events:
-            await self.send_json(
-                {
-                    "type": "push_event",
-                    "event": event_name,
-                    "payload": payload,
-                }
-            )
-
-    async def _flush_flash(self) -> None:
-        """
-        Send any pending flash messages queued by the view during handler execution.
-
-        Called after each _send_update to deliver flash notifications to the client.
-        """
-        if not self.view_instance:
-            return
-        if not hasattr(self.view_instance, "_drain_flash"):
-            return
-        commands = self.view_instance._drain_flash()
-        if not isinstance(commands, list):
-            return
-        for cmd in commands:
-            await self.send_json(
-                {
-                    "type": "flash",
-                    **cmd,
-                }
-            )
-
-    async def _flush_page_metadata(self) -> None:
-        """
-        Send any pending page metadata commands queued by the view.
-
-        Called after each _send_update to deliver title/meta updates to the client.
-        """
-        if not self.view_instance:
-            return
-        if not hasattr(self.view_instance, "_drain_page_metadata"):
-            return
-        commands = self.view_instance._drain_page_metadata()
-        if not isinstance(commands, list):
-            return
-        for cmd in commands:
-            await self.send_json(
-                {
-                    "type": "page_metadata",
-                    **cmd,
-                }
-            )
-
-    async def _flush_pending_layout(self) -> None:
-        """Send a pending layout-swap command queued by the view (v0.6.0).
-
-        Called after ``_flush_page_metadata`` so the layout swap
-        (replaces ``<body>``) is the last thing the client applies.
-        Any pending ``page_title`` / ``page_meta`` frames mutate
-        ``<head>`` and are delivered first; they survive the swap.
-
-        If ``view.set_layout(path)`` was called during the handler,
-        render ``path`` with the view's current context and emit a
-        ``{"type": "layout", "path": ..., "html": ...}`` frame. The
-        client swaps the document body while preserving the live
-        ``[dj-root]`` element's identity (and therefore all inner
-        LiveView state).
-
-        Error handling: ``TemplateDoesNotExist`` always warns and
-        skips. In DEBUG mode any other exception is re-raised so
-        programmer errors (``TemplateSyntaxError``, ``NoReverseMatch``,
-        attribute errors from ``get_context_data``) surface during
-        development. In production (``DEBUG=False``) the exception is
-        caught and logged so a broken layout template can't crash the
-        whole WebSocket consumer — the handler's VDOM patches still
-        flush.
-        """
-        if not self.view_instance:
-            return
-        if not hasattr(self.view_instance, "_drain_pending_layout"):
-            return
-        layout_path = self.view_instance._drain_pending_layout()
-        if not layout_path:
-            return
-        from django.conf import settings as django_settings
-        from django.template.exceptions import TemplateDoesNotExist
-
-        from .mixins.layout import render_pending_layout
-
-        try:
-            # #3178: context + render in one hop off the loop thread (the
-            # session's pinned worker with ``worker_threads``).
-            layout_html = await sync_to_async(render_pending_layout)(
-                self.view_instance, layout_path
-            )
-        except TemplateDoesNotExist:
-            logger.warning(
-                "set_layout(%r) — template not found; ignoring swap request",
-                layout_path,
-            )
-            return
-        except Exception as exc:  # noqa: BLE001 — layout errors must not kill the WS
-            self._log_view_hook_failure(
-                self.view_instance,
-                exc,
-                "set_layout(%r) — template rendering raised; ignoring swap request",
-                layout_path,
-                traceback=True,
-            )
-            # In DEBUG, re-raise so programmer errors are visible.
-            # TemplateSyntaxError / NoReverseMatch / missing-context-key
-            # bugs need to surface loudly during iteration.
-            if getattr(django_settings, "DEBUG", False):
-                raise
-            return
-        await self.send_json(
-            {
-                "type": "layout",
-                "path": layout_path,
-                "html": layout_html,
-            }
+        fields = {k: v for k, v in frame.items() if k not in ("type", "effects")}
+        errors: List[BaseException] = []
+        effects = list(frame.get("effects") or []) + await adrain_effects(
+            *(views if views else (self.view_instance,)), errors=errors
         )
+        await self.send_json(render_frame(effects=effects, **fields))
+        # A layout that failed under DEBUG is re-raised once the frame (its
+        # DOM part and the other effects) has gone out.
+        raise_collected(errors)
+        if finish:
+            await self._finish_turn_effects()
+
+    async def _send_effects(
+        self,
+        source: str,
+        *views: Any,
+        kinds: Optional[Tuple[str, ...]] = None,
+    ) -> bool:
+        """Send the queued effects in one effects-only ``render`` frame.
+
+        Nothing is sent when nothing is queued. ``views`` default to the page
+        view; ``kinds`` limits the drain (``flush_push_events()`` sends only
+        ``push_event``). Returns whether a frame was sent.
+        """
+        from ._render_frame import adrain_effects, raise_collected, render_frame
+
+        errors: List[BaseException] = []
+        effects = await adrain_effects(
+            *(views if views else (self.view_instance,)), kinds=kinds, errors=errors
+        )
+        if effects:
+            await self.send_json(render_frame(source=source, effects=effects))
+        raise_collected(errors)
+        return bool(effects)
+
+    async def _finish_turn_effects(self) -> None:
+        """Run the ``defer()`` callbacks, then send what they queued (§2.4)."""
+        await self._flush_deferred()
+        await self._send_effects("deferred")
 
     async def _flush_deferred(self) -> None:
         """Drain and execute callbacks queued via :meth:`LiveView.defer`.
@@ -1252,14 +1206,15 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             ref: Event reference number echoed back from the client's request (#560).
             snapshot_fields: Session-bound snapshot refresh after a committed turn.
         """
-        msg: Dict[str, Any] = {"type": "noop"}
+        msg: Dict[str, Any] = {}
         if async_batch:
             msg["async_pending"] = True
             msg["async_batch"] = async_batch
         if ref is not None:
             msg["ref"] = ref
         msg.update(snapshot_fields or {})
-        await self.send_json(msg)
+        # One frame: the acknowledgement and the turn's effects (#3658).
+        await self._send_render(msg)
 
     async def _send_child_update(
         self,
@@ -1325,45 +1280,17 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             }
         )
 
-    async def _flush_navigation(self) -> None:
-        """
-        Send any pending navigation commands (live_patch / live_redirect)
-        queued by the view during handler execution.
-        """
-        if not self.view_instance:
-            return
-        if not hasattr(self.view_instance, "_drain_navigation"):
-            return
-        commands = self.view_instance._drain_navigation()
-        for cmd in commands:
-            # Promote cmd's "type" (e.g. "live_patch") to "action" so it doesn't
-            # collide with the outer message "type" key.
-            action = cmd.get("type")
-            payload = {k: v for k, v in cmd.items() if k != "type"}
-            await self.send_json(
-                {
-                    "type": "navigation",
-                    "action": action,
-                    **payload,
-                }
-            )
+    async def _flush_all_pending(self, source: str = "deferred") -> None:
+        """End a turn that sent no ``render`` frame of its own.
 
-    async def _flush_all_pending(self) -> None:
-        """Flush every queued client side-effect at the end of a WS turn, in
-        canonical order. Single source of truth: every turn-end path (event,
-        skip-render noop, broadcast, db-notify, async completion) calls this so
-        no path can silently drop a queued command. Each ``_flush_*`` drains and
-        clears its own queue, so calling this twice in one turn is a harmless
-        no-op. Regression context: skip-render and broadcast paths used to flush
-        only push_events/flash/page_metadata/pending_layout/deferred and dropped
-        queued navigation/accessibility/i18n — so ``live_redirect()`` from a
-        state-unchanging handler never reached the client (#1643)."""
-        await self._flush_push_events()
-        await self._flush_flash()
-        await self._flush_page_metadata()
-        await self._flush_pending_layout()
-        await self._flush_deferred()
-        await self._flush_navigation()
+        Sends the page view's queued effects (if any) as one effects-only
+        frame tagged ``source``, then runs the ``defer()`` callbacks and sends
+        their effects. After a ``render`` frame this is a no-op unless
+        something queued more in between: every turn-end path calls it, so no
+        path can drop a queued command (#1643).
+        """
+        await self._send_effects(source)
+        await self._finish_turn_effects()
 
     async def send_error(self, error: str, **context: Any) -> None:
         """
@@ -1620,7 +1547,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                     if rendered is None:
                         return
                     if rendered.unchanged:
-                        await self._flush_all_pending()
+                        await self._flush_all_pending("async")
                         return
                     html, patches = rendered.html, rendered.patches
 
@@ -1658,7 +1585,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                             **rendered.send_fields,
                         )
 
-                    await self._flush_all_pending()
+                    await self._flush_all_pending("async")
 
                 await self._async_result_turn(view, task_name, complete)
 
@@ -1810,7 +1737,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 if not await self._authorize_explicit_consumer_turn(view):
                     return
                 await self._send_async_render(view, event_name)
-                await self._flush_all_pending()
+                await self._flush_all_pending("async")
         except Exception as exc:  # noqa: BLE001 — a settle frame must never raise out of a task
             self._log_view_hook_failure(
                 view,
@@ -1876,7 +1803,8 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
     def _capture_recovery_contracts(self, frame: Dict[str, Any]) -> None:
         """Detach metadata from the exact parent render frame armed for recovery."""
         if (
-            frame.get("type") in ("patch", "html_update")
+            frame.get("type") == "render"
+            and frame.get("view_id") is None
             and frame.get("version") == getattr(self, "_recovery_version", None)
             and "parameter_contracts" in frame
         ):
@@ -2029,7 +1957,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         # Only patches=None indicates we should send html_update
         if patches is not None:
             response: Dict[str, Any] = {
-                "type": "patch",
+                "type": "render",
                 "patches": patches,
                 "version": version,
             }
@@ -2072,11 +2000,10 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             if snapshot_fields:
                 # ADR-038: an explicit root's refreshed signed snapshot.
                 response.update(snapshot_fields)
-            await self.send_json(response)
-            await self._flush_all_pending()
+            await self._send_render(response)
         else:
             response = {
-                "type": "html_update",
+                "type": "render",
                 "html": html,
                 "version": version,
             }
@@ -2100,8 +2027,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             if snapshot_fields:
                 # ADR-038: an explicit root's refreshed signed snapshot.
                 response.update(snapshot_fields)
-            await self.send_json(response)
-            await self._flush_all_pending()
+            await self._send_render(response)
 
     async def _dispatch_released_child_event(
         self,
@@ -2445,7 +2371,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             # The answer advertises the captured batch by its token, which the
             # client completes on ``async_complete`` (#4309).
             async_batch = AsyncBatch(view)
-            await self._flush_all_pending()
+            # One frame: the acknowledgement and the queued effects (#3658).
             await self._send_noop(
                 async_batch=async_batch.token, ref=event_ref, snapshot_fields=snapshot_fields
             )
@@ -2595,6 +2521,28 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         peer = client[0] if client else None
         return resolve_client_ip(fwd, peer)
 
+    async def _refuse_outdated_client(self, data: Dict[str, Any]) -> None:
+        """Make an outdated client reload: a ``reload`` frame, then close 4409 (#3658).
+
+        Past ``RELOAD_BREAKER_LIMIT`` refusals of one session within
+        ``RELOAD_BREAKER_SECONDS`` it closes with 4409 alone: a cached page
+        shell keeps serving the old bundle, and another reload would loop
+        (``_protocol.note_refusal``).
+        """
+        from ._protocol import anote_refusal, session_key_of
+
+        reload = await anote_refusal(session_key_of(self.scope.get("session")))
+        logger.info(
+            "WebSocket %s from a client speaking protocol %s (server speaks %s): %s",
+            sanitize_for_log(str(data.get("type"))),
+            sanitize_for_log(str(data.get(PROTOCOL_FIELD))),
+            PROTOCOL_VERSION,
+            "reload" if reload else "closed, no reload (refused again within the breaker window)",
+        )
+        if reload:
+            await self.send_json(reload_frame())
+        await self.close(code=PROTOCOL_CLOSE_CODE)
+
     def _log_per_ip_refusal(self, client_ip: str, max_per_ip: int) -> None:
         """Log why the per-IP limit refused this socket (close code 4429)."""
         from ._client_ip import _trusted_proxy_count
@@ -2688,6 +2636,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             {
                 "type": "connect",
                 "session_id": self.session_id,
+                PROTOCOL_FIELD: PROTOCOL_VERSION,
                 # The client refuses to send a frame over this (0 = no limit).
                 "max_message_size": djust_config.get("max_message_size", 65536),
             }
@@ -2967,6 +2916,11 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             #   upload_resume, request_html. The time-travel and bug-capture
             #   share frames were removed in 2.0 (#4184): an old client that
             #   still sends one gets the unknown-message-type refusal below.
+            if msg_type in MOUNT_VERBS and not frame_protocol_ok(data):
+                # #3658: an outdated (cached) bundle. Old clients reload on
+                # the hot-reload frame; new ones do not reconnect after 4409.
+                await self._refuse_outdated_client(data)
+                return
             if msg_type in self.RUNTIME_OWNED_VERBS:
                 # Runtime-owned: route through the dispatch_message chokepoint
                 # rather than calling the bespoke handler directly, so future
@@ -3410,9 +3364,9 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         # Fix #4: capture "navigate" frames too — those are emitted when
         # auth or on_mount hooks redirect instead of mounting, and were
         # previously silently dropped.
-        # Fix #1295: also capture "push_event" frames. When mount() calls
-        # push_event(), _flush_push_events runs with send_json swapped for
-        # _collect — so push events land in captured[]. Extract them and
+        # Fix #1295: also capture the push events mount() queued (a ``render``
+        # frame's effects since #3658): they are sent with send_json swapped for
+        # _collect, so they land in captured[]. Extract them and
         # return them so handle_mount_batch can flush them after the batch
         # response (they'd otherwise be silently dropped).
         mount_frame = None
@@ -3428,10 +3382,18 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 error_frame = frame
             elif ftype == "view_refused":
                 refused_frame = frame
-            elif ftype == "navigate":
-                navigate_frame = frame
-            elif ftype == "push_event":
-                push_events.append(frame)
+            elif ftype == "render":
+                # #3658: a refused mount's navigate is an effect; the batch
+                # reply keeps reporting it in ``navigate[]``. The other effects
+                # (push events mount() queued) go out after the reply.
+                kept = []
+                for effect in frame.get("effects") or []:
+                    if effect.get("kind") == "navigate" and navigate_frame is None:
+                        navigate_frame = {"type": "navigate", "to": effect.get("to")}
+                    else:
+                        kept.append(effect)
+                if kept:
+                    push_events.append({**frame, "effects": kept})
 
         if refused_frame is not None:
             # Refused (login, permission, ``on_mount`` redirect): reported for
@@ -3625,6 +3587,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         response: Dict[str, Any] = {
             "type": "mount_batch",
             "session_id": self.session_id,
+            PROTOCOL_FIELD: PROTOCOL_VERSION,
             "views": successes,
             "failed": failures,
         }
@@ -3635,8 +3598,8 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         await self.send_json(response)
 
         # Fix #1295: flush push events that were captured during mount.
-        # When mount() calls push_event(), _flush_push_events fires with
-        # send_json swapped for _collect in _mount_one — so push events
+        # When mount() calls push_event(), the mount's effects frame is sent
+        # with send_json swapped for _collect in _mount_one — so push events
         # land in captured[] instead of being sent. We extract them in
         # _mount_one and flush them here after the batch response.
         for frame in all_push_events:
@@ -4184,7 +4147,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                     # No frame of its own (#3034); queued side effects still
                     # go out and session writes are stored (#4168).
                     await self._store_no_frame_session_writes(view, "upload")
-                    await self._flush_all_pending()
+                    await self._flush_all_pending("push")
                     return
                 rendered = await self._render_background(view)
                 if rendered is None:
@@ -5317,7 +5280,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             # redirect mount has no document render, so without this flush a
             # view that sets ``self.page_title`` in ``mount()`` leaves the tab
             # showing the page the reader navigated away from.
-            await self._flush_all_pending()
+            await self._flush_all_pending("mount")
         except Exception:
             # Drain any staged stickys so their async tasks / groups
             # clean up. Without this, a render/auth failure on the NEW
@@ -5344,9 +5307,9 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         view = self.view_instance
         if not title or view is None or _queued_title(view):
             return
-        pending = getattr(view, "_pending_page_metadata", None)
-        if isinstance(pending, list):
-            pending.append({"action": "title", "value": title})
+        enqueue = getattr(view, "_enqueue", None)
+        if callable(enqueue):
+            enqueue("page_metadata", {"action": "title", "value": title})
 
     def _resolve_view_path_from_url(self, url: str) -> Optional[str]:
         """Resolve a ``live_redirect`` destination URL to its djust LiveView
@@ -5953,7 +5916,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                     # effects still go out, and the hooks' session writes are
                     # stored (#4168).
                     await self._store_no_frame_session_writes(view, "push")
-                    await self._flush_all_pending()
+                    await self._flush_all_pending("push")
                     return
 
                 # Sync state and re-render
@@ -6084,7 +6047,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                     # effects still go out, and the hooks' session writes are
                     # stored (#4168).
                     await self._store_no_frame_session_writes(view, "push")
-                    await self._flush_all_pending()
+                    await self._flush_all_pending("push")
                     return
                 rendered = await self._finish_offloaded_render(view, result)
                 if rendered is not None:
@@ -6227,7 +6190,8 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         Rust patch JSON into the frame when the frame carries nothing else.
 
         The spliced frame is the same JSON object ``_send_update`` builds
-        (``type``, ``patches``, ``version``, ``broadcast``, ``source``); it
+        (``type``, ``patches``, ``version``, ``broadcast``, ``source``,
+        ``effects``; see :func:`broadcast_render_text`); it
         skips a ``fast_json_loads`` + ``json.dumps`` round trip of the patches
         on the event loop. Anything that adds fields (DEBUG's debug payload,
         parameter contracts, a signed snapshot) takes the
@@ -6253,17 +6217,17 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 # go through a slot's ``send_json``, so the frame of a view
                 # beside the page view is addressed here (#3692); a frame
                 # without it is applied to the page's container.
+                from ._render_frame import raise_collected
+
                 target = getattr(self, "target_id", None)
+                errors: List[BaseException] = []
                 await self._send_frame(
-                    text_data='{"type":"patch","patches":%s,"version":%d,'
-                    '"broadcast":true,"source":"broadcast"%s}'
-                    % (
-                        patches,
-                        version,
-                        ',"target_id":' + json.dumps(target) if target else "",
+                    text_data=broadcast_render_text(
+                        patches, version, target, await self._broadcast_effects(errors)
                     )
                 )
-                await self._flush_all_pending()
+                raise_collected(errors)
+                await self._finish_turn_effects()
                 return
         if isinstance(patches, str):
             patches = fast_json_loads(patches)
@@ -6274,6 +6238,13 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             source="broadcast",
             **rendered.send_fields,
         )
+
+    async def _broadcast_effects(
+        self, errors: Optional[List[BaseException]] = None
+    ) -> List[Dict[str, Any]]:
+        from ._render_frame import adrain_effects
+
+        return await adrain_effects(self.view_instance, errors=errors)
 
     async def _apply_server_push(self, view: Any, event: Dict[str, Any]) -> None:
         """Apply one push's ``state`` and call its handler (the push's hook)."""
@@ -6446,7 +6417,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
 
     @_consumer_turn("push", "client_push", locked=False)
     async def _deliver_client_push_event(self, view: Any, event: Dict[str, Any]) -> None:
-        """Send one ``push_event`` frame to this view's client (a ``push`` turn, ADR-044).
+        """Send one ``push_event`` effect to this view's client (a ``push`` turn, ADR-044).
 
         The payload is data the viewer may no longer be entitled to, so the
         turn is authorized against the stored session first, every time.
@@ -6461,12 +6432,19 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                     return
             finally:
                 self._end_explicit_turn(view)
+        from ._render_frame import render_frame
+
         await self.send_json(
-            {
-                "type": "push_event",
-                "event": event.get("event", ""),
-                "payload": event.get("payload", {}),
-            }
+            render_frame(
+                source="push",
+                effects=[
+                    {
+                        "kind": "push_event",
+                        "event": event.get("event", ""),
+                        "payload": event.get("payload", {}),
+                    }
+                ],
+            )
         )
 
     async def db_notify(self, event: Dict[str, Any]) -> None:
@@ -6600,7 +6578,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 # server_push; queued side effects still go out, and the
                 # hook's session writes are stored (#4168).
                 await self._store_no_frame_session_writes(view, "db_notify")
-                await self._flush_all_pending()
+                await self._flush_all_pending("notify")
                 return
 
             rendered = await self._render_background(view)
@@ -6753,7 +6731,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 # effects still go out, and the hook's session writes are
                 # stored (#4168).
                 await self._store_no_frame_session_writes(view, "db_notify")
-                await self._flush_all_pending()
+                await self._flush_all_pending("notify")
                 return
             rendered = await self._finish_offloaded_render(view, result)
             if rendered is None:
@@ -6977,7 +6955,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                     self.view_instance.__class__.__name__,
                 )
                 await self._store_no_frame_session_writes(view, "tick")  # #4168
-                await self._flush_all_pending()
+                await self._flush_all_pending("tick")
                 return False
 
             # Skip render if tick handler didn't change any state.
@@ -6998,7 +6976,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                     self.view_instance.__class__.__name__,
                 )
                 await self._store_no_frame_session_writes(view, "tick")  # #4168
-                await self._flush_all_pending()
+                await self._flush_all_pending("tick")
                 return False
 
             rendered = await self._render_background(view)
@@ -7075,7 +7053,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                     else "produced no state changes, skipping render",
                 )
                 await self._store_no_frame_session_writes(view, "tick")  # #4168
-                await self._flush_all_pending()
+                await self._flush_all_pending("tick")
                 return False
             rendered = await self._finish_offloaded_render(view, result)
             if rendered is None:

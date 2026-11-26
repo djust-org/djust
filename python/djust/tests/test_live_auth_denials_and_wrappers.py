@@ -37,6 +37,8 @@ from unittest.mock import patch
 
 import pytest
 
+from djust.tests._frames import frame_matches
+
 pytest.importorskip("channels")
 
 from asgiref.sync import sync_to_async  # noqa: E402
@@ -481,7 +483,7 @@ async def _assert_refused(view_name, user_cls, url="/x/"):
     assert "MARKER" not in repr(outputs)
     assert _close_code(outputs) == 4403, outputs
     if user_cls is _AnonUser:
-        assert any(f.get("type") == "navigate" for f in _frames(outputs)), outputs
+        assert any(frame_matches(f, "navigate") for f in _frames(outputs)), outputs
     else:
         assert any(f.get("type") == "error" for f in _frames(outputs)), outputs
 

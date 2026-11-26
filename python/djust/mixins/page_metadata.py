@@ -16,8 +16,10 @@ consumer to flush to the client, without requiring a VDOM diff cycle:
 
 from typing import Any, Dict, List
 
+from .commands import CommandsMixin
 
-class PageMetadataMixin:
+
+class PageMetadataMixin(CommandsMixin):
     """
     Mixin that provides page_title and page_meta property setters for LiveView.
 
@@ -36,9 +38,17 @@ class PageMetadataMixin:
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        self._pending_page_metadata: List[Dict[str, str]] = []
         self._page_title: str = ""
         self._page_meta: Dict[str, str] = {}
+
+    @property
+    def _pending_page_metadata(self) -> List[Dict[str, str]]:
+        """The queued page metadata commands (a copy). Assigning a list replaces them."""
+        return self._pending("page_metadata")
+
+    @_pending_page_metadata.setter
+    def _pending_page_metadata(self, commands: Any) -> None:
+        self._replace_pending("page_metadata", list(commands or []))
 
     @property
     def page_title(self) -> str:
@@ -49,7 +59,7 @@ class PageMetadataMixin:
     def page_title(self, value: str) -> None:
         """Set the page title and queue a side-channel command."""
         self._page_title = value
-        self._pending_page_metadata.append({"action": "title", "value": value})
+        self._enqueue("page_metadata", {"action": "title", "value": value})
 
     @property
     def page_meta(self) -> Dict[str, str]:
@@ -61,14 +71,8 @@ class PageMetadataMixin:
         """Set page meta tags and queue side-channel commands (one per key)."""
         self._page_meta = value
         for name, content in value.items():
-            self._pending_page_metadata.append({"action": "meta", "name": name, "content": content})
+            self._enqueue("page_metadata", {"action": "meta", "name": name, "content": content})
 
     def _drain_page_metadata(self) -> List[Dict[str, str]]:
-        """
-        Drain and return all pending page metadata commands.
-
-        Called by the WebSocket consumer after sending the main response.
-        """
-        commands = self._pending_page_metadata
-        self._pending_page_metadata = []
-        return commands
+        """Drain and return the queued page metadata commands (only that kind)."""
+        return [payload for _k, payload in self._drain_outbound(("page_metadata",))]

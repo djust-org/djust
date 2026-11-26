@@ -262,10 +262,14 @@ class HopProfile:
 # --------------------------------------------------------------------------- #
 
 
-async def _receive_type(comm, wanted: str, timeout: float = 120.0) -> dict:
+async def _receive_turn(comm, source: str, timeout: float = 120.0) -> dict:
+    """The next answer of ``source``: the ``mount`` frame, or the one ``render``
+    frame of an event turn (#3658)."""
     while True:
         frame = await comm.receive_json_from(timeout=timeout)
-        if frame.get("type") == wanted:
+        if source == "mount" and frame.get("type") == "mount":
+            return frame
+        if frame.get("type") == "render" and frame.get("source") == source:
             return frame
         if frame.get("type") == "error":
             raise RuntimeError(f"server error frame: {frame!r}")
@@ -303,16 +307,25 @@ async def _connect(n: int) -> List[Any]:
 
 
 async def _mount(comm) -> float:
+    from djust._protocol import PROTOCOL_FIELD, PROTOCOL_VERSION
+
     start = time.perf_counter()
-    await comm.send_json_to({"type": "mount", "view": f"{VIEW_MODULE}.BenchView", "url": "/b/"})
-    await _receive_type(comm, "mount")
+    await comm.send_json_to(
+        {
+            "type": "mount",
+            PROTOCOL_FIELD: PROTOCOL_VERSION,
+            "view": f"{VIEW_MODULE}.BenchView",
+            "url": "/b/",
+        }
+    )
+    await _receive_turn(comm, "mount")
     return time.perf_counter() - start
 
 
 async def _event(comm, ref: int) -> float:
     start = time.perf_counter()
     await comm.send_json_to({"type": "event", "event": "toggle_menu", "params": {}, "ref": ref})
-    await _receive_type(comm, "patch")
+    await _receive_turn(comm, "event")
     return time.perf_counter() - start
 
 

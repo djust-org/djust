@@ -42,6 +42,7 @@ from django.test import RequestFactory
 
 from djust import LiveView
 from djust.decorators import event_handler
+from djust.tests._frames import legacy_type
 
 from .test_stream_only_handlers_3639 import Feed
 from .test_temporary_assigns_append_3639 import MODULE as TEMP_MODULE  # noqa: F401
@@ -53,7 +54,7 @@ MODULE = __name__
 
 
 def _kinds(frame):
-    return [p["type"] for p in frame.get("patches") or []]
+    return [legacy_type(p) for p in frame.get("patches") or []]
 
 
 class DictFeed(LiveView):
@@ -175,24 +176,26 @@ class TestSseRuntime:
     async def test_a_stream_only_handler_renders_over_sse(self):
         runtime, session = await _sse_runtime(Feed())
         await runtime.dispatch_event({"event": "ins", "params": {}})
-        (frame,) = [f for f in session.frames if f.get("type") in ("patch", "noop")]
-        assert frame["type"] == "patch" and _kinds(frame) == ["InsertChild"], frame
+        (frame,) = [f for f in session.frames if legacy_type(f) in ("patch", "noop")]
+        assert legacy_type(frame) == "patch" and _kinds(frame) == ["InsertChild"], frame
 
     async def test_an_idle_handler_is_a_noop_over_sse(self):
         runtime, session = await _sse_runtime(Feed())
         await runtime.dispatch_event({"event": "nothing", "params": {}})
-        assert [f["type"] for f in session.frames if f.get("type") in ("patch", "noop")] == ["noop"]
+        assert [legacy_type(f) for f in session.frames if legacy_type(f) in ("patch", "noop")] == [
+            "noop"
+        ]
 
     async def test_a_stream_prune_alone_renders_over_sse(self):
         runtime, session = await _sse_runtime(Feed())
         await runtime.dispatch_event({"event": "prune", "params": {}})
-        (frame,) = [f for f in session.frames if f.get("type") in ("patch", "noop")]
+        (frame,) = [f for f in session.frames if legacy_type(f) in ("patch", "noop")]
         assert _kinds(frame).count("RemoveChild") == 2, frame
 
     async def test_temporary_rows_are_appended_over_sse(self):
         runtime, session = await _sse_runtime(Temp())
         await runtime.dispatch_event({"event": "add", "params": {}})
-        (frame,) = [f for f in session.frames if f.get("type") in ("patch", "noop")]
+        (frame,) = [f for f in session.frames if legacy_type(f) in ("patch", "noop")]
         assert [p["index"] for p in frame["patches"] if p["type"] == "InsertChild"] == [5], frame
         assert "RemoveChild" not in _kinds(frame), frame
 
@@ -202,9 +205,9 @@ class TestSseRuntime:
 
         runtime, session = await _sse_runtime(Feed())
         await runtime.dispatch_event({"event": "ins", "params": {}})
-        (sse,) = [f for f in session.frames if f.get("type") in ("patch", "noop")]
+        (sse,) = [f for f in session.frames if legacy_type(f) in ("patch", "noop")]
         (ws,) = await drive("Feed", ["ins"])
-        assert sse["type"] == ws["type"] and _kinds(sse) == _kinds(ws)
+        assert legacy_type(sse) == legacy_type(ws) and _kinds(sse) == _kinds(ws)
 
 
 async def _tick_consumer():
@@ -327,7 +330,7 @@ class TestHttpFallback:
         if "html" in body:
             assert "rows-2" not in body["html"] and "rows-3" in body["html"], body
         else:
-            assert [p["type"] for p in body["patches"]].count("RemoveChild") >= 1, body
+            assert [legacy_type(p) for p in body["patches"]].count("RemoveChild") >= 1, body
 
     def test_an_idle_event_still_answers(self):
         factory = RequestFactory()
@@ -562,6 +565,6 @@ class TestEmbeddedChild:
             {"type": "event", "event": "ins", "params": {"view_id": child_id}, "ref": 1}
         )
 
-        (frame,) = [f for f in sent if f.get("type") == "embedded_update"]
+        (frame,) = [f for f in sent if legacy_type(f) == "embedded_update"]
         assert "CHILD-NEW" in frame["html"], frame
         assert "B0" in frame["html"], frame

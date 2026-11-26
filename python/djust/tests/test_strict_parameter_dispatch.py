@@ -1,19 +1,19 @@
 """ADR-036 server policy and actual invocation regressions."""
 
-from datetime import date
 import gc
 import json
-import weakref
 import uuid
+import weakref
+from datetime import date
 
 import pytest
 
+from djust import LiveView, state
+from djust._parameter_metadata import expand_parameter_manifest
 from djust.decorators import event_handler, server_function
+from djust.tests._frames import legacy_type
 from djust.validation import validate_handler_params, validated_call_arguments
 from djust.websocket_utils import _call_handler
-from djust import LiveView
-from djust import state
-from djust._parameter_metadata import expand_parameter_manifest
 
 
 class StrictTransportView(LiveView):
@@ -57,6 +57,7 @@ def test_contract_cache_does_not_retain_owner_and_metadata_omits_defaults():
 
 def test_contract_cache_does_not_retain_an_owner_through_a_default():
     from typing import Any
+
     from djust.validation import get_strict_handler_contract
 
     class Owner:
@@ -77,6 +78,7 @@ def test_contract_cache_does_not_retain_an_owner_through_a_default():
 
 def test_cached_contract_does_not_change_python_default_application():
     from typing import Any
+
     from djust.validation import get_strict_handler_contract
 
     default = object()
@@ -92,8 +94,9 @@ def test_cached_contract_does_not_change_python_default_application():
 @pytest.mark.parametrize("flat", [False, True])
 @pytest.mark.parametrize("valid", [False, True])
 def test_real_http_fallback(flat, valid):
-    from djust.tests.test_exposure_runtime import make_request
     from django.test import RequestFactory
+
+    from djust.tests.test_exposure_runtime import make_request
 
     initial = make_request()
     view = StrictTransportView()
@@ -131,8 +134,9 @@ def test_test_client_uses_strict_call_plan():
 def test_actual_exposed_api_dispatch(server_rpc, valid):
     from django.contrib.auth import get_user_model
     from django.test import RequestFactory
-    from djust.api.registry import register_api_view, reset_registry
+
     from djust.api.dispatch import dispatch_api, dispatch_server_function, reset_rate_buckets
+    from djust.api.registry import register_api_view, reset_registry
     from djust.tests.test_exposure_runtime import make_request
 
     user = get_user_model().objects.create_user(username="strict-user")
@@ -169,6 +173,7 @@ async def test_real_websocket_strict_positional_and_rejection():
     from asgiref.sync import sync_to_async
     from channels.testing import WebsocketCommunicator
     from django.test import override_settings
+
     from djust.tests.test_exposure_runtime import make_request
     from djust.websocket import LiveViewConsumer
 
@@ -208,7 +213,7 @@ async def test_real_websocket_strict_positional_and_rejection():
                     assert frame["type"] == "error", frame
                     assert "SECRET_INVALID" not in json.dumps(frame)
                 else:
-                    assert frame["type"] in ("patch", "update", "noop"), frame
+                    assert legacy_type(frame) in ("patch", "update", "noop"), frame
                     assert "7:2026-09-21" in json.dumps(frame)
                     # Unchanged since the mount: sent as its digest (#4307).
                     assert frame["parameter_contracts"] == contracts["digest"]
@@ -232,8 +237,9 @@ async def test_real_websocket_strict_positional_and_rejection():
 async def test_real_sse_strict_positional_and_rejection():
     from asgiref.sync import sync_to_async
     from django.test import override_settings
-    from djust.sse import DjustSSEStreamView, DjustSSEMessageView, _sse_sessions
-    from djust.tests.test_exposure_sse_navigation import request_for, drain
+
+    from djust.sse import DjustSSEMessageView, DjustSSEStreamView, _sse_sessions
+    from djust.tests.test_exposure_sse_navigation import drain, request_for
 
     sid = str(uuid.uuid4())
     with override_settings(LIVEVIEW_ALLOWED_MODULES=["djust.tests"], DJUST_TENANTS=None):
@@ -272,7 +278,7 @@ async def test_real_sse_strict_positional_and_rejection():
                     assert any(frame["type"] == "error" for frame in frames), frames
                     assert "SECRET_INVALID" not in json.dumps(frames)
                 else:
-                    rendered = next(frame for frame in frames if frame["type"] == "patch")
+                    rendered = next(frame for frame in frames if legacy_type(frame) == "patch")
                     # Unchanged since the mount: sent as its digest (#4307).
                     assert (
                         rendered["parameter_contracts"] == mounted["parameter_contracts"]["digest"]
@@ -387,8 +393,8 @@ def test_malformed_inline_arguments_rejected_even_without_required_inputs(positi
 @pytest.mark.parametrize("route", ["root", "child", "component", "deferred"])
 async def test_routed_strict_invocations_and_malformed_args(monkeypatch, route):
     from djust.tests.test_runtime_child_routing_1892 import (
-        _mounted_sticky_parent,
         _ClickComponent,
+        _mounted_sticky_parent,
     )
 
     parent, child, runtime, transport = await _mounted_sticky_parent()

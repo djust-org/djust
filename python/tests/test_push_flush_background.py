@@ -39,17 +39,22 @@ class TestFlushPushEvents:
         """With a consumer attached, flush_push_events drains the queue."""
         view = _View()
         flushed = []
+        calls = []
 
-        async def fake_flush():
+        async def fake_flush(*args, **kwargs):
+            calls.append((args, kwargs))
             flushed.extend(view._drain_push_events())
 
-        view._ws_consumer = SimpleNamespace(_flush_push_events=fake_flush)
+        view._ws_consumer = SimpleNamespace(_send_effects=fake_flush)
 
         view.push_event("step", {"n": 1})
         view.push_event("step", {"n": 2})
         assert len(view._pending_push_events) == 2
 
         await view.flush_push_events()
+        # One drain of this view's push events only, as a "flush" frame (#3658):
+        # a source the client does not hold while an event is pending.
+        assert calls == [(("flush", view), {"kinds": ("push_event",)})]
         # The callback was invoked and drained the events
         assert len(flushed) == 2
         assert flushed[0] == ("step", {"n": 1})
@@ -76,10 +81,10 @@ class TestFlushPushEvents:
         view = _View()
         called = []
 
-        async def fake_flush():
+        async def fake_flush(*_args, **_kwargs):
             called.append(True)
 
-        view._ws_consumer = SimpleNamespace(_flush_push_events=fake_flush)
+        view._ws_consumer = SimpleNamespace(_send_effects=fake_flush)
         await view.flush_push_events()
         assert len(called) == 0
 
@@ -89,10 +94,10 @@ class TestFlushPushEvents:
         view = _View()
         all_flushed = []
 
-        async def fake_flush():
+        async def fake_flush(*_args, **_kwargs):
             all_flushed.append(list(view._drain_push_events()))
 
-        view._ws_consumer = SimpleNamespace(_flush_push_events=fake_flush)
+        view._ws_consumer = SimpleNamespace(_send_effects=fake_flush)
 
         # Batch 1
         view.push_event("a", {"n": 1})
@@ -120,10 +125,10 @@ class TestPushCommandsFlush:
         view = _View()
         flushed = []
 
-        async def fake_flush():
+        async def fake_flush(*_args, **_kwargs):
             flushed.extend(view._drain_push_events())
 
-        view._ws_consumer = SimpleNamespace(_flush_push_events=fake_flush)
+        view._ws_consumer = SimpleNamespace(_send_effects=fake_flush)
 
         chain = JS.add_class("highlight", to="#btn")
         view.push_commands(chain)
@@ -154,11 +159,11 @@ class TestTutorialMixinFlush:
         view = View()
         flush_calls = []
 
-        async def track_flush():
+        async def track_flush(*_args, **_kwargs):
             events = view._drain_push_events()
             flush_calls.append(list(events))
 
-        view._ws_consumer = SimpleNamespace(_flush_push_events=track_flush)
+        view._ws_consumer = SimpleNamespace(_send_effects=track_flush)
 
         step = TutorialStep(
             target="#test",
@@ -210,14 +215,21 @@ class TestFlushPushEventsOverSSE:
 
         await view.flush_push_events()
 
+        # One effects-only render frame, in queue order (#3658).
         assert session.sent == [
-            {"type": "push_event", "event": "step", "payload": {"n": 1}},
-            {"type": "push_event", "event": "step", "payload": {"n": 2}},
+            {
+                "type": "render",
+                "source": "flush",
+                "effects": [
+                    {"kind": "push_event", "event": "step", "payload": {"n": 1}},
+                    {"kind": "push_event", "event": "step", "payload": {"n": 2}},
+                ],
+            }
         ]
         assert view._pending_push_events == []
         # A second flush (e.g. the turn end) has nothing left: no double send.
         await view.flush_push_events()
-        assert len(session.sent) == 2
+        assert len(session.sent) == 1
 
     @pytest.mark.asyncio
     async def test_sse_flush_skips_a_view_the_session_no_longer_serves(self):
@@ -238,10 +250,10 @@ class TestFlushPushEventsOverSSE:
         view._sse_session = session
         flushed = []
 
-        async def fake_flush():
+        async def fake_flush(*_args, **_kwargs):
             flushed.extend(view._drain_push_events())
 
-        view._ws_consumer = SimpleNamespace(_flush_push_events=fake_flush)
+        view._ws_consumer = SimpleNamespace(_send_effects=fake_flush)
         view.push_event("step", {"n": 1})
 
         await view.flush_push_events()

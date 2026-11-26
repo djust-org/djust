@@ -9,6 +9,7 @@ from django.test import override_settings
 from djust import LiveView
 from djust.forms import FormMixin
 from djust.testing import with_live_session
+from djust.tests._frames import legacy_type
 
 
 class ContactForm(forms.Form):
@@ -217,7 +218,7 @@ async def test_public_hooks_and_prefix_through_websocket():
             for _ in range(6):
                 frame = await comm.receive_json_from()
                 frames.append(frame)
-                if frame.get("type") in {"patch", "html_update", "error", "noop"}:
+                if legacy_type(frame) in {"patch", "html_update", "error", "noop"}:
                     break
             assert not any(frame.get("type") == "error" for frame in frames), frames
             assert "Saved Ada" in json.dumps(frames), frames

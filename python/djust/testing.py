@@ -478,6 +478,17 @@ def rendered_state(view: "LiveView") -> Dict[str, Any]:
     return copy.deepcopy(dict(rust_view.get_state()))
 
 
+def _queued_navigation(view: Any) -> List[Dict[str, Any]]:
+    """``view``'s queued navigation commands, ``type`` naming the action (the 1.x shape)."""
+    queued = getattr(view, "_pending", None)
+    if not callable(queued):
+        return []
+    return [
+        {("type" if k == "action" else k): v for k, v in cmd.items()}
+        for cmd in queued("navigation")
+    ]
+
+
 class LiveViewTestClient:
     """
     Test LiveViews without a browser or WebSocket connection.
@@ -1442,7 +1453,7 @@ class LiveViewTestClient:
     ) -> None:
         """Verify that at least one queued ``push_event`` matches this name.
 
-        Searches ``view_instance._pending_push_events`` (populated by
+        Searches the view's queued push events (populated by
         :meth:`PushEventMixin.push_event`). If ``params`` is given, the stored
         payload must be a superset of it (extra keys are allowed — matches
         are subset-based so tests are resilient to later payload additions).
@@ -1461,7 +1472,10 @@ class LiveViewTestClient:
             client.assert_push_event("flash", {"type": "success"})
         """
         self._require_mounted()
-        pending = getattr(self.view_instance, "_pending_push_events", [])
+        queued = getattr(self.view_instance, "_pending", None)
+        pending = [
+            (p["event"], p["payload"]) for p in (queued("push_event") if callable(queued) else [])
+        ]
         for name, payload in pending:
             if name != event_name:
                 continue
@@ -1490,7 +1504,7 @@ class LiveViewTestClient:
             AssertionError: No matching live_patch queued.
         """
         self._require_mounted()
-        nav = getattr(self.view_instance, "_pending_navigation", [])
+        nav = _queued_navigation(self.view_instance)
         patches = [n for n in nav if n.get("type") == "live_patch"]
         if not patches:
             raise AssertionError(
@@ -1520,7 +1534,7 @@ class LiveViewTestClient:
         navigation type.
         """
         self._require_mounted()
-        nav = getattr(self.view_instance, "_pending_navigation", [])
+        nav = _queued_navigation(self.view_instance)
         redirects = [n for n in nav if n.get("type") == "live_redirect"]
         if not redirects:
             raise AssertionError(
@@ -1629,7 +1643,7 @@ class LiveViewTestClient:
                 non-LiveView view.
         """
         self._require_mounted()
-        nav = getattr(self.view_instance, "_pending_navigation", [])
+        nav = _queued_navigation(self.view_instance)
         redirects = [n for n in nav if n.get("type") == "live_redirect"]
         if not redirects:
             raise AssertionError(

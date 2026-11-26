@@ -282,8 +282,8 @@ describe('core bundle: stalled and slow chunks (#4007)', () => {
         window.djust.uploads.setConfigs({ avatar: {} });
         await until(() => chunkRequests(loader).length === 1, 'uploads request');
         const ws = window.djust.liveViewInstance;
-        await ws.handleMessage({ type: 'push_event', event: 'djust:upload_progress', payload: { ref: 'r1' } });
-        await ws.handleMessage({ type: 'push_event', event: 'other', payload: {} });
+        await ws.handleMessage({ type: 'render', effects: [{ kind: 'push_event', event: 'djust:upload_progress', payload: { ref: 'r1' } }] });
+        await ws.handleMessage({ type: 'render', effects: [{ kind: 'push_event', event: 'other', payload: {} }] });
         // Held, not lost: the unrelated event went through at once.
         expect(seen).toEqual(['other']);
         loader.release('uploads');

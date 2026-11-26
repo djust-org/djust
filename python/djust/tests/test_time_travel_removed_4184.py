@@ -28,6 +28,7 @@ from django.test import override_settings
 
 from djust import LiveView, event_handler
 from djust.decorators import state
+from djust.tests._frames import legacy_type
 
 from ._ws_frames import drain_extra, has_type, receive_until
 from .test_exposure_runtime import make_request
@@ -229,7 +230,7 @@ async def test_an_event_under_debug_carries_the_state_tab_payload_and_no_time_tr
         finally:
             await socket.disconnect()
     assert not [f for f in frames if str(f.get("type", "")).startswith("time_travel")], frames
-    render = next(f for f in frames if f.get("type") in ("patch", "html_update"))
+    render = next(f for f in frames if legacy_type(f) in ("patch", "html_update"))
     debug = render.get("_debug")
     assert debug is not None, render
     assert debug["_eventName"] == "bump"

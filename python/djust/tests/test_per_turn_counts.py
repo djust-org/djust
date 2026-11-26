@@ -29,6 +29,7 @@ from django.test import RequestFactory
 from djust import LiveView, _per_turn, event_handler
 from djust.decorators import state
 from djust.tests import _per_turn_harness as harness
+from djust.tests._frames import legacy_type
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
 
@@ -175,7 +176,7 @@ async def turn(monkeypatch, view_class, event_name, *off) -> Dict[str, Any]:
             finally:
                 await comm.disconnect()
     out = counts.snapshot()
-    out["reply"] = reply["type"]
+    out["reply"] = legacy_type(reply)  # the DOM part's 1.x name (#3658)
     out["fingerprints.retained_bytes"] = held
     return out
 

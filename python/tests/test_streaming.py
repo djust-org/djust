@@ -558,15 +558,18 @@ def test_slot_view_stream_frame_carries_target_id():
 
 def _push_state_view(view, patches='[{"op":"x"}]', rust_version=7):
     """Give a ``_make_view`` view what ``push_state`` needs: a render and push events."""
+    from djust.mixins.commands import CommandsMixin
     from djust.mixins.push_events import PushEventMixin
 
-    view._pending_push_events = []
+    view._outbound = []  # the one outbound queue (#3658)
     view.render_with_diff = lambda: ("<div>x</div>", patches, rust_version)
     view._strip_comments_and_whitespace = lambda html: html
     view._extract_liveview_content = lambda html: html
     view._parameter_contracts_active = False
     for name in ("push_event", "flush_push_events", "_drain_push_events"):
         setattr(view, name, getattr(PushEventMixin, name).__get__(view))
+    for name in ("_outbound_queue", "_enqueue", "_pending", "_has_pending", "_drain_outbound"):
+        setattr(view, name, getattr(CommandsMixin, name).__get__(view))
     view.push_state = StreamingMixin.push_state.__get__(view)
     return view
 
@@ -582,10 +585,16 @@ def test_push_state_over_sse_sends_patch_with_rust_version_then_push_events(monk
     asyncio.run(view.push_state())
 
     assert session.pushed == [
-        {"type": "patch", "patches": [{"op": "x"}], "version": 7},
-        {"type": "push_event", "event": "step", "payload": {"n": 1}},
+        # One render frame; the push events ride in it (#3658).
+        {
+            "type": "render",
+            "source": "push_state",
+            "patches": [{"op": "x"}],
+            "version": 7,
+            "effects": [{"kind": "push_event", "event": "step", "payload": {"n": 1}}],
+        },
     ]
-    assert view._pending_push_events == []
+    assert view._outbound == []
 
 
 def test_push_state_over_sse_sends_html_update_without_patches(monkeypatch):
@@ -597,7 +606,15 @@ def test_push_state_over_sse_sends_html_update_without_patches(monkeypatch):
 
     asyncio.run(view.push_state())
 
-    assert session.pushed == [{"type": "html_update", "html": "<div>x</div>", "version": 3}]
+    assert session.pushed == [
+        {
+            "type": "render",
+            "source": "push_state",
+            "html": "<div>x</div>",
+            "version": 3,
+            "effects": [],
+        }
+    ]
 
 
 def test_push_state_skips_a_view_the_sse_session_no_longer_serves(monkeypatch):
@@ -612,7 +629,7 @@ def test_push_state_skips_a_view_the_sse_session_no_longer_serves(monkeypatch):
     asyncio.run(view.push_state())
 
     assert session.pushed == []
-    assert view._pending_push_events == [("step", {"n": 1})]
+    assert view._pending("push_event") == [{"event": "step", "payload": {"n": 1}}]
 
 
 def test_push_state_websocket_wins_over_sse_and_stamps_consumer_counter(monkeypatch):
@@ -627,7 +644,15 @@ def test_push_state_websocket_wins_over_sse_and_stamps_consumer_counter(monkeypa
 
     asyncio.run(view.push_state())
 
-    assert consumer.sent_messages == [{"type": "patch", "patches": [{"op": "x"}], "version": 42}]
+    assert consumer.sent_messages == [
+        {
+            "type": "render",
+            "source": "push_state",
+            "patches": [{"op": "x"}],
+            "version": 42,
+            "effects": [],
+        }
+    ]
     assert session.pushed == []
 
 
@@ -647,6 +672,12 @@ def test_push_state_websocket_html_update_stamps_consumer_counter(monkeypatch):
     asyncio.run(view.push_state())
 
     assert consumer.sent_messages == [
-        {"type": "html_update", "html": "<div>x</div>", "version": 42}
+        {
+            "type": "render",
+            "source": "push_state",
+            "html": "<div>x</div>",
+            "version": 42,
+            "effects": [],
+        }
     ]
     assert session.pushed == []

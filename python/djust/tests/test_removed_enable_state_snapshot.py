@@ -19,8 +19,9 @@ import pytest
 from django.core.exceptions import ImproperlyConfigured
 
 from djust import LiveView, event_handler
-from djust.decorators import state
 from djust._removed_settings import MIGRATION_GUIDE_URL, REMOVED_VIEW_ATTRIBUTES
+from djust.decorators import state
+from djust.tests._frames import frame_matches, legacy_type
 
 
 @pytest.fixture(autouse=True)
@@ -236,7 +237,7 @@ async def _runtime_mount(view_class):
 @pytest.mark.parametrize("shape", SHAPES, indirect=True)
 async def test_the_runtime_mount_refuses_each_shape(shape, caplog):
     transport = await _runtime_mount(shape)
-    frames = [frame["type"] for frame in transport.sent]
+    frames = [legacy_type(frame) for frame in transport.sent]
     assert "mount" not in frames, frames
     assert frames[-1] == "error", frames
     assert "enable_state_snapshot" in caplog.text and "removed in djust 2.0" in caplog.text
@@ -246,7 +247,7 @@ async def test_the_runtime_mount_refuses_each_shape(shape, caplog):
 @pytest.mark.django_db(transaction=True)
 async def test_the_runtime_mount_still_mounts_a_plain_view():
     transport = await _runtime_mount(PlainSnapshotlessView)
-    assert [frame["type"] for frame in transport.sent][-1] == "mount"
+    assert [legacy_type(frame) for frame in transport.sent][-1] == "mount"
 
 
 # --------------------------------------------------------------------------
@@ -267,7 +268,7 @@ class LegacyCounterView(LiveView):
 
 
 def _last_is(*types):
-    return lambda frames: bool(frames) and frames[-1].get("type") in types
+    return lambda frames: bool(frames) and frame_matches(frames[-1], types)
 
 
 @pytest.mark.asyncio

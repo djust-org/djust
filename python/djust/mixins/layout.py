@@ -30,8 +30,10 @@ Phoenix 1.1 added runtime layout support; this is the djust equivalent.
 
 from typing import Any, Optional
 
+from .commands import CommandsMixin
 
-class LayoutMixin:
+
+class LayoutMixin(CommandsMixin):
     """Mixin exposing :meth:`set_layout` for runtime layout switching.
 
     The queue holds at most one pending path — repeated calls in the same
@@ -39,9 +41,15 @@ class LayoutMixin:
     only applies the final layout anyway).
     """
 
-    def __init__(self, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
-        self._pending_layout: Optional[str] = None
+    @property
+    def _pending_layout(self) -> Optional[str]:
+        """The queued layout path, or ``None``. Assigning replaces (``None`` drops it)."""
+        pending = self._pending("layout")
+        return pending[-1]["path"] if pending else None
+
+    @_pending_layout.setter
+    def _pending_layout(self, template_path: Optional[str]) -> None:
+        self._replace_pending("layout", [] if template_path is None else [{"path": template_path}])
 
     def set_layout(self, template_path: str) -> None:
         """Queue a layout swap to be applied after the current handler returns.
@@ -52,16 +60,12 @@ class LayoutMixin:
                 via Django's template loader, so it must be findable by
                 the configured loaders.
         """
-        self._pending_layout = template_path
+        self._enqueue("layout", {"path": template_path})
 
     def _drain_pending_layout(self) -> Optional[str]:
-        """Return the pending layout path and reset the queue.
-
-        Called by the WebSocket consumer after each ``_send_update``.
-        """
-        path = self._pending_layout
-        self._pending_layout = None
-        return path
+        """Return the queued layout path (or ``None``) and drop it from the queue."""
+        drained = self._drain_outbound(("layout",))
+        return drained[-1][1]["path"] if drained else None
 
 
 def render_pending_layout(view: Any, layout_path: str) -> str:

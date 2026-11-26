@@ -94,9 +94,10 @@ import pytest
 from asgiref.sync import sync_to_async
 from django.db import connection, models
 from django.test import override_settings
-
 from djust import LiveView
 from djust.decorators import event_handler, state
+from djust.tests._frames import legacy_type
+
 from tests.benchmarks.model_backed_profile_2532 import (
     PROFILE_ROWS,
     Crossings,
@@ -416,7 +417,7 @@ async def _recv_until(
     last: Dict[str, Any] = {}
     for _ in range(tries):
         last = await comm.receive_json_from(timeout=timeout)
-        ftype = last.get("type")
+        ftype = legacy_type(last)  # a render frame by its DOM part (#3658)
         if (ftype == wanted or ftype in _TERMINAL_FRAMES) and (
             ref is None or last.get("ref") == ref
         ):
@@ -457,7 +458,7 @@ def _phase_row(
     return PhaseRow(
         variant=variant,
         phase=phase,
-        frame_type=str(frame.get("type")),
+        frame_type=str(legacy_type(frame)),
         total_ms=total_s * 1000.0,
         render_ms=timing.get("render_ms", 0.0),
         xings=CROSSINGS.rust_calls,
@@ -488,7 +489,6 @@ async def _drive(variant: str) -> List[PhaseRow]:
     """One session: connect → mount → the three events. Returns one
     :class:`PhaseRow` per phase (mount first)."""
     from channels.testing import WebsocketCommunicator
-
     from djust.testing import with_live_session
     from djust.websocket import LiveViewConsumer
 

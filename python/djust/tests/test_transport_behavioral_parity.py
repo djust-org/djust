@@ -55,6 +55,7 @@ from django.test import override_settings
 
 from djust.decorators import event_handler
 from djust.live_view import LiveView
+from djust.tests._frames import effects_of, legacy_type
 
 _PKG_DIR = pathlib.Path(__file__).resolve().parents[1]
 
@@ -148,7 +149,7 @@ def _flush_calls_in_all_pending(path: pathlib.Path) -> List[str]:
             if (
                 isinstance(func.value, ast.Name)
                 and func.value.id == "self"
-                and func.attr.startswith("_flush_")
+                and func.attr.startswith(("_flush_", "_send_effects", "_finish_turn_effects"))
             ):
                 calls.append(func.attr)
     return calls
@@ -172,18 +173,13 @@ class TestFlushQueueParity:
         ws_calls = _flush_calls_in_all_pending(_WEBSOCKET)
         rt_calls = _flush_calls_in_all_pending(_RUNTIME)
 
-        # WS is the canonical source: 6 queues in a fixed order (i18n, #3502,
-        # and accessibility, 2.0, drained queues nothing filled and were removed).
-        expected = [
-            "_flush_push_events",
-            "_flush_flash",
-            "_flush_page_metadata",
-            "_flush_pending_layout",
-            "_flush_deferred",
-            "_flush_navigation",
-        ]
+        # WS is the canonical source. Since #3658 every effect kind (push
+        # events, flash, page metadata, layout, navigation) sits on one queue
+        # (``CommandsMixin``) that ``_send_effects`` drains in the canonical
+        # order; ``_finish_turn_effects`` then runs the ``defer()`` callbacks.
+        expected = ["_send_effects", "_finish_turn_effects"]
         assert ws_calls == expected, (
-            "WS _flush_all_pending drifted from the canonical 6-queue order this "
+            "WS _flush_all_pending drifted from the canonical drain this "
             f"net pins. Got {ws_calls!r}. If WS changed deliberately, update the "
             "expected order here AND the runtime to match."
         )
@@ -195,17 +191,14 @@ class TestFlushQueueParity:
         )
 
     def test_runtime_defines_all_six_flush_methods(self):
-        """Each of the 6 queue-flush methods the parity order names actually exists
-        on ViewRuntime (so the order pin can't pass against phantom methods)."""
+        """Each drain method the parity order names actually exists on ViewRuntime
+        (so the order pin can't pass against phantom methods)."""
         from djust.runtime import ViewRuntime
 
         for name in (
-            "_flush_push_events",
-            "_flush_flash",
-            "_flush_page_metadata",
-            "_flush_pending_layout",
+            "_send_effects",
+            "_finish_turn_effects",
             "_flush_deferred",
-            "_flush_navigation",
             "_flush_all_pending",
         ):
             assert hasattr(ViewRuntime, name), f"ViewRuntime missing {name}"
@@ -279,10 +272,9 @@ def _runtime_with_view(view, url="/"):
     Short-circuits only view-loading + the pre-mount auth seam (the two seams
     the existing test_runtime.py mounts stub); the object-permission check, mount,
     handle_params, and render all run for real."""
-    from djust.runtime import ViewRuntime
-
     from django.test import RequestFactory
 
+    from djust.runtime import ViewRuntime
     from djust.testing import with_live_session
 
     transport = MockTransport()
@@ -402,7 +394,6 @@ class TestWireVersionParity:
         and ``transport.version_calls`` stays empty → this FAILS.
         """
         from djust.runtime import ViewRuntime
-
         from djust.tests._live_session import amount_on_runtime
 
         view = _UrlChangeView()
@@ -420,7 +411,7 @@ class TestWireVersionParity:
             "transport.next_client_version (#1858 wire-version parity regression)"
         )
         # The frame's version is the one the transport returned.
-        frames = [f for f in transport.sent if f.get("type") in ("patch", "html_update")]
+        frames = [f for f in transport.sent if legacy_type(f) in ("patch", "html_update")]
         assert frames, "no patch/html_update frame from url_change"
         assert "version" in frames[0]
 
@@ -661,7 +652,7 @@ class TestEventSpineRefEcho:
 
         await runtime.dispatch_event({"type": "event", "event": "bump", "params": {}, "ref": 42})
 
-        frames = [f for f in transport.sent if f.get("type") in ("patch", "html_update")]
+        frames = [f for f in transport.sent if legacy_type(f) in ("patch", "html_update")]
         assert frames, f"bump must emit an update frame, got {transport.sent!r}"
         f = frames[0]
         assert f.get("ref") == 42, f"update frame must echo the event ref (#560); got {f!r}"
@@ -684,7 +675,7 @@ class TestEventSpineRefEcho:
             {"type": "event", "event": "touch_nothing", "params": {}, "ref": 9}
         )
 
-        noops = [f for f in transport.sent if f.get("type") == "noop"]
+        noops = [f for f in transport.sent if legacy_type(f) == "noop"]
         assert noops, f"no-change event must emit a noop frame, got {transport.sent!r}"
         n = noops[0]
         assert n.get("ref") == 9, f"noop must echo the event ref (#560); got {n!r}"
@@ -700,7 +691,7 @@ class TestEventSpineRefEcho:
 
         await runtime.dispatch_event({"type": "event", "event": "touch_nothing", "params": {}})
 
-        noops = [f for f in transport.sent if f.get("type") == "noop"]
+        noops = [f for f in transport.sent if legacy_type(f) == "noop"]
         assert noops, transport.sent
         assert "ref" not in noops[0], f"absent ref must be omitted, not null; got {noops[0]!r}"
 
@@ -715,7 +706,7 @@ class TestEventSpineRefEcho:
         await runtime.dispatch_event(
             {"type": "event", "event": "touch_nothing", "params": {}, "ref": "evil"}
         )
-        noops = [f for f in transport.sent if f.get("type") == "noop"]
+        noops = [f for f in transport.sent if legacy_type(f) == "noop"]
         assert noops, transport.sent
         assert "ref" not in noops[0], "non-numeric ref must be dropped, not echoed"
 
@@ -746,11 +737,11 @@ class TestEventSpineForceFullHtml:
 
         await runtime.dispatch_event({"type": "event", "event": "force", "params": {}, "ref": 5})
 
-        noops = [f for f in transport.sent if f.get("type") == "noop"]
+        noops = [f for f in transport.sent if legacy_type(f) == "noop"]
         assert not noops, (
             f"force_full_html must defeat the auto-skip (no noop); got {transport.sent!r}"
         )
-        updates = [f for f in transport.sent if f.get("type") == "html_update"]
+        updates = [f for f in transport.sent if legacy_type(f) == "html_update"]
         assert updates, f"force_full_html must emit a full html_update; got {transport.sent!r}"
         # Flag consumed so it forces exactly one render.
         assert getattr(view, "_force_full_html", False) is False, (
@@ -790,8 +781,8 @@ class TestEventSpineForceFullHtml:
 
         await runtime.dispatch_event({"type": "event", "event": "force", "params": {}})
 
-        patches = [f for f in transport.sent if f.get("type") == "patch"]
-        updates = [f for f in transport.sent if f.get("type") == "html_update"]
+        patches = [f for f in transport.sent if legacy_type(f) == "patch"]
+        updates = [f for f in transport.sent if legacy_type(f) == "html_update"]
         assert not patches, f"force_full_html must discard patches; got {transport.sent!r}"
         assert updates, f"force_full_html must send html_update; got {transport.sent!r}"
 
@@ -872,12 +863,12 @@ class TestEventSpineIdentityPushSkip:
         # (asyncio.ensure_future); yield once so the scheduled push frame lands.
         await asyncio.sleep(0)
 
-        updates = [f for f in transport.sent if f.get("type") in ("patch", "html_update")]
-        noops = [f for f in transport.sent if f.get("type") == "noop"]
+        updates = [f for f in transport.sent if legacy_type(f) in ("patch", "html_update")]
+        noops = [f for f in transport.sent if legacy_type(f) == "noop"]
         assert not updates, f"push-only handler must NOT render; got {transport.sent!r}"
         assert noops, f"push-only handler must emit a noop; got {transport.sent!r}"
         # The push frame was still emitted (push_events flushed on the noop path).
-        pushes = [f for f in transport.sent if f.get("type") == "push_event"]
+        pushes = [f for f in effects_of(transport.sent, "push_event")]
         assert pushes, "the push_event side-effect must still reach the client on the noop path"
 
     @pytest.mark.asyncio
@@ -937,8 +928,8 @@ class TestEventSpineIdentityPushSkip:
 
         await runtime.dispatch_event({"type": "event", "event": "ping", "params": {}})
 
-        updates = [f for f in transport.sent if f.get("type") in ("patch", "html_update")]
-        noops = [f for f in transport.sent if f.get("type") == "noop"]
+        updates = [f for f in transport.sent if legacy_type(f) in ("patch", "html_update")]
+        noops = [f for f in transport.sent if legacy_type(f) == "noop"]
         assert not updates, (
             "the #700 identity skip must skip a push-only handler even when the "
             f"assigns fingerprint reports an in-place change; got {transport.sent!r}"
@@ -984,7 +975,9 @@ class TestEventSpineEnumeration:
         # 4. _notify_waiters (ADR-002).
         assert "_notify_waiters" in src, "_notify_waiters (ADR-002) missing from the spine"
         # 5. #700 identity push-only skip.
-        assert "_pending_push_events" in src, "#700 identity push-only skip missing from the spine"
+        assert 'has_pending("push_event")' in src, (
+            "#700 identity push-only skip missing from the spine"
+        )
         assert "pre_identity" in src and "post_identity" in src, (
             "#700 identity comparison (pre_identity/post_identity) missing from the spine"
         )
@@ -1150,15 +1143,15 @@ class TestMountAsyncAndPushDrain:
         await asyncio.sleep(0)
 
         mount_frames = [f for f in transport.sent if f.get("type") == "mount"]
-        push_frames = [f for f in transport.sent if f.get("type") == "push_event"]
+        push_frames = [f for f in effects_of(transport.sent, "push_event")]
         assert mount_frames, "the view must mount"
         assert push_frames, (
             "a push_event queued in mount() must drain after the mount frame "
-            "(#1283); got " + repr([f.get("type") for f in transport.sent])
+            "(#1283); got " + repr([legacy_type(f) for f in transport.sent])
         )
         # Ordering: mount frame BEFORE the push frame (the view must exist first).
         mount_idx = transport.sent.index(mount_frames[0])
-        push_idx = transport.sent.index(push_frames[0])
+        push_idx = next(i for i, f in enumerate(transport.sent) if effects_of(f, "push_event"))
         assert mount_idx < push_idx, "the mount frame must precede the drained push frame"
 
     @pytest.mark.asyncio
@@ -1244,7 +1237,9 @@ class TestMountAsyncAndPushDrain:
         from djust.runtime import ViewRuntime
 
         src = _inspect.getsource(ViewRuntime._dispatch_mount_body)
-        assert "_flush_push_events()" in src, "mount must drain push events"
+        assert '_send_effects("mount", kinds=("push_event",))' in src, (
+            "mount must drain push events"
+        )
         assert "_dispatch_async_work(" in src, "mount must dispatch async work"
         # Assert the CALL form (``_flush_all_pending(``) is absent — a bare
         # substring would false-match the explanatory comment that names the

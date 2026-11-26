@@ -15,12 +15,13 @@ HTML passed through ``|safe``, user Markdown (one nested ``<blockquote>`` per
 from __future__ import annotations
 
 from typing import Any
+
 import pytest
 from asgiref.sync import sync_to_async
 
-from djust import LiveView, _rust
+from djust import LiveView, _rust, state
 from djust.decorators import event_handler
-from djust import state
+from djust.tests._frames import legacy_type
 
 _MODULE = __name__
 DEPTH = 40_000  # far past any stack, far below any request-size limit
@@ -100,7 +101,7 @@ async def _render_for(communicator, ref: int) -> None:
     for _ in range(50):
         frame = await communicator.receive_json_from(timeout=20)
         assert frame.get("type") != "error", frame
-        if frame.get("type") in ("patch", "html_update") and frame.get("ref") == ref:
+        if legacy_type(frame) in ("patch", "html_update") and frame.get("ref") == ref:
             return
     raise AssertionError(f"no render for event {ref}")
 

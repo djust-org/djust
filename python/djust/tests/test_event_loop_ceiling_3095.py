@@ -25,10 +25,10 @@ import pytest
 from asgiref.sync import sync_to_async
 from django.test import override_settings
 
-from djust import LiveView
+from djust import LiveView, state
 from djust.config import config as djust_config
 from djust.decorators import event_handler, permission_required
-from djust import state
+from djust.tests._frames import legacy_type
 
 pytest.importorskip("channels")
 
@@ -156,7 +156,11 @@ async def _receive_until(communicator, wanted, *, tries=8, timeout=30):
     last = None
     for _ in range(tries):
         last = await communicator.receive_json_from(timeout=timeout)
-        if last.get("type") in wanted if isinstance(wanted, tuple) else last.get("type") == wanted:
+        if (
+            legacy_type(last) in wanted
+            if isinstance(wanted, tuple)
+            else legacy_type(last) == wanted
+        ):
             return last
     return last
 

@@ -1,7 +1,7 @@
 """A view attribute that reuses a name djust keeps its own state under.
 
 ``LiveView.__init__`` sets about forty attributes (``_streams``,
-``_components``, ``_pending_navigation``, ...). A view that assigns one of
+``_components``, ``_outbound``, ...). A view that assigns one of
 them in its own code replaces djust's state, and the failure shows up far
 away: ``self._streams = {"runs": {...}}`` made every render fail with
 ``TypeError: 'builtin_function_or_method' object is not iterable``, raised
@@ -21,7 +21,7 @@ class _Lists:
     """A plain mixin: its assignments run on the view too."""
 
     def remember(self):
-        self._pending_navigation = []
+        self._outbound = []
 
 
 class ClashingView(_Lists, LiveView):
@@ -58,7 +58,7 @@ def _v022(*classes):
 def test_v022_reports_assignments_to_framework_attributes():
     messages = _v022(ClashingView)
     assigned = sorted(m.msg.split("self.")[1].split(",")[0] for m in messages)
-    assert assigned == ["_components", "_pending_navigation", "_streams"], messages
+    assert assigned == ["_components", "_outbound", "_streams"], messages
     assert all(m.id == "djust.V022" and m.level == 30 for m in messages)
     streams = next(m for m in messages if "self._streams" in m.msg)
     assert "mount" in streams.msg

@@ -25,6 +25,7 @@ from djust.components.descriptors.base import LiveComponent as DescriptorCompone
 from djust.components.descriptors.base import TypedState
 from djust.decorators import state
 from djust.runtime import ViewRuntime
+from djust.tests._frames import effects_of, legacy_type
 from djust.tests.test_exposure_runtime import make_request
 from djust.tests.test_runtime_state_save_tt_1894 import MockTransport
 
@@ -160,9 +161,9 @@ async def test_every_component_frame_carries_the_refreshed_snapshot(event_name, 
 
     await runtime.dispatch_event(_event(view, event_name))
     assert not transport.errors, transport.errors
-    [frame] = [f for f in transport.sent if f.get("type") in {"html_update", "patch", "noop"}]
+    [frame] = [f for f in transport.sent if legacy_type(f) in {"html_update", "patch", "noop"}]
     # A component event answers ``patch`` only from the scoped branch.
-    assert frame["type"] == frame_type
+    assert legacy_type(frame) == frame_type
     assert frame.get(TOKEN), frame
     assert frame["view"] == __name__ + ".TwoPersistencePage"
 
@@ -178,6 +179,8 @@ async def test_a_component_noop_publishes_the_snapshot_before_its_navigation():
 
     await runtime.dispatch_event(_event(view, "leave"))
     assert not transport.errors, transport.errors
-    types = [f.get("type") for f in transport.sent]
-    assert types.index("noop") < types.index("navigation"), types
-    assert transport.sent[types.index("noop")].get(TOKEN)
+    # One render frame (#3658): no DOM part, the token, then the navigation
+    # effect, which the client applies after it stored the token.
+    [frame] = [f for f in transport.sent if effects_of(f, "navigation")]
+    assert legacy_type(frame) == "noop", transport.sent
+    assert frame.get(TOKEN)

@@ -18,6 +18,7 @@ from django.test import RequestFactory, override_settings
 from djust import LiveView
 from djust.decorators import event_handler, state
 from djust.security import is_safe_event_name
+from djust.tests._frames import legacy_type
 from djust.websocket_utils import _validate_event_security
 
 _MOD = "djust.tests.test_sticky_update_hook_2919"
@@ -359,7 +360,7 @@ async def _receive_until(communicator, wanted_type, *, tries=8, timeout=30):
     last = None
     for _ in range(tries):
         last = await communicator.receive_json_from(timeout=timeout)
-        if last.get("type") == wanted_type:
+        if legacy_type(last) == wanted_type:
             return last
     return last
 

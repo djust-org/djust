@@ -19,21 +19,22 @@ import uuid
 
 import pytest
 from asgiref.sync import sync_to_async
-from django.contrib.sessions.backends.db import SessionStore
 from django.contrib.auth.decorators import login_required as django_login_required
+from django.contrib.sessions.backends.db import SessionStore
 from django.test import Client, RequestFactory
-from django.utils.decorators import method_decorator
 from django.urls import path
+from django.utils.decorators import method_decorator
 
 from djust import LiveView, event_handler
 from djust.decorators import permission_required, state
 from djust.hooks import on_mount
+from djust.tests._frames import legacy_type
 from djust.tests.test_admin_page_render import _session_cookie
 from djust.tests.test_exposure_framework_views import (
     _EVENT_ANSWERS,
     _MOUNT_ANSWERS,
-    _StackSocket,
     _event,
+    _StackSocket,
     _text_patches,
     _who,
 )
@@ -259,7 +260,7 @@ def _mount_frame(view=MODULE + ".Who", url=URL, **extra):
 async def _ask(ws) -> str:
     """Fire ``ask`` and return what the answer rendered (a patch or fresh HTML)."""
     answered = await ws.answer(_event("ask"), *_EVENT_ANSWERS)
-    assert answered.get("type") in ("patch", "html_update"), answered
+    assert legacy_type(answered) in ("patch", "html_update"), answered
     return " ".join(_text_patches(answered)) + " " + str(answered.get("html", ""))
 
 

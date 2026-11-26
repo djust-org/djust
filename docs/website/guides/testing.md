@@ -291,7 +291,10 @@ production would refuse:
     answers the event: the frame that carries the event's `ref`, or an
     `error` with no `ref` (an error naming another event is not the answer).
   - `await receive(types=None, *, timeout=None)` returns the next frame of
-    those types.
+    those types. A turn result is one `render` frame; it also answers to the
+    old name of its DOM part (`"patch"`, `"html_update"`, `"embedded_update"`,
+    `"noop"`) and to the `kind` of each effect it carries (`"push_event"`,
+    `"navigate"`, ...). See [Wire Protocol](../advanced/wire-protocol.md).
   - `await receive_nothing(types=None, *, within=0.5)` asserts that no such
     frame arrives in that time.
   - `frames` lists the frames received (the latest 10,000). A binary
@@ -386,8 +389,8 @@ async def test_counter_over_a_socket():
     async with await page.connect() as socket:
         assert socket.mount["type"] == "mount", socket.mount
         answer = await socket.send_event("increment")
-        assert answer["type"] in ("patch", "html_update"), answer
-        await socket.receive_nothing(("push_event",), within=0.2)
+        assert answer["type"] == "render" and ("patches" in answer or "html" in answer), answer
+        assert not [e for e in answer["effects"] if e["kind"] == "push_event"], answer
 ```
 
 Over SSE:
@@ -406,7 +409,7 @@ async def test_counter_over_sse():
     async with await page.connect_sse() as stream:
         assert stream.mount["type"] == "mount", stream.mount
         answer = await stream.send_event("increment")
-        assert answer["type"] in ("patch", "html_update"), answer
+        assert answer["type"] == "render" and ("patches" in answer or "html" in answer), answer
 ```
 
 A few variations:

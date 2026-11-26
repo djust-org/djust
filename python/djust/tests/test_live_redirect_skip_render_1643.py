@@ -30,12 +30,13 @@ sent-frame level.
 from __future__ import annotations
 
 import inspect
+from unittest.mock import MagicMock
 
 import pytest
-from unittest.mock import MagicMock
 
 from djust import LiveView
 from djust.decorators import event_handler
+from djust.tests._frames import effects_of, legacy_type
 
 # Module-level external side-effect marker (stands in for the reporter's DB
 # write). Mutating this — not a view attr — keeps the handler from changing any
@@ -111,9 +112,7 @@ async def _drive_event(view_cls, event_name):
 
 
 def _nav_frames(frames):
-    return [
-        f for f in frames if f.get("type") == "navigation" and f.get("action") == "live_redirect"
-    ]
+    return [f for f in effects_of(frames, "navigation") if f.get("action") == "live_redirect"]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -129,7 +128,7 @@ async def test_live_redirect_from_state_unchanging_handler_emits_navigation_fram
     assert navs, (
         "live_redirect from a state-unchanging handler emitted NO navigation "
         f"frame — the skip-render branch dropped it. Frames: "
-        f"{[f.get('type') for f in frames]}"
+        f"{[legacy_type(f) for f in frames]}"
     )
     assert navs[0].get("path") == "/done/", navs
     # And the queue must have been drained (not left dangling).
@@ -147,9 +146,20 @@ async def test_state_changing_handler_with_live_redirect_still_navigates():
     _view, frames = await _drive_event(_RedirectAndChangeView, "change_and_redirect")
     navs = _nav_frames(frames)
     assert navs, (
-        f"state-changing handler must still navigate. Frames: {[f.get('type') for f in frames]}"
+        f"state-changing handler must still navigate. Frames: {[legacy_type(f) for f in frames]}"
     )
     assert navs[0].get("path") == "/done/", navs
+
+
+#: The calls that drain a turn's queued effects (#3658): the effects-only flush,
+#: or a frame send that carries them in its ``effects``.
+TURN_END_DRAINS = (
+    "_flush_all_pending",
+    "_send_update",
+    "_send_noop",
+    "_send_render",
+    "_send_tick_render",
+)
 
 
 def test_turn_end_paths_use_single_flush_helper():
@@ -186,7 +196,9 @@ def test_turn_end_paths_use_single_flush_helper():
         "_run_async_work_body",
     ):
         src = inspect.getsource(getattr(ws_mod.LiveViewConsumer, name))
-        assert "_flush_all_pending" in src, (
+        # #3658: a render or ack frame carries the turn's effects itself
+        # (``_send_update`` / ``_send_noop`` / ``_send_render``), so either drain counts.
+        assert any(drain in src for drain in TURN_END_DRAINS), (
             f"{name} (WS) must flush via _flush_all_pending so queued navigation/"
             f"i18n/accessibility commands aren't dropped (#1643)."
         )
@@ -197,7 +209,7 @@ def test_turn_end_paths_use_single_flush_helper():
     # navigation (live_redirect) still emits its navigation frame (#1646 / #1643).
     for name in ("_render_and_send", "_dispatch_event_render"):
         src = inspect.getsource(getattr(rt_mod.ViewRuntime, name))
-        assert "_flush_all_pending" in src, (
+        assert any(drain in src for drain in TURN_END_DRAINS), (
             f"{name} (runtime) must flush via _flush_all_pending so the WS event "
             f"path (now routed through the runtime) doesn't drop queued "
             f"navigation/i18n/accessibility commands (#1907 / #1643)."
@@ -211,12 +223,7 @@ def test_flush_all_pending_covers_every_side_effect():
     import djust.websocket as ws_mod
 
     src = inspect.getsource(ws_mod.LiveViewConsumer._flush_all_pending)
-    for flush in (
-        "_flush_push_events",
-        "_flush_flash",
-        "_flush_page_metadata",
-        "_flush_pending_layout",
-        "_flush_deferred",
-        "_flush_navigation",
-    ):
-        assert f"self.{flush}()" in src, f"_flush_all_pending must call {flush} (#1643)"
+    # #3658: one queue (CommandsMixin) holds every effect kind; ``_send_effects``
+    # drains all of it, and ``_finish_turn_effects`` runs the deferred callbacks.
+    assert "self._send_effects(" in src, "_flush_all_pending must drain the effect queue"
+    assert "self._finish_turn_effects()" in src, "_flush_all_pending must run defer() callbacks"

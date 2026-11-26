@@ -30,6 +30,7 @@ from djust.decorators import state
 from djust.live_view import LiveView
 from djust.sse import DjustSSEMessageView, DjustSSEStreamView, _sse_sessions
 from djust.testing import LiveViewTestClient
+from djust.tests._frames import frame_matches, legacy_type
 from djust.wizard import WizardMixin
 
 MOD = __name__
@@ -249,7 +250,7 @@ async def test_over_a_websocket(wizard_urls):
         for _ in range(8):
             frame = await socket.receive_json_from(timeout=10)
             frames.append(frame)
-            if frame.get("type") in {"patch", "html_update", "error", "noop"}:
+            if legacy_type(frame) in {"patch", "html_update", "error", "noop"}:
                 break
         assert not any(f.get("type") == "error" for f in frames), frames
         text = _frames_text(frames)
@@ -283,7 +284,7 @@ async def _sse_frame(stream, *types, timeout=10.0):
         chunk = await asyncio.wait_for(stream.__anext__(), timeout=deadline - loop.time())
         if chunk.startswith("data:"):
             frame = json.loads(chunk[len("data:") :])
-            if frame.get("type") in types:
+            if frame_matches(frame, types):
                 return frame
 
 

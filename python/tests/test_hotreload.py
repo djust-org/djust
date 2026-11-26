@@ -5,10 +5,12 @@ Tests the hot reload flow including template cache clearing,
 patch generation, error handling, and performance metrics.
 """
 
-import pytest
 import json
-from unittest.mock import Mock, AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
+
+import pytest
 from django.template import TemplateDoesNotExist
+from djust.tests._frames import legacy_type
 
 
 @pytest.fixture
@@ -158,7 +160,7 @@ class TestHotReloadMessage:
         mock_consumer.send_json.assert_called_once()
         call_args = mock_consumer.send_json.call_args[0][0]
 
-        assert call_args["type"] == "patch"
+        assert legacy_type(call_args) == "patch"
         assert call_args["patches"] == patches
         # #1788: the hotreload patch frame stamps the CONSUMER-owned wire version
         # (1 — the first frame on this fresh consumer), NOT the Rust version (2).
@@ -436,7 +438,7 @@ class TestHotReloadIntegration:
         mock_consumer.send_json.assert_called_once()
         call_args = mock_consumer.send_json.call_args[0][0]
 
-        assert call_args["type"] == "patch"
+        assert legacy_type(call_args) == "patch"
         assert call_args["patches"] == patches
         # #1788: consumer-owned wire version (1 — first frame on this fresh
         # consumer), decoupled from the Rust version (3). See HIDDEN #1.
@@ -473,7 +475,7 @@ class TestHotReloadIntegration:
         # Verify patches sent
         mock_consumer.send_json.assert_called_once()
         call_args = mock_consumer.send_json.call_args[0][0]
-        assert call_args["type"] == "patch"
+        assert legacy_type(call_args) == "patch"
 
 
 class TestHotReloadEdgeCases:
@@ -524,7 +526,7 @@ class TestHotReloadEdgeCases:
         # Should handle array patches correctly
         mock_consumer.send_json.assert_called_once()
         call_args = mock_consumer.send_json.call_args[0][0]
-        assert call_args["type"] == "patch"
+        assert legacy_type(call_args) == "patch"
         assert call_args["patches"] == patches
 
     @pytest.mark.asyncio

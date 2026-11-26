@@ -5,9 +5,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from djust._parameter_metadata import expand_parameter_manifest
 from djust.runtime import ViewRuntime
 from djust.tests.test_parameter_metadata import StrictOwner
-from djust._parameter_metadata import expand_parameter_manifest
 
 
 class HandlerlessOwner:
@@ -59,7 +59,8 @@ async def test_handlerless_render_does_not_gain_contract_fields_or_affect_anothe
     frame = {"type": "patch", "version": 2}
     await bare._send_render_frame(frame)
     assert frame == {"type": "patch", "version": 2}
-    bare_transport.send.assert_awaited_once_with(frame)
+    # Sent as one render frame (#3658), with no contract fields added.
+    bare_transport.send.assert_awaited_once_with({"type": "render", "version": 2, "effects": []})
 
 
 @pytest.mark.asyncio

@@ -66,10 +66,10 @@ describe('hook pushEvent (#3990)', () => {
         const { ref } = events(ws)[0];
         expect(await settled(promise)).toBe('pending');
 
-        await ws.handleMessage({ type: 'noop', source: 'event', view: VIEW, ref });
+        await ws.handleMessage({ type: 'render', source: 'event', view: VIEW, ref });
 
         const reply = await settled(promise);
-        expect(reply).toMatchObject({ type: 'noop', ref });
+        expect(reply).toMatchObject({ type: 'render', ref });
     });
 
     it('its reply does not resolve an unrelated pending event', async () => {
@@ -79,7 +79,7 @@ describe('hook pushEvent (#3990)', () => {
         const [saveFrame, pickedFrame] = events(ws);
         expect(saveFrame.ref).not.toBe(pickedFrame.ref);
 
-        await ws.handleMessage({ type: 'noop', source: 'event', view: VIEW, ref: pickedFrame.ref });
+        await ws.handleMessage({ type: 'render', source: 'event', view: VIEW, ref: pickedFrame.ref });
 
         expect(await settled(pushed)).toMatchObject({ ref: pickedFrame.ref });
         expect(await settled(other)).toBe('pending');

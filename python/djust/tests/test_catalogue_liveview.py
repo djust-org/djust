@@ -26,6 +26,8 @@ import re
 import pytest
 from django.test import override_settings
 
+from djust.tests._frames import frame_matches, legacy_type
+
 VIEW_PATH = "djust.theming.gallery.live_views.ComponentsDetailView"
 
 # Two overrides, for two reasons documented above:
@@ -128,7 +130,7 @@ async def test_components_view_mounts_over_the_socket():
         assert mounted.get("type") != "error", (
             f"the mount was refused, so nothing is listening to dj-click: {mounted!r}"
         )
-        assert mounted.get("type") != "navigate", f"unexpected redirect: {mounted!r}"
+        assert not frame_matches(mounted, "navigate"), f"unexpected redirect: {mounted!r}"
         assert mounted.get("view") or _html_of(mounted) or mounted.get("type") == "mount", (
             f"no render in the mount frame: {mounted!r}"
         )
@@ -169,7 +171,7 @@ async def test_accordion_toggle_reaches_the_server():
         await communicator.disconnect()
 
     assert updated.get("type") != "error", f"the toggle was refused by the server: {updated!r}"
-    assert updated.get("type") in ("patch", "html_update", "html_recovery"), (
+    assert legacy_type(updated) in ("patch", "html_update", "html_recovery"), (
         f"unexpected frame for a toggle: {updated!r}"
     )
 
@@ -340,7 +342,7 @@ async def test_accordion_toggle_patches_only_the_preview(params):
     finally:
         await communicator.disconnect()
 
-    assert updated.get("type") == "patch", updated
+    assert legacy_type(updated) == "patch", updated
     assert updated.get("timing", {}).get("scope") == "component", (
         f"the toggle took the page render: {updated.get('timing')!r}"
     )
@@ -378,4 +380,4 @@ async def test_demo_events_answer_over_the_wire(component, event, params):
     finally:
         await communicator.disconnect()
     assert updated.get("type") != "error", updated
-    assert updated.get("type") in ("patch", "noop", "html_update"), updated
+    assert legacy_type(updated) in ("patch", "noop", "html_update"), updated

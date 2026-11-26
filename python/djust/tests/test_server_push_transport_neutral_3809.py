@@ -12,28 +12,29 @@ scopes and ``db_notify`` reach SSE since #3885
 below only pins that the SSE view joined its push group.
 """
 
-from typing import Any
 import asyncio
 import json
 import re
 import threading
 import uuid
+from typing import Any
 
 import pytest
-from django import forms
 from asgiref.sync import async_to_sync, sync_to_async
 from channels.testing import WebsocketCommunicator
+from django import forms
 from django.contrib.auth.models import AnonymousUser
 from django.contrib.sessions.backends.db import SessionStore
 from django.test import Client, override_settings
 from django.urls import path
 
 from djust import LiveView, event_handler
-from djust.wizard import WizardMixin
-from djust.decorators import push_handler, state
 from djust.config import config
+from djust.decorators import push_handler, state
 from djust.sse import DjustSSEMessageView, DjustSSEStreamView, _sse_sessions
+from djust.tests._frames import legacy_type
 from djust.websocket import LiveViewConsumer
+from djust.wizard import WizardMixin
 
 from ._ws_frames import receive_until, wait_until
 from .test_exposure_sse_resilience_3200 import _fresh_key, _request
@@ -466,7 +467,7 @@ async def test_background_task_push_updates_the_page_over_sse():
     assert view.log[-1] == 3
     pushed = [f for f in frames if f.get("source") == "broadcast"]
     assert pushed and all(f.get("broadcast") is True for f in pushed), frames
-    assert all(f["type"] in {"patch", "html_update"} for f in pushed)
+    assert all(legacy_type(f) in {"patch", "html_update"} for f in pushed)
     assert not [f for f in frames if f.get("type") == "error"], frames
     # The last frame carries the last state (earlier pushes may coalesce).
     assert "3" in _text(pushed[-1])

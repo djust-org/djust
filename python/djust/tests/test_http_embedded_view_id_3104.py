@@ -27,8 +27,8 @@ from django.contrib.sessions.backends.db import SessionStore
 from django.test import RequestFactory
 
 from djust import LiveView
-from djust.decorators import permission_required
-from djust.decorators import event_handler
+from djust.decorators import event_handler, permission_required
+from djust.tests._frames import legacy_type
 
 MOD = __name__
 PATH = "/page/"
@@ -184,7 +184,7 @@ def _post(session, body, event="got_click", view_class=Page, user=None):
     _LAST_PAGE_ANSWER.pop(session.session_key, None)
     if response.status_code == 200:
         data = json.loads(response.content)
-        if data.get("type") != "embedded_update" and "html" in data:
+        if legacy_type(data) != "embedded_update" and "html" in data:
             _LAST_PAGE_ANSWER[session.session_key] = data["html"]
     return response
 
@@ -259,7 +259,7 @@ def test_an_event_for_an_embedded_child_runs_on_that_child(session, flat, which)
     response = _post(session, body if flat else {"event": "got_click", "params": body})
     assert response.status_code == 200, response.content
     data = json.loads(response.content)
-    assert data["type"] == "embedded_update"
+    assert legacy_type(data) == "embedded_update"
     assert data["view_id"] == child_id
     assert data["event_name"] == "got_click"
     assert re.search(r'<span id="r"[^>]*>click</span>', data["html"]), data["html"]
@@ -411,7 +411,7 @@ def test_a_lazy_tag_child_is_routed_over_http(session):
     response = _post(session, {"view_id": ids[0]}, view_class=LazyTagPage)
     assert response.status_code == 200, response.content
     data = json.loads(response.content)
-    assert data["type"] == "embedded_update" and data["view_id"] == ids[0]
+    assert legacy_type(data) == "embedded_update" and data["view_id"] == ids[0]
     assert "click" in _html(response)
 
 

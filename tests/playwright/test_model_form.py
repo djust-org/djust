@@ -121,6 +121,7 @@ async def run(browser, transport, failures):
             """async ([n, target]) => (await fetch(location.href, {method: 'POST',
                 headers: {'Content-Type': 'application/json',
                           'X-CSRFToken': window.djust.csrfToken(),
+                          'X-Djust-Protocol': String(window.djust.PROTOCOL),
                           'X-Djust-Event': 'submit_form'},
                 body: JSON.stringify({name: n, price: '12.50', stock: '1',
                                       id: target, pk: target})})).status""",

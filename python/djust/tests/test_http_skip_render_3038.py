@@ -16,6 +16,7 @@ from django.test import RequestFactory
 from djust import LiveView
 from djust.components.descriptors.base import LiveComponent, TypedState
 from djust.decorators import event_handler
+from djust.tests._frames import is_ack, payloads_of
 
 
 class Quiet(LiveComponent):
@@ -85,15 +86,15 @@ def _post(session, event, **params):
 
 @pytest.mark.django_db
 class TestHttpSkipRender:
-    def test_view_event_skip_answers_empty_patches(self):
+    def test_view_event_skip_answers_an_ack(self):
         session = _get()
         body = _post(session, "rename_quietly", value="Y")
-        assert body["patches"] == []
+        assert is_ack(body), body  # a skip answers a bare render ack (#3658)
         assert "html" not in body
         # Nothing was rendered, so the client's VDOM cursor must not move.
         assert "version" not in body
         # Side channels still go out, as with the WebSocket noop.
-        assert body["_page_metadata"] == [{"action": "title", "value": "Renamed"}]
+        assert payloads_of(body, "page_metadata") == [{"action": "title", "value": "Renamed"}]
         follow_up = _post(session, "rename", value="Z")
         assert follow_up.get("patches") or follow_up.get("html"), follow_up
 
@@ -102,16 +103,19 @@ class TestHttpSkipRender:
         ``@cache`` never stores a skipped turn; the HTTP answer matches."""
         session = _get()
         body = _post(session, "rename_quietly", value="Y", _cacheRequestId="req-1")
-        assert body["patches"] == []
+        assert is_ack(body), body  # a skip answers a bare render ack (#3658)
         assert "cache_request_id" not in body
 
-    def test_component_event_skip_answers_empty_patches(self):
+    def test_component_event_skip_answers_an_ack(self):
         session = _get()
         body = _post(session, "bump_quietly", component_id="quiet")
         # Strict is the default (#4189): every answer re-advertises the page's
         # parameter contracts. They are metadata, not a render.
         contracts = {"parameter_contracts", "parameter_contract_view"}
-        assert {k: v for k, v in body.items() if k not in contracts} == {"patches": []}
+        assert {k: v for k, v in body.items() if k not in contracts} == {
+            "type": "render",
+            "effects": [],
+        }
         assert contracts <= set(body)
         rendered = _post(session, "bump", component_id="quiet")
         assert rendered.get("patches") or rendered.get("html"), rendered
@@ -129,7 +133,7 @@ class TestHttpSkipRender:
         view = SkipPage()
         view.setup(request)
         response = view.post(request)
-        assert json.loads(response.content)["patches"] == []
+        assert is_ack(json.loads(response.content))
         assert view._skip_render is False
 
     def test_force_full_html_still_wins(self):

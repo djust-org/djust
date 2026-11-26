@@ -19,6 +19,7 @@ from django.test import override_settings
 from djust import LiveView, event_handler
 from djust._exposure_sessions import server_state_adapter
 from djust.decorators import state
+from djust.tests._frames import legacy_type
 from djust.websocket import LiveViewConsumer
 
 from .test_exposure_runtime import make_request
@@ -76,7 +77,7 @@ async def test_explicit_socket_mount_resolves_the_configured_tenant(headers, ten
             assert frame["type"] == "mount", frame
             await socket.send_json_to({"type": "event", "event": "bump", "params": {}})
             reply = await socket.receive_json_from()
-            assert reply["type"] in {"patch", "html_update"}, reply
+            assert legacy_type(reply) in {"patch", "html_update"}, reply
         finally:
             await socket.disconnect()
         tenant = SEEN[0]

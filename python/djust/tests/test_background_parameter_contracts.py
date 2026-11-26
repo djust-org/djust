@@ -2,17 +2,18 @@
 
 import asyncio
 import json
-import zlib
 import threading
+import zlib
 from unittest.mock import AsyncMock
 
 import pytest
 
 from djust import event_handler
+from djust._parameter_metadata import expand_parameter_manifest
+from djust.tests._frames import legacy_type
 from djust.tests._live_session import amount_on_consumer
 from djust.tests.test_background_html_fallback import BackgroundView
 from djust.websocket import LiveViewConsumer
-from djust._parameter_metadata import expand_parameter_manifest
 
 pytestmark = [
     pytest.mark.django_db(transaction=True),
@@ -88,7 +89,7 @@ async def test_background_frame_and_recovery_share_render_contract(source, full_
     consumer, view, runtime = await setup(full_html)
     await produce(consumer, source)
     frame = consumer.send_json.call_args.args[0]
-    assert frame["type"] == ("html_update" if full_html else "patch")
+    assert legacy_type(frame) == ("html_update" if full_html else "patch")
     assert frame["parameter_contract_view"] == CONTRACT_VIEW
     assert (
         expand_parameter_manifest(frame["parameter_contracts"])[0]["handlers"]["choose"]["policy"]
@@ -129,7 +130,7 @@ async def test_contract_failure_withholds_frame_and_resets_unsent_baseline(sourc
 
     await produce(consumer, source)
     frame = consumer.send_json.call_args.args[0]
-    assert frame["type"] == "html_update"
+    assert legacy_type(frame) == "html_update"
     assert "Count: 2" in frame["html"]
     assert frame["version"] == 1
     assert frame["parameter_contracts"] is not None
@@ -173,7 +174,7 @@ async def test_cancelled_render_retains_lock_until_worker_settles(source):
     view.render_with_diff = original
     await produce(consumer, source)
     frame = consumer.send_json.call_args.args[0]
-    assert frame["type"] == "html_update"
+    assert legacy_type(frame) == "html_update"
     assert frame["version"] == 1
     assert "Count: 2" in frame["html"]
     assert view._force_full_html is False

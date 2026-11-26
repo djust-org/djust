@@ -54,6 +54,7 @@ from djust.components.descriptors.base import LiveComponent, TypedState
 from djust.decorators import state
 from djust.forms import FormMixin
 from djust.tests import _per_turn_harness as harness
+from djust.tests._frames import legacy_type
 from djust.tests._ws_frames import drain_extra, has_type, receive_until
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
@@ -1337,11 +1338,11 @@ async def test_websocket_frames_are_identical(monkeypatch, label, view_class, sc
     # the same cases with an interval (the default since #4164).
     with override_settings(DJUST_STATE_SAVE_INTERVAL=0):
         before, after = await both(lambda: run_ws(view_class, script), monkeypatch)
-    assert [f.get("type") for f in after] == [f.get("type") for f in before]
+    assert [legacy_type(f) for f in after] == [legacy_type(f) for f in before]
     for index, (old, new) in enumerate(zip(before, after)):
         assert as_bytes(new) == as_bytes(old), f"frame {index} of {label} differs"
     # Not vacuous: the script produced renders, not only acknowledgements.
-    assert any(f.get("type") in ("patch", "html_update") for f in after[1:]), after
+    assert any(legacy_type(f) in ("patch", "html_update") for f in after[1:]), after
     FRAMES_COMPARED.append(len(after) - 1)
 
 
@@ -1653,11 +1654,16 @@ async def test_a_time_varying_processor_on_the_scoped_component_path(monkeypatch
     assert [f["event_name"] for f in new[1:]] == [f["event_name"] for f in old[1:]] == events
     # Old: component events are scoped patches that never mention the value;
     # the one view event renders the page and happens to carry it.
-    assert [f["type"] for f in old[1:]] == ["patch"] * len(events)
+    assert [legacy_type(f) for f in old[1:]] == ["patch"] * len(events)
     assert [shown(f) for f in old[1:]] == [[], [], ["T2"], []]
     # New: every frame carries the value its own processor run returned, and a
     # component event pays for that with the page's HTML.
-    assert [f["type"] for f in new[1:]] == ["html_update", "html_update", "patch", "html_update"]
+    assert [legacy_type(f) for f in new[1:]] == [
+        "html_update",
+        "html_update",
+        "patch",
+        "html_update",
+    ]
     assert [shown(f) for f in new[1:]] == [["T2"], ["T3"], ["T4"], ["T5"]]
     # Processor runs. Old: the mount and the view event; a scoped patch ran
     # none. New: the mount and ONE per event, because the page render that

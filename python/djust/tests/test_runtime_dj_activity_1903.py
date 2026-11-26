@@ -44,6 +44,8 @@ import django
 import pytest
 from django.conf import settings
 
+from djust.tests._frames import legacy_type
+
 # Configure Django before importing anything that needs settings.
 if not settings.configured:
     settings.configure(
@@ -76,7 +78,6 @@ if not settings.configured:
 from djust import LiveView  # noqa: E402
 from djust.decorators import event_handler  # noqa: E402
 from djust.runtime import ViewRuntime  # noqa: E402
-
 
 # ------------------------------------------------------------------ #
 # Test transport — records every outbound frame.
@@ -243,7 +244,7 @@ class TestRuntimeActivityGate:
         assert "panel" in view._deferred_activity_events
         assert len(view._deferred_activity_events["panel"]) == 1
         # Exactly one frame: a no-op (no patch / html_update).
-        types = [m.get("type") for m in transport.sent]
+        types = [legacy_type(m) for m in transport.sent]
         assert types == ["noop"], f"expected a single noop, got {transport.sent!r}"
         assert transport.sent[0].get("ref") == 1
         assert transport.sent[0].get("event_name") == "bump"
@@ -274,7 +275,7 @@ class TestRuntimeActivityGate:
         assert view.count == 1, (
             "gate-off must let the hidden-activity event run (else gate test is a tautology)"
         )
-        types = [m.get("type") for m in transport.sent]
+        types = [legacy_type(m) for m in transport.sent]
         assert any(t in ("patch", "html_update") for t in types), (
             f"gate-off must produce a render frame, got {transport.sent!r}"
         )
@@ -305,7 +306,7 @@ class TestRuntimeActivityGate:
 
         assert view.count == 1, "the queued bump must have drained when the panel flipped visible"
         assert "panel" not in view._deferred_activity_events, "queue popped clean after drain"
-        render_frames = [m for m in transport.sent if m.get("type") in ("patch", "html_update")]
+        render_frames = [m for m in transport.sent if legacy_type(m) in ("patch", "html_update")]
         assert len(render_frames) >= 2, (
             f"expected the show_panel render AND the drained bump render, got {transport.sent!r}"
         )
@@ -326,7 +327,7 @@ class TestRuntimeActivityGate:
         )
 
         assert view.count == 1, "no-activity view must run + render normally"
-        types = [m.get("type") for m in transport.sent]
+        types = [legacy_type(m) for m in transport.sent]
         assert any(t in ("patch", "html_update") for t in types), (
             f"no-activity view must produce a render frame, got {transport.sent!r}"
         )
@@ -378,7 +379,7 @@ class TestRuntimeActivityGate:
         # The denied event produced an error frame (validation), NOT a render —
         # and the queue is popped clean.
         assert "panel" not in view._deferred_activity_events
-        render_frames = [m for m in transport.sent if m.get("type") in ("patch", "html_update")]
+        render_frames = [m for m in transport.sent if legacy_type(m) in ("patch", "html_update")]
         assert not render_frames, "a denied queued event must NOT render"
 
 
@@ -499,11 +500,10 @@ _HTTP_SESSIONS: dict = {}
 async def _mount_stream(view_path, *, query=""):
     from asgiref.sync import sync_to_async
     from django.contrib.auth.models import AnonymousUser
-
-    from djust.testing import live_session
     from django.test import RequestFactory
 
     from djust.sse import DjustSSEStreamView, _sse_sessions
+    from djust.testing import live_session
 
     sid = "33333333-3333-3333-3333-333333333333"
     _sse_sessions.pop(sid, None)
@@ -567,9 +567,9 @@ class TestSSEActivityViaRuntime:
             assert view.count == 0, "SSE hidden-activity event must be deferred, not run"
             assert "panel" in view._deferred_activity_events
             msgs = _drain(session)
-            render_frames = [m for m in msgs if m.get("type") in ("patch", "html_update")]
+            render_frames = [m for m in msgs if legacy_type(m) in ("patch", "html_update")]
             assert not render_frames, f"deferred SSE event must NOT render, got {msgs!r}"
-            assert any(m.get("type") == "noop" for m in msgs), f"expected a noop, got {msgs!r}"
+            assert any(legacy_type(m) == "noop" for m in msgs), f"expected a noop, got {msgs!r}"
 
     @pytest.mark.asyncio
     @pytest.mark.django_db(transaction=True)
@@ -595,7 +595,7 @@ class TestSSEActivityViaRuntime:
             assert view.count == 1, "the queued bump must drain when the SSE panel flips visible"
             assert "panel" not in view._deferred_activity_events
             msgs = _drain(session)
-            render_frames = [m for m in msgs if m.get("type") in ("patch", "html_update")]
+            render_frames = [m for m in msgs if legacy_type(m) in ("patch", "html_update")]
             assert len(render_frames) >= 2, (
                 f"expected show_panel + drained-bump render frames, got {msgs!r}"
             )
@@ -618,6 +618,6 @@ class TestSSEActivityViaRuntime:
             view = session.runtime.view_instance
             assert view.count == 1
             msgs = _drain(session)
-            assert any(m.get("type") in ("patch", "html_update") for m in msgs), (
+            assert any(legacy_type(m) in ("patch", "html_update") for m in msgs), (
                 f"no-activity SSE view must render normally, got {msgs!r}"
             )

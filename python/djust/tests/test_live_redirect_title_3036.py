@@ -14,12 +14,12 @@ from django.contrib.auth.models import AnonymousUser
 from django.contrib.sessions.backends.db import SessionStore
 from django.test import override_settings
 
-from djust import LiveView
+from djust import LiveView, state
 from djust.runtime import document_title, navigation_title
+from djust.tests._frames import effects_of
 from djust.websocket import LiveViewConsumer
 
 from ._ws_frames import drain_extra, receive_until, types_of
-from djust import state
 
 SETTINGS = dict(DEBUG=False, DJUST_TENANTS=None, DJUST_CONFIG={})
 
@@ -194,11 +194,7 @@ async def _navigate(target: str, *, title: bool = True):
 
 
 def _titles(frames):
-    return [
-        f["value"]
-        for f in frames
-        if f.get("type") == "page_metadata" and f.get("action") == "title"
-    ]
+    return [f["value"] for f in effects_of(frames, "page_metadata") if f.get("action") == "title"]
 
 
 @pytest.mark.django_db(transaction=True)

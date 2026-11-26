@@ -36,6 +36,7 @@ from django.utils.functional import SimpleLazyObject
 
 from djust import LiveView
 from djust.decorators import event_handler, state
+from djust.tests._frames import frame_matches, legacy_type
 from djust.tests.http_fallback_matrix import PAGE, meta_digest, post_event
 
 MODULE = __name__
@@ -91,7 +92,7 @@ def _routes():
 
 
 def _assert_fallback_then_patches(answers: List[dict]) -> None:
-    kinds = [answer["type"] for answer in answers]
+    kinds = [legacy_type(answer) for answer in answers]
     assert kinds == ["html_update", "patch", "patch"], [
         (a["type"], len(a.get("patches") or [])) for a in answers
     ]
@@ -136,7 +137,7 @@ async def _until(comm: Any, types: Tuple[str, ...]) -> dict:
     for _ in range(30):
         frame = await comm.receive_json_from(timeout=10)
         assert frame.get("type") != "error", frame
-        if frame.get("type") in types:
+        if frame_matches(frame, types):
             return frame
     raise AssertionError("no %s frame" % (types,))
 
@@ -155,9 +156,9 @@ async def test_websocket_gate_off_a_small_change_alone_is_a_patch_and_shift_is_t
     """The contrast: ``touch`` patches on its own and ``shift`` alone is the
     whole page, so the test above measures what follows the fallback."""
     _mounted, answers = await _ws_answers([("touch", {"value": "after"})])
-    assert [a["type"] for a in answers] == ["patch"]
+    assert [legacy_type(a) for a in answers] == ["patch"]
     _mounted, answers = await _ws_answers([("shift", {})])
-    assert [a["type"] for a in answers] == ["html_update"]
+    assert [legacy_type(a) for a in answers] == ["html_update"]
 
 
 def _sse_request(method: str, url: str, body: Any, key: str) -> Any:
@@ -179,7 +180,7 @@ async def _sse_frame(stream: Any, *types: str) -> dict:
         chunk = await asyncio.wait_for(stream.__anext__(), timeout=deadline - loop.time())
         if chunk.startswith("data:"):
             frame = json.loads(chunk[len("data:") :])
-            if frame.get("type") in types:
+            if frame_matches(frame, types):
                 return frame
 
 

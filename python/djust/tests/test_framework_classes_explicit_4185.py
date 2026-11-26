@@ -36,7 +36,8 @@ from djust import LiveView
 from djust._parameter_contract import ContractError, ParameterError
 from djust.admin_ext import DjustAdminSite, DjustModelAdmin
 from djust.components.descriptors import Dropdown, Modal, Tabs
-from djust.tests.test_admin_page_render import _Socket, _session_cookie
+from djust.tests._frames import frame_matches, legacy_type
+from djust.tests.test_admin_page_render import _session_cookie, _Socket
 from djust.validation import (
     bind_declared_component_name,
     declared_framework_arguments,
@@ -223,7 +224,7 @@ async def _sse_frame(stream, *types):
         chunk = await asyncio.wait_for(stream.__anext__(), timeout=deadline - loop.time())
         if chunk.startswith("data:"):
             frame = json.loads(chunk[len("data:") :])
-            if frame.get("type") in types:
+            if frame_matches(frame, types):
                 return frame
 
 
@@ -299,7 +300,7 @@ async def test_change_list_over_the_websocket(site_urls, django_user_model):
     )
     assert "Widget for" in mounted["html"]  # the explicit widget is embedded
     assert {"alpha", "beta", "gamma"} <= set(_row_order(mounted["html"]))
-    assert all(answer["type"] in ("patch", "html_update") for answer in answers), answers
+    assert all(legacy_type(answer) in ("patch", "html_update") for answer in answers), answers
     assert "1 selected" in json.dumps(answers[1])
 
 
@@ -325,7 +326,7 @@ async def test_change_list_over_sse(site_urls, django_user_model):
         LIST_VIEW, LIST, key, [("sort_by", {"field": "name"}), ("toggle_select", {"pk": pks[0]})]
     )
     assert mounted["type"] == "mount" and "Widget for" in mounted["html"]
-    assert [answer["type"] for answer in answers] == ["patch", "patch"], answers
+    assert [legacy_type(answer) for answer in answers] == ["patch", "patch"], answers
     assert "1 selected" in json.dumps(answers[1])
 
 
@@ -348,7 +349,7 @@ async def test_change_form_saves(site_urls, django_user_model, transport):
         key = browser.cookies[settings.SESSION_COOKIE_NAME].value
         mounted, answers = await _sse(DETAIL_VIEW, url, key, _EDITS)
     assert "edit-me" in mounted["html"] and "Widget for" in mounted["html"]
-    assert all(answer["type"] in ("patch", "html_update") for answer in answers), answers
+    assert all(legacy_type(answer) in ("patch", "html_update") for answer in answers), answers
     assert await sync_to_async(lambda: Group.objects.get(pk=group.pk).name)() == "edited"
 
 
@@ -467,7 +468,7 @@ async def test_the_alias_dispatches_under_strict_over_the_websocket(site_urls):
         "/alias/",
         [("toggle_modal", {}), ("set_tab", {"value": "third"}), ("toggle_dropdown", {})],
     )
-    assert "error" not in [answer["type"] for answer in answers], answers
+    assert "error" not in [legacy_type(answer) for answer in answers], answers
     text = json.dumps(answers)
     assert "dialog=True" in text and "tab=third" in text and "menu=True" in text
 
@@ -504,5 +505,5 @@ async def test_the_alias_dispatches_under_strict_over_sse(site_urls):
         key,
         [("toggle_modal", {}), ("set_tab", {"value": "third"})],
     )
-    assert [answer["type"] for answer in answers] != ["error", "error"], answers
+    assert [legacy_type(answer) for answer in answers] != ["error", "error"], answers
     assert "tab=third" in json.dumps(answers[-1]) and "dialog=True" in json.dumps(answers)

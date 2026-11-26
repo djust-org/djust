@@ -48,9 +48,9 @@ from asgiref.sync import sync_to_async
 from django.test import override_settings
 
 from djust import LiveView
-from djust.decorators import event_handler
+from djust.decorators import event_handler, state
 from djust.runtime import ViewRuntime
-from djust.decorators import state
+from djust.tests._frames import frame_matches
 
 pytestmark = pytest.mark.django_db
 
@@ -112,7 +112,7 @@ class MockTransport:
         return None
 
     def frames_of(self, *types: str) -> List[Dict[str, Any]]:
-        return [m for m in self.sent if m.get("type") in types]
+        return [m for m in self.sent if frame_matches(m, types)]
 
 
 # --------------------------------------------------------------------------- #

@@ -21,6 +21,7 @@ from djust import LiveView
 from djust.decorators import event_handler
 from djust.presence import PresenceMixin
 from djust.push import presence_scope_group_name, push_scope_group_name
+from djust.tests._frames import legacy_type
 
 pytest.importorskip("channels")
 
@@ -221,7 +222,7 @@ async def _receive_until(communicator, wanted, *, tries=8, timeout=30):
     last = None
     for _ in range(tries):
         last = await communicator.receive_json_from(timeout=timeout)
-        if last.get("type") == wanted:
+        if legacy_type(last) == wanted:
             return last
     return last
 
@@ -234,7 +235,7 @@ async def _until_marker(communicator, marker):
 
 
 def _text(frames):
-    return json.dumps([f.get("patches") for f in frames if f.get("type") == "patch"])
+    return json.dumps([f.get("patches") for f in frames if legacy_type(f) == "patch"])
 
 
 async def _settle(*comms, markers=None):
@@ -303,7 +304,7 @@ async def test_a_join_wakes_only_the_room_that_shares_the_presence_key(_fresh_pr
             a_marker="a:2:",
         )
     assert "a:2:" in _text(fa), f"room a did not see its count change: {fa!r}"
-    assert not [f for f in fb if f.get("type") == "patch"], f"room b was woken: {fb!r}"
+    assert not [f for f in fb if legacy_type(f) == "patch"], f"room b was woken: {fb!r}"
 
 
 @pytest.mark.django_db(transaction=True)
@@ -351,7 +352,7 @@ async def test_a_viewer_that_does_not_track_still_sees_its_room_change(_fresh_pr
             a_marker="a:1:1",
         )
     assert "a:1:1" in _text(fa), f"the watching session was not refreshed: {fa!r}"
-    assert not [f for f in fb if f.get("type") == "patch"], f"room b was woken: {fb!r}"
+    assert not [f for f in fb if legacy_type(f) == "patch"], f"room b was woken: {fb!r}"
 
 
 @pytest.mark.django_db(transaction=True)

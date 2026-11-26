@@ -17,6 +17,7 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 from _transports import INIT, TransportWatch
+from djust._protocol import PROTOCOL_HEADER, PROTOCOL_VERSION
 
 ROOT = Path(__file__).resolve().parents[2]
 PROJECT = {
@@ -151,9 +152,12 @@ def main():
                             url,
                             data={"event": "djust_lazy_mount", "params": {"view_id": ids[0]}},
                             headers={
+                                # Name the current wire protocol (#3658) so the
+                                # 400 below is the cross-session refusal, not 409.
+                                PROTOCOL_HEADER: str(PROTOCOL_VERSION),
                                 "X-CSRFToken": next(
                                     c["value"] for c in other.cookies() if c["name"] == "csrftoken"
-                                )
+                                ),
                             },
                         )
                         assert response.status == 400

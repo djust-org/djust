@@ -47,10 +47,9 @@ import uuid
 import pytest
 from asgiref.sync import sync_to_async
 
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
-from djust import state
-
+from djust.tests._frames import legacy_type
 
 # ------------------------------------------------------------------ #
 # View under test — count drives a diffable patch; handle_params lets a
@@ -90,7 +89,7 @@ async def _receive_until(communicator, wanted_type, *, tries=6, timeout=30):
     last = None
     for _ in range(tries):
         last = await communicator.receive_json_from(timeout=timeout)
-        if last.get("type") == wanted_type:
+        if legacy_type(last) == wanted_type:
             return last
     return last
 
@@ -253,7 +252,7 @@ class TestUrlChangeEndToEndPreserved:
                 {"type": "url_change", "params": {"page": "7"}, "uri": "/page/?page=7"}
             )
             frame = await communicator.receive_json_from(timeout=30)
-            assert frame.get("type") in ("patch", "html_update"), (
+            assert legacy_type(frame) in ("patch", "html_update"), (
                 f"url_change must emit a patch/html_update update frame, got {frame!r}"
             )
             # The state mutation from handle_params must be reflected: for an
@@ -274,10 +273,9 @@ class TestUrlChangeEndToEndPreserved:
         error frame (the runtime inner method's guard), routed through the
         chokepoint — same observable shape as the old shim's guard.
         """
-        from django.test import override_settings
-
         from channels.testing import WebsocketCommunicator
         from django.contrib.sessions.backends.db import SessionStore
+        from django.test import override_settings
 
         from djust.websocket import LiveViewConsumer
 
@@ -346,7 +344,7 @@ class TestWSOnlyFramesPreserved:
                 {"type": "event", "event": "bump", "params": {}, "ref": 1}
             )
             frame = await _receive_until(communicator, "patch")
-            assert frame.get("type") in ("patch", "html_update"), (
+            assert legacy_type(frame) in ("patch", "html_update"), (
                 f"binary upload frame must not break the connection; the "
                 f"following event must still respond, got {frame!r}"
             )
@@ -414,7 +412,7 @@ class TestWSOnlyFramesPreserved:
                 {"type": "event", "event": "bump", "params": {}, "ref": 1}
             )
             frame = await _receive_until(communicator, "patch")
-            assert frame.get("type") in ("patch", "html_update"), (
+            assert legacy_type(frame) in ("patch", "html_update"), (
                 f"event must still produce a render frame via the runtime, got {frame!r}"
             )
             # event MUST now route through the runtime chokepoint exactly once.
@@ -604,7 +602,7 @@ class TestRuntimeOwnedVerbsContract:
             consumer, routed = self._consumer_with_routing_spies()
             await consumer.receive(text_data=json.dumps({"type": verb}))
 
-            assert [c.get("type") for c in routed["runtime"]] == [verb], (
+            assert [legacy_type(c) for c in routed["runtime"]] == [verb], (
                 f"verb {verb!r} is in RUNTIME_OWNED_VERBS but receive() did NOT "
                 f"route it through _dispatch_runtime_owned — the set has drifted "
                 f"from the routing (#1852). routed={routed!r}"
@@ -639,7 +637,7 @@ class TestRuntimeOwnedVerbsContract:
         # event → the runtime helper (#1907 THE FLIP), NOT handle_event.
         consumer, routed = self._consumer_with_routing_spies()
         await consumer.receive(text_data=json.dumps({"type": "event", "event": "bump"}))
-        assert [c.get("type") for c in routed["runtime"]] == ["event"], routed
+        assert [legacy_type(c) for c in routed["runtime"]] == ["event"], routed
         assert routed["event"] == [], (
             "'event' must route to _dispatch_runtime_owned (the runtime chokepoint), "
             f"NOT the deleted bespoke handle_event path; routed={routed!r}"
@@ -648,7 +646,7 @@ class TestRuntimeOwnedVerbsContract:
         # mount → the runtime helper (#1919 THE MOUNT FLIP), NOT the bespoke shim.
         consumer, routed = self._consumer_with_routing_spies()
         await consumer.receive(text_data=json.dumps({"type": "mount", "view": "x"}))
-        assert [c.get("type") for c in routed["runtime"]] == ["mount"], routed
+        assert [legacy_type(c) for c in routed["runtime"]] == ["mount"], routed
         assert routed["mount"] == [], (
             "'mount' must route to _dispatch_runtime_owned (the runtime chokepoint) "
             f"post-#1919, NOT the bespoke _mount_page shim; routed={routed!r}"
@@ -662,7 +660,7 @@ class TestRuntimeOwnedVerbsContract:
 
         consumer.handle_mount_batch = _spy_batch
         await consumer.receive(text_data=json.dumps({"type": "mount_batch", "views": []}))
-        assert [c.get("type") for c in routed.get("batch", [])] == ["mount_batch"], routed
+        assert [legacy_type(c) for c in routed.get("batch", [])] == ["mount_batch"], routed
         assert routed["runtime"] == [], (
             "'mount_batch' is a WS-only verb and must route to handle_mount_batch, "
             f"NOT _dispatch_runtime_owned; routed={routed!r}"

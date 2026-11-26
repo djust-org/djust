@@ -19,7 +19,7 @@ import pytest
 from asgiref.sync import sync_to_async
 from django.test import override_settings
 
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 from djust.push import (
     AMBIENT_TENANT,
@@ -31,7 +31,7 @@ from djust.push import (
 )
 from djust.tenants.mixin import TenantMixin
 from djust.tenants.resolvers import TenantInfo
-from djust import state
+from djust.tests._frames import legacy_type
 
 pytest.importorskip("channels")
 
@@ -369,7 +369,7 @@ async def _frames_until(comm, marker):
     return await receive_until(
         comm,
         lambda fs: any(
-            f.get("type") in ("patch", "html_update") and marker in _text(f) for f in fs
+            legacy_type(f) in ("patch", "html_update") and marker in _text(f) for f in fs
         ),
         what=f"a frame containing {marker!r}",
     )
@@ -494,7 +494,6 @@ def test_a_view_this_process_has_not_imported_follows_the_tenant(sent):
 
 def test_a_tenant_less_push_to_a_tenant_view_is_logged_once(sent, push_log):
     from djust import push
-
     from djust.tenants.middleware import tenant_context
 
     push._WARNED_NO_TENANT.discard(VIEW)

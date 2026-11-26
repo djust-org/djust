@@ -32,10 +32,11 @@ from django.test import Client, RequestFactory, override_settings
 from django.urls import path
 
 from djust import LiveView
+from djust import state as djust_state
 from djust.testing import LiveViewTestClient
+from djust.tests._frames import legacy_type
 
 from ._ws_frames import drain_extra, receive_until
-from djust import state as djust_state
 
 pytestmark = pytest.mark.django_db
 
@@ -1023,7 +1024,7 @@ class TestSocketUrlChange(_Cases):
             )
             frames = await receive_until(
                 communicator,
-                lambda fs: any(f.get("type") in ("patch", "html_update", "error") for f in fs),
+                lambda fs: any(legacy_type(f) in ("patch", "html_update", "error") for f in fs),
             )
             last = frames[-1]
             if last["type"] == "error":

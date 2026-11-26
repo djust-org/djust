@@ -36,9 +36,9 @@ import pytest
 from djust import LiveView
 from djust.components.base import LiveComponent
 from djust.decorators import event_handler, state
+from djust.tests._frames import legacy_type
 
 from ._ws_frames import drain_extra, has_type, receive_until
-
 
 # ---------------------------------------------------------------------------
 # Harness
@@ -50,7 +50,7 @@ async def _receive_until(communicator, wanted_type, *, tries=8, timeout=30):
     last = None
     for _ in range(tries):
         last = await communicator.receive_json_from(timeout=timeout)
-        if last.get("type") == wanted_type:
+        if legacy_type(last) == wanted_type:
             return last
     return last
 
@@ -79,6 +79,7 @@ async def _connect_and_mount(view_path: str, url: str = "/parity/"):
     """
     pytest.importorskip("channels")
     from channels.testing import WebsocketCommunicator
+
     from djust.testing import with_live_session
     from djust.websocket import LiveViewConsumer
 
@@ -303,7 +304,7 @@ class TestComponentIdRouting:
             # #1898 FIX (#1907 THE FLIP): the runtime component_id path re-renders
             # the parent and emits a parent-scoped html_update — NOT the bespoke
             # error frame.
-            assert resp.get("type") == "html_update", (
+            assert legacy_type(resp) == "html_update", (
                 "#1907 THE FLIP fixed #1898: the runtime component_id path now "
                 "re-renders the parent and emits a parent-scoped html_update "
                 f"(the deleted bespoke path returned an error frame). Got {resp!r}"
@@ -381,7 +382,7 @@ class TestActivityDeferral:
                 }
             )
             deferred = await communicator.receive_json_from()
-            assert deferred.get("type") == "noop", (
+            assert legacy_type(deferred) == "noop", (
                 "an event on a hidden non-eager activity must be deferred with a "
                 f"noop (no render); got {deferred!r}"
             )
@@ -430,7 +431,7 @@ class TestActivityDeferral:
             )
             resp = await _receive_until(communicator, "patch")
 
-            assert resp.get("type") in ("patch", "html_update"), (
+            assert legacy_type(resp) in ("patch", "html_update"), (
                 f"an ungated bump must render immediately (not defer); got {resp!r}"
             )
             assert resp.get("event_name") == "bump"
@@ -463,7 +464,7 @@ class TestRefEcho:
                 {"type": "event", "event": "noop_event", "params": {}, "ref": 11}
             )
             noop = await communicator.receive_json_from()
-            assert noop.get("type") == "noop", f"no-state-change event must noop; got {noop!r}"
+            assert legacy_type(noop) == "noop", f"no-state-change event must noop; got {noop!r}"
             assert noop.get("ref") == 11, f"noop must echo ref=11; got {noop!r}"
 
             # (b) patch frame
@@ -471,7 +472,7 @@ class TestRefEcho:
                 {"type": "event", "event": "patch_change", "params": {}, "ref": 22}
             )
             patch = await _receive_until(communicator, "patch")
-            assert patch.get("type") == "patch", f"text change must patch; got {patch!r}"
+            assert legacy_type(patch) == "patch", f"text change must patch; got {patch!r}"
             assert patch.get("ref") == 22, f"patch must echo ref=22; got {patch!r}"
 
             # (c) html_update frame
@@ -479,7 +480,7 @@ class TestRefEcho:
                 {"type": "event", "event": "force", "params": {}, "ref": 33}
             )
             html_update = await _receive_until(communicator, "html_update")
-            assert html_update.get("type") == "html_update", (
+            assert legacy_type(html_update) == "html_update", (
                 f"_force_full_html must html_update; got {html_update!r}"
             )
             assert html_update.get("ref") == 33, (
@@ -501,7 +502,7 @@ class TestRefEcho:
                 {"type": "event", "event": "patch_change", "params": {}}
             )
             patch = await _receive_until(communicator, "patch")
-            assert patch.get("type") == "patch", f"text change must patch; got {patch!r}"
+            assert legacy_type(patch) == "patch", f"text change must patch; got {patch!r}"
             assert "ref" not in patch, (
                 f"a ref-less event must not carry a ref in its response; got {patch!r}"
             )
@@ -533,7 +534,7 @@ class TestForceFullHtml:
                 {"type": "event", "event": "force_once", "params": {}, "ref": 1}
             )
             forced = await _receive_until(communicator, "html_update")
-            assert forced.get("type") == "html_update", (
+            assert legacy_type(forced) == "html_update", (
                 f"_force_full_html must produce an html_update; got {forced!r}"
             )
             assert forced.get("html"), "the html_update must carry full HTML"
@@ -547,7 +548,7 @@ class TestForceFullHtml:
                 {"type": "event", "event": "plain_bump", "params": {}, "ref": 2}
             )
             nxt = await _receive_until(communicator, "patch")
-            assert nxt.get("type") == "patch", (
+            assert legacy_type(nxt) == "patch", (
                 "the event after a forced frame must patch normally — the "
                 f"_force_full_html flag must be consumed; got {nxt!r}"
             )
@@ -568,7 +569,7 @@ class TestForceFullHtml:
                 {"type": "event", "event": "plain_bump", "params": {}, "ref": 1}
             )
             resp = await _receive_until(communicator, "patch")
-            assert resp.get("type") == "patch", (
+            assert legacy_type(resp) == "patch", (
                 f"a text change with no _force_full_html must patch (not html_update); got {resp!r}"
             )
 
@@ -1010,7 +1011,7 @@ class TestDebugResidualOnEventFrame:
                 {"type": "event", "event": "bump", "params": {}, "ref": 1}
             )
             frames = await _drain_available(communicator, until=_RENDER)
-            render_frames = [f for f in frames if f.get("type") in ("patch", "html_update")]
+            render_frames = [f for f in frames if legacy_type(f) in ("patch", "html_update")]
             assert render_frames, f"expected a render frame; got {frames!r}"
             assert any("_debug" in f for f in render_frames), (
                 "a DEBUG runtime-routed WS event frame must carry the _debug panel "
@@ -1031,7 +1032,7 @@ class TestDebugResidualOnEventFrame:
                 {"type": "event", "event": "bump", "params": {}, "ref": 1}
             )
             frames = await _drain_available(communicator, until=_RENDER)
-            render_frames = [f for f in frames if f.get("type") in ("patch", "html_update")]
+            render_frames = [f for f in frames if legacy_type(f) in ("patch", "html_update")]
             assert render_frames, f"expected a render frame; got {frames!r}"
             assert any("timing" in f and "render" in f["timing"] for f in render_frames), (
                 "under DJUST_EXPOSE_TIMING the event frame must carry timing.render "
@@ -1054,7 +1055,7 @@ class TestDebugResidualOnEventFrame:
                 {"type": "event", "event": "bump", "params": {}, "ref": 1}
             )
             frames = await _drain_available(communicator, until=_RENDER)
-            render_frames = [f for f in frames if f.get("type") in ("patch", "html_update")]
+            render_frames = [f for f in frames if legacy_type(f) in ("patch", "html_update")]
             assert render_frames, f"expected a render frame; got {frames!r}"
             for f in render_frames:
                 assert "_debug" not in f, f"prod frame must not carry _debug; got {f.keys()}"

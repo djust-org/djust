@@ -208,7 +208,9 @@ class AudioMixin:
         if not checked or not getattr(self, "_audio_ready", False):
             return
         queued = sum(
-            len(p.get("events", [])) for e, p in self._pending_push_events if e == "djust:audio"
+            len(p["payload"].get("events", []))
+            for p in self._pending("push_event")
+            if p["event"] == "djust:audio"
         )
         # Drop overload rather than building an audible backlog.
         checked = checked[: max(0, 32 - queued)]
@@ -230,5 +232,5 @@ class AudioMixin:
             return
         # Coalesce repeated stops in the same turn.
         payload = {"version": 1, "op": "stop", "scope": self._audio_scope, "bank": bank}
-        if ("djust:audio", payload) not in self._pending_push_events:
+        if {"event": "djust:audio", "payload": payload} not in self._pending("push_event"):
             self.push_event("djust:audio", payload)

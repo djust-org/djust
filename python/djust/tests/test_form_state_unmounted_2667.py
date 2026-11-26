@@ -29,10 +29,10 @@ import pytest
 from django import forms
 from django.test import override_settings
 
-from djust import LiveView
+from djust import LiveView, state
 from djust.forms import FormMixin
-from djust import state
 from djust.testing import with_live_session
+from djust.tests._frames import frame_matches, legacy_type
 
 pytestmark = [pytest.mark.django_db]
 
@@ -118,7 +118,7 @@ async def _drive(cls_name: str) -> Dict[str, Any]:
         for _ in range(6):
             frame = await comm.receive_json_from()
             frames.append(frame)
-            if frame.get("type") in _TERMINAL:
+            if frame_matches(frame, _TERMINAL):
                 break
         out["frames"] = frames
     finally:
@@ -148,7 +148,7 @@ class TestSubmitFormWithoutMount:
     def test_submit_empty_form_does_not_error(self, cls_name: str) -> None:
         out = _run(cls_name)
         assert out["mount"].get("type") == "mount", out["mount"]
-        kinds = [f.get("type") for f in out["frames"]]
+        kinds = [legacy_type(f) for f in out["frames"]]
         assert "error" not in kinds, (
             f"{cls_name}: submitting an empty form produced an error frame "
             f"({out['frames']}) — this is #2667 ('no attribute form_data')."

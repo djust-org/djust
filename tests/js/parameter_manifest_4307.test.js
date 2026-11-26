@@ -41,7 +41,7 @@ function setup() {
     const lookup = (component, event) => t.lookup(transport, 'app.Page', null, component, event);
     // A frame through receipt, then its DOM application's refresh.
     const receive = data => { t.receive(transport, data); return data; };
-    const render = manifest => receive({type: 'patch', patches: [], parameter_contracts: manifest,
+    const render = manifest => receive({type: 'render', patches: [], parameter_contracts: manifest,
         parameter_contract_view: 'app.Page'});
     return {dom, t, transport, lookup, receive, render};
 }
@@ -237,7 +237,7 @@ describe('a mount_batch cannot evict the page manifest the server elides to', ()
             expect(lookup('app.W5', 'go5').parameters[0].name).toBe('value');
             // Five distinct manifests passed through the client's cache; the
             // server's last top-level manifest is still the page's.
-            await transport.handleMessage({type: 'patch', patches: [], version: 2,
+            await transport.handleMessage({type: 'render', patches: [], version: 2,
                 parameter_contracts: page.digest, parameter_contract_view: 'app.Page'});
             expect(lookup('app.Page', 'note').parameters[0].name).toBe('kwargs');
         } finally { dom.window.close(); }

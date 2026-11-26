@@ -15,6 +15,7 @@ from djust._rust import RustLiveView, authored_lazy_elements
 from djust.decorators import event_handler, state
 from djust.tenants.mixin import TenantMixin
 from djust.tenants.resolvers import TenantInfo
+from djust.tests._frames import legacy_type
 
 MOD = __name__
 TAG = '<div dj-view="' + MOD + '.Child" dj-lazy></div>'
@@ -272,7 +273,7 @@ def test_http_two_instances_retain_public_and_private_state_and_mount_on_trigger
         response = post(SessionStore(session.session_key), view_id, event)
         assert response.status_code == 200, response.content
         data = json.loads(response.content)
-        assert data["view_id"] == view_id and data["type"] == "embedded_update"
+        assert data["view_id"] == view_id and legacy_type(data) == "embedded_update"
         assert re.search(r'class="count"[^>]*>' + str(expected) + "</span>", data["html"]), data
 
 
@@ -375,8 +376,9 @@ def test_same_session_user_and_tenant_bindings_do_not_share_state(django_user_mo
 
 
 def test_nested_renderer_callback_cannot_grant_its_output_authority():
-    from djust._rust import register_tag_handler, unregister_tag_handler
     from django.utils.safestring import mark_safe
+
+    from djust._rust import register_tag_handler, unregister_tag_handler
 
     class Nested:
         def render(self, args, context):

@@ -23,9 +23,10 @@
 // `_activeSlot`, `_slotVersions`, `_mountedSlots`.
 
 // The frames the server addresses to a slot with ``target_id``. The others
-// (errors, upload progress, flash, ...) do not depend on a view's container.
+// (errors, upload progress, ...) do not depend on a view's container, and a
+// `render` frame's effects are page-level (handleSlotFrame).
 const _SLOT_FRAME_TYPES = new Set([
-    'mount', 'patch', 'html_update', 'html_recovery', 'embedded_update', 'child_update', 'sticky_update',
+    'mount', 'render', 'html_recovery', 'child_update', 'sticky_update',
 ]);
 
 // Slots that have had a mount and are still around, kept across a reconnect (a

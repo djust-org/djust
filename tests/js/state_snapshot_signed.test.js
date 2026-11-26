@@ -36,14 +36,16 @@ describe.each(['websocket', 'sse'])('explicit event snapshots (%s)', (transport)
         handler._pendingViewPath = 'app.views.Orders';
         return handler;
     }
-    for (const type of ['noop', 'patch', 'html_update']) {
-        it(type + ' refreshes the opaque token for navigation', async () => {
+    // A render frame with no DOM part (1.x `noop`) or with patches.
+    const PARTS = { 'acknowledgement': {}, 'patch': { patches: [] } };
+    for (const part of Object.keys(PARTS)) {
+        it('a render ' + part + ' refreshes the opaque token for navigation', async () => {
             const { window } = createEnv();
             const handler = makeHandler(window);
             window.djust._clientState = { 'app.views.Orders': 'old-token' };
             await handler.handleMessage({
-                type, source: 'event', view: 'app.views.Orders',
-                state_snapshot_signed: SIGNED_BLOB, patches: [], version: 1,
+                type: 'render', source: 'event', view: 'app.views.Orders',
+                state_snapshot_signed: SIGNED_BLOB, ...PARTS[part], version: 1, effects: [],
             });
             expect(window.djust._stateSnapshot._serialize('app.views.Orders')).toBe(SIGNED_BLOB);
             window.djust._routeMap = { '/orders': 'app.views.Orders' };
@@ -56,13 +58,14 @@ describe.each(['websocket', 'sse'])('explicit event snapshots (%s)', (transport)
         });
     }
 
-    it.each(['mount', 'noop', 'patch', 'html_update'])('%s null invalidates the previously cached token', async (type) => {
+    it.each([['mount', {}], ['render acknowledgement', { effects: [] }], ['render patch', { patches: [], effects: [] }]])(
+        '%s null invalidates the previously cached token', async (name, part) => {
         const { window } = createEnv();
         const handler = makeHandler(window);
         window.djust._clientState = { 'app.views.Orders': SIGNED_BLOB };
         await handler.handleMessage({
-            type, source: 'event', view: 'app.views.Orders',
-            state_snapshot_signed: null, patches: [], version: 1,
+            type: name === 'mount' ? 'mount' : 'render', source: 'event', view: 'app.views.Orders',
+            state_snapshot_signed: null, ...part, version: 1,
         });
         expect(window.djust._stateSnapshot._serialize('app.views.Orders')).toBeNull();
         const forgotten = [];
@@ -87,7 +90,7 @@ describe.each(['websocket', 'sse'])('explicit event snapshots (%s)', (transport)
             const handler = makeHandler(window);
             window.djust._clientState = { 'app.views.Orders': 'old-token' };
             await handler.handleMessage({
-                type: 'patch', source, view: 'app.views.Orders',
+                type: 'render', source, view: 'app.views.Orders',
                 state_snapshot_signed: SIGNED_BLOB, patches: [], version: 1,
             });
             expect(window.djust._stateSnapshot._serialize('app.views.Orders')).toBe(SIGNED_BLOB);
@@ -130,7 +133,7 @@ describe.each(['websocket', 'sse'])('explicit event snapshots (%s)', (transport)
             const handler = makeHandler(window);
             window.djust._clientState = { 'app.views.Orders': SIGNED_BLOB };
             await handler.handleMessage({
-                type: 'noop', source: 'event', view: 'app.views.Orders',
+                type: 'render', source: 'event', view: 'app.views.Orders',
                 state_snapshot_signed: 'replacement', ...override,
             });
             expect(window.djust._stateSnapshot._serialize('app.views.Orders')).toBe(SIGNED_BLOB);

@@ -55,6 +55,7 @@ from djust.decorators import state
 from djust.mixins import context as context_module
 from djust.mixins import rust_bridge
 from djust.tests import _per_turn_harness as harness
+from djust.tests._frames import legacy_type
 
 MODULE = __name__
 PACKAGE = pathlib.Path(__file__).resolve().parents[1]
@@ -718,7 +719,7 @@ class TestScopedComponentRender:
 
     async def test_an_unchanged_one_keeps_the_scoped_patch(self):
         frame = await self._run(change=False)
-        assert "TOKEN-SENTINEL" not in text(frame) and frame["type"] == "patch"
+        assert "TOKEN-SENTINEL" not in text(frame) and legacy_type(frame) == "patch"
 
     async def test_without_the_check_the_value_stays_stale(self, monkeypatch):
         with harness.shortcuts(monkeypatch, "request_scoped_changes"):

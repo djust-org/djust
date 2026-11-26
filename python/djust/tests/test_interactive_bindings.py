@@ -7,6 +7,7 @@ from asgiref.sync import async_to_sync
 
 from djust import LiveView, event_handler
 from djust.components._interactive import DropdownMenu
+from djust.tests._frames import legacy_type
 
 
 class MenuPage(LiveView):
@@ -146,6 +147,7 @@ def test_http_fallback_refuses_an_event_for_a_binding_from_a_previous_request():
     explicit view already behaved this way.
     """
     from django.test import RequestFactory
+
     from djust.tests.test_exposure_runtime import make_request
 
     request = make_request()
@@ -172,6 +174,7 @@ async def test_real_websocket_two_menus_and_unknown_target():
     from asgiref.sync import sync_to_async
     from channels.testing import WebsocketCommunicator
     from django.test import override_settings
+
     from djust.tests.test_exposure_runtime import make_request
     from djust.websocket import LiveViewConsumer
 
@@ -195,7 +198,7 @@ async def test_real_websocket_two_menus_and_unknown_target():
                 {"type": "event", "event": "open_project", "params": {}, "ref": 1}
             )
             opened = await socket.receive_json_from()
-            assert opened["type"] == "patch", opened
+            assert legacy_type(opened) == "patch", opened
             assert "aria-expanded" in json.dumps(opened)
             for expected in ["html_update", "noop"]:
                 await socket.send_json_to(
@@ -207,7 +210,7 @@ async def test_real_websocket_two_menus_and_unknown_target():
                     }
                 )
                 closed = await socket.receive_json_from()
-                assert closed["type"] == expected, closed
+                assert legacy_type(closed) == expected, closed
             for target, value, expected in [
                 (identities[0], "edit", "project:edit"),
                 (identities[1], "settings", "account:settings"),
@@ -221,7 +224,7 @@ async def test_real_websocket_two_menus_and_unknown_target():
                     }
                 )
                 frame = await socket.receive_json_from()
-                assert frame["type"] == "html_update", frame
+                assert legacy_type(frame) == "html_update", frame
                 assert expected in frame["html"], frame
             await socket.send_json_to(
                 {
@@ -335,7 +338,7 @@ def test_binding_fingerprints_change_without_replacing_object():
 
 
 def test_view_snapshot_tracks_binding_state_not_framework_cache():
-    from djust.websocket import _snapshot_assigns, _compute_changed_keys
+    from djust.websocket import _compute_changed_keys, _snapshot_assigns
 
     view = mounted()
     _ = view.menu

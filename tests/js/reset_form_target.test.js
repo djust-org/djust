@@ -119,7 +119,7 @@ describe('reset_form frame over the socket', () => {
             ws.sendEvent(eventName, {}, trigger);
             const frame = sent.filter((m) => m.type === 'event').pop();
             version += 1;
-            await ws.handleMessage({ type: 'patch', patches: [], version, ref: frame.ref, reset_form: true });
+            await ws.handleMessage({ type: 'render', patches: [], version, ref: frame.ref, reset_form: true });
         }
 
         // A button outside every form: no way to tell which form, so neither.

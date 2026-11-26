@@ -134,7 +134,7 @@ describe('Event sequencing (#560)', () => {
 
             // Simulate tick arriving while event is pending
             await ws.handleMessage({
-                type: 'patch',
+                type: 'render',
                 patches: [],
                 version: 2,
                 source: 'tick'
@@ -153,7 +153,7 @@ describe('Event sequencing (#560)', () => {
 
             // Event response with matching ref
             await ws.handleMessage({
-                type: 'patch',
+                type: 'render',
                 patches: [],
                 version: 2,
                 source: 'event',
@@ -172,7 +172,7 @@ describe('Event sequencing (#560)', () => {
 
             // Tick arrives during pending event — gets buffered
             await ws.handleMessage({
-                type: 'patch',
+                type: 'render',
                 patches: [],
                 version: 2,
                 source: 'tick'
@@ -181,7 +181,7 @@ describe('Event sequencing (#560)', () => {
 
             // Event response arrives — should flush buffered tick
             await ws.handleMessage({
-                type: 'patch',
+                type: 'render',
                 patches: [],
                 version: 3,
                 source: 'event',
@@ -199,7 +199,7 @@ describe('Event sequencing (#560)', () => {
             expect(getSeqState().pendingEventRef).toBeNull();
 
             await ws.handleMessage({
-                type: 'patch',
+                type: 'render',
                 patches: [],
                 version: 2,
                 source: 'tick'
@@ -215,7 +215,7 @@ describe('Event sequencing (#560)', () => {
 
             // Patch without source or ref (e.g., broadcast)
             await ws.handleMessage({
-                type: 'patch',
+                type: 'render',
                 patches: [],
                 version: 2,
             });
@@ -233,7 +233,7 @@ describe('Event sequencing (#560)', () => {
             const ref = getSeqState().pendingEventRef;
             expect(ref).not.toBeNull();
 
-            await ws.handleMessage({ type: 'noop', ref: ref });
+            await ws.handleMessage({ type: 'render', ref: ref });
 
             expect(getSeqState().pendingEventRef).toBeNull();
         });
@@ -246,11 +246,11 @@ describe('Event sequencing (#560)', () => {
             const ref = getSeqState().pendingEventRef;
 
             dom.window.djust._pushTickBuffer({
-                type: 'patch', patches: [], version: 2, source: 'tick'
+                type: 'render', patches: [], version: 2, source: 'tick'
             });
             expect(getSeqState().tickBufferLength).toBe(1);
 
-            await ws.handleMessage({ type: 'noop', ref: ref });
+            await ws.handleMessage({ type: 'render', ref: ref });
 
             expect(getSeqState().tickBufferLength).toBe(0);
         });
@@ -302,7 +302,7 @@ describe('Event sequencing (#560)', () => {
 
             // Simulate broadcast arriving while event is pending
             await ws.handleMessage({
-                type: 'patch',
+                type: 'render',
                 patches: [],
                 version: 2,
                 source: 'broadcast'
@@ -320,7 +320,7 @@ describe('Event sequencing (#560)', () => {
 
             // Simulate async completion arriving while event is pending
             await ws.handleMessage({
-                type: 'patch',
+                type: 'render',
                 patches: [],
                 version: 2,
                 source: 'async'
@@ -339,13 +339,13 @@ describe('Event sequencing (#560)', () => {
 
             // Buffer both broadcast and async patches
             await ws.handleMessage({
-                type: 'patch',
+                type: 'render',
                 patches: [],
                 version: 2,
                 source: 'broadcast'
             });
             await ws.handleMessage({
-                type: 'patch',
+                type: 'render',
                 patches: [],
                 version: 3,
                 source: 'async'
@@ -354,7 +354,7 @@ describe('Event sequencing (#560)', () => {
 
             // Event response arrives — should flush all buffered patches
             await ws.handleMessage({
-                type: 'patch',
+                type: 'render',
                 patches: [],
                 version: 4,
                 source: 'event',
@@ -372,7 +372,7 @@ describe('Event sequencing (#560)', () => {
             expect(getSeqState().pendingEventRef).toBeNull();
 
             await ws.handleMessage({
-                type: 'patch',
+                type: 'render',
                 patches: [],
                 version: 2,
                 source: 'broadcast'
@@ -390,7 +390,7 @@ describe('Event sequencing (#560)', () => {
             expect(getSeqState().pendingEventRef).toBeNull();
 
             await ws.handleMessage({
-                type: 'patch',
+                type: 'render',
                 patches: [],
                 version: 2,
                 source: 'async'
@@ -432,7 +432,7 @@ describe('Event sequencing (#560)', () => {
 
             // Buffer a tick patch
             await ws.handleMessage({
-                type: 'patch',
+                type: 'render',
                 patches: [],
                 version: 2,
                 source: 'tick'
@@ -441,7 +441,7 @@ describe('Event sequencing (#560)', () => {
 
             // First event response — still one pending
             await ws.handleMessage({
-                type: 'patch',
+                type: 'render',
                 patches: [],
                 version: 3,
                 source: 'event',
@@ -454,7 +454,7 @@ describe('Event sequencing (#560)', () => {
 
             // Second event response — all resolved
             await ws.handleMessage({
-                type: 'patch',
+                type: 'render',
                 patches: [],
                 version: 4,
                 source: 'event',
@@ -505,7 +505,7 @@ describe('Event sequencing (#560)', () => {
 
             // Patch without source — backward compat, should not buffer
             await ws.handleMessage({
-                type: 'patch',
+                type: 'render',
                 patches: [],
                 version: 2,
             });

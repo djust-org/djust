@@ -625,7 +625,7 @@ A live region announces when its **text changes**, which is not the same as the
 old hook announcing every queued message:
 
 - **The same message twice in a row is announced once.** A second `save` that
-  renders the identical text produces a `noop` (no DOM change, so nothing is
+  renders the identical text produces a `render` frame with no DOM part (nothing is
   announced), although the `JS.focus()` push still arrives. To announce a repeat,
   make the text differ between turns, for example by alternating a no-break-space
   suffix (`self._flip = not self._flip; self.status = "Order saved" + ("\u00a0" if self._flip else "")`).

@@ -19,8 +19,10 @@ from __future__ import annotations
 import sys
 
 import pytest
+
 from djust import state
 from djust.testing import with_live_session
+from djust.tests._frames import frame_matches
 
 pytest.importorskip("channels")
 
@@ -171,7 +173,7 @@ async def test_login_required_ws_mount_closes_socket_after_redirect():
     await _connect_and_mount(communicator)
 
     nav = await communicator.receive_json_from()
-    assert nav.get("type") == "navigate", f"expected a navigate redirect frame, got {nav!r}"
+    assert frame_matches(nav, "navigate"), f"expected a navigate redirect frame, got {nav!r}"
 
     # The auth failure must terminate the transport, not just nudge the UI.
     out = await communicator.receive_output()
@@ -195,7 +197,7 @@ async def test_anonymous_cannot_dispatch_event_after_login_redirect():
     await _connect_and_mount(communicator)
 
     nav = await communicator.receive_json_from()
-    assert nav.get("type") == "navigate"
+    assert frame_matches(nav, "navigate")
 
     # A raw client ignores the navigate and tries to mutate state.
     await communicator.send_json_to({"type": "event", "event": "do_mutation", "params": {}})

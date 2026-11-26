@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 #: Deadline for a frame that WILL arrive. Only a hung turn reaches it.
 WAIT_S = 10.0
@@ -89,10 +89,23 @@ def types_of(frames: List[Frame]) -> List[Any]:
     return [frame.get("type") for frame in frames]
 
 
+def _type_matches(frame: Frame, wanted: set) -> bool:
+    """``frame`` is one of ``wanted``; a ``render`` frame (#3658) also matches the
+    1.x name of its DOM part (``"patch"``, ``"html_update"``, ``"embedded_update"``,
+    ``"noop"``) and the ``kind`` of each effect it carries (``"navigation"``...)."""
+    from djust._testing_live import _frame_is
+
+    return _frame_is(frame, tuple(wanted))
+
+
 def has_type(*types: str) -> Callable[[List[Frame]], bool]:
-    """``done`` predicate: a frame of one of ``types`` has arrived."""
+    """``done`` predicate: a frame of one of ``types`` has arrived.
+
+    The 1.x frame names match a ``render`` frame by its DOM part or its
+    effects (see :func:`_type_matches`).
+    """
     wanted = set(types)
-    return lambda frames: any(frame.get("type") in wanted for frame in frames)
+    return lambda frames: any(_type_matches(frame, wanted) for frame in frames)
 
 
 async def receive_type(socket, *types: str, timeout: float = WAIT_S) -> List[Frame]:
@@ -100,17 +113,26 @@ async def receive_type(socket, *types: str, timeout: float = WAIT_S) -> List[Fra
     return await receive_until(socket, has_type(*types), timeout=timeout, what=f"a {types} frame")
 
 
-def has_frame(*types: str, **fields: Any) -> Callable[[List[Frame]], bool]:
+def has_frame(
+    *types: str, effect: Optional[str] = None, **fields: Any
+) -> Callable[[List[Frame]], bool]:
     """``done`` predicate: a frame matching ``types`` and ``fields`` has arrived.
 
-    ``types`` limits the frame's ``type`` (any type when empty); each keyword
-    must equal the frame's value, e.g. ``has_frame("noop", "patch", ref=3)`` or
-    ``has_frame("patch", source="event")``.
+    ``types`` limits the frame's ``type`` (any type when empty; the legacy DOM
+    names match as in :func:`has_type`); each keyword
+    must equal the frame's value, e.g. ``has_frame("render", ref=3)`` or
+    ``has_frame("render", source="event")``. ``effect`` requires an effect of
+    that ``kind`` in the frame's ``effects`` (#3658), e.g.
+    ``has_frame("render", effect="push_event")``.
     """
     wanted = set(types)
 
     def matches(frame: Frame) -> bool:
-        if wanted and frame.get("type") not in wanted:
+        if wanted and not _type_matches(frame, wanted):
+            return False
+        if effect is not None and not any(
+            isinstance(e, dict) and e.get("kind") == effect for e in frame.get("effects") or ()
+        ):
             return False
         return all(frame.get(key) == value for key, value in fields.items())
 

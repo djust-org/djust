@@ -46,6 +46,8 @@ import uuid
 
 import pytest
 
+from djust.tests._frames import effects_of
+
 pytest.importorskip("channels")
 
 from asgiref.sync import sync_to_async  # noqa: E402
@@ -55,12 +57,12 @@ from django.contrib.auth.decorators import (  # noqa: E402
     permission_required,
     user_passes_test,
 )
-from django.contrib.auth.models import AnonymousUser  # noqa: E402
 from django.contrib.auth.mixins import (  # noqa: E402
     AccessMixin,
     LoginRequiredMixin,
     UserPassesTestMixin,
 )
+from django.contrib.auth.models import AnonymousUser  # noqa: E402
 from django.contrib.sessions.middleware import SessionMiddleware  # noqa: E402
 from django.core.exceptions import PermissionDenied  # noqa: E402
 from django.test import RequestFactory, override_settings  # noqa: E402
@@ -537,7 +539,7 @@ def _mounted(outputs):
 
 
 def _navigated_to(outputs):
-    return [f.get("to") for f in _frames(outputs) if f.get("type") == "navigate"]
+    return [f.get("to") for f in effects_of(_frames(outputs), "navigate")]
 
 
 async def _assert_login_redirect(view_name, user_cls=_AnonUser, to=None):

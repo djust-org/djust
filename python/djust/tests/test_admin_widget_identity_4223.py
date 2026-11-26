@@ -30,7 +30,8 @@ from django.urls import path
 from djust import LiveView
 from djust.admin_ext import DjustAdminSite, DjustModelAdmin
 from djust.decorators import event_handler, state
-from djust.tests.test_admin_page_render import _Socket, _session_cookie
+from djust.tests._frames import frame_matches, legacy_type
+from djust.tests.test_admin_page_render import _session_cookie, _Socket
 from djust.tests.test_framework_classes_explicit_4185 import _sse_frame, _sse_request
 
 pytestmark = pytest.mark.admin
@@ -110,7 +111,7 @@ async def _ws(browser: Client, view: str, url: str, script) -> Tuple[dict, List[
             await ws.send({"type": "event", "event": name, "params": params})
             for _ in range(30):
                 frame = await ws.comm.receive_json_from(timeout=10)
-                if frame.get("type") in _ANSWERS:
+                if frame_matches(frame, _ANSWERS):
                     answers.append(frame)
                     break
     return mounted, answers
@@ -164,7 +165,7 @@ async def _run(transport, browser, view, url, parent_event):
     run = _ws if transport == "websocket" else _sse
     mounted, answers = await run(browser, view, url, _script(parent_event))
     first_id = _widget_ids(mounted["html"])[0]
-    assert [a["type"] for a in answers if a["type"] == "error"] == [], answers
+    assert [legacy_type(a) for a in answers if a["type"] == "error"] == [], answers
     clicks = re.findall(r"clicks=(\d+)", json.dumps(answers))
     # The widget's id does not change: no answer names another embedded view.
     assert set(_widget_ids(json.dumps(answers))) <= {first_id}, answers

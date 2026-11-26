@@ -27,12 +27,12 @@ import pytest
 from django import forms
 from django.conf import global_settings
 from django.test import RequestFactory, override_settings
-
 from djust import LiveView, _form_data_bounds
 from djust.config import config as djust_config
 from djust.forms import FormMixin
-from djust.wizard import WizardMixin
 from djust.testing import with_live_session
+from djust.tests._frames import frame_matches
+from djust.wizard import WizardMixin
 
 pytestmark = [pytest.mark.django_db, pytest.mark.pr_tier]
 
@@ -85,7 +85,6 @@ _TERMINAL = {"patch", "html_update", "error", "noop"}
 async def _session(events: List[Dict[str, Any]], max_message_size: int = 65536) -> List[Any]:
     """Mount ``WsContact``, send each event, wait for its terminal frame; every frame, in order."""
     from channels.testing import WebsocketCommunicator
-
     from djust.websocket import LiveViewConsumer
 
     comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
@@ -102,7 +101,7 @@ async def _session(events: List[Dict[str, Any]], max_message_size: int = 65536) 
             while True:
                 frame = await comm.receive_json_from(timeout=10)
                 frames.append(frame)
-                if frame.get("type") in _TERMINAL:
+                if frame_matches(frame, _TERMINAL):
                     break
             answers.append(frames)
     finally:

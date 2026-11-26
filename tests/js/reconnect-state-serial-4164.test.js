@@ -73,14 +73,14 @@ describe.each([
     it('carries the serial of the last state a frame showed', async () => {
         const { dom, ws } = await loadPage();
         await shown(dom, { type: 'mount', view: VIEW, state_serial: 2 });
-        await shown(dom, { type: 'patch', source: 'event', view: VIEW, state_serial: 5 });
+        await shown(dom, { type: 'render', source: 'event', view: VIEW, state_serial: 5 });
         dom.window.djust._isReconnect = true;
         expect(mount(dom, ws).state_serial).toBe(5);
     });
 
     it('carries none on a first mount', async () => {
         const { dom, ws } = await loadPage();
-        await shown(dom, { type: 'patch', source: 'event', view: VIEW, state_serial: 5 });
+        await shown(dom, { type: 'render', source: 'event', view: VIEW, state_serial: 5 });
         dom.window.djust._isReconnect = false;
         expect(mount(dom, ws).state_serial).toBeUndefined();
     });
@@ -97,10 +97,10 @@ describe.each([
 describe('what records a serial', () => {
     it('ignores error frames, child frames and frames of a view beside the page', async () => {
         const { dom } = await loadPage();
-        await shown(dom, { type: 'patch', source: 'event', view: VIEW, state_serial: 3 });
+        await shown(dom, { type: 'render', source: 'event', view: VIEW, state_serial: 3 });
         await shown(dom, { type: 'error', view: VIEW, state_snapshot_signed: null, state_serial: 9 });
-        await shown(dom, { type: 'patch', source: 'event', view: VIEW, target_id: 'side', state_serial: 9 });
-        await shown(dom, { type: 'patch', source: 'event', view: 'other.View', state_serial: 9 });
+        await shown(dom, { type: 'render', source: 'event', view: VIEW, target_id: 'side', state_serial: 9 });
+        await shown(dom, { type: 'render', source: 'event', view: 'other.View', state_serial: 9 });
         expect(dom.window.djust._stateSerial[VIEW]).toBe(3);
     });
 

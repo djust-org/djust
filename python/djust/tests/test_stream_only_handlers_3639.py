@@ -33,6 +33,7 @@ from django.test import override_settings
 from djust import LiveView
 from djust.decorators import event_handler
 from djust.testing import LiveSocket, with_live_session
+from djust.tests._frames import legacy_type
 
 pytestmark = [pytest.mark.django_db(transaction=True)]
 
@@ -151,7 +152,7 @@ async def drive(view_name, events, *, module=None):
 
 
 def kinds(frame):
-    return [p["type"] for p in frame.get("patches") or []]
+    return [legacy_type(p) for p in frame.get("patches") or []]
 
 
 def texts(frame):
@@ -168,7 +169,7 @@ def texts(frame):
 class TestStreamOnlyHandlersRender:
     async def test_a_stream_insert_alone_is_rendered_not_dropped_as_noop(self):
         (frame,) = await drive("Feed", ["ins"])
-        assert frame["type"] == "patch", frame
+        assert legacy_type(frame) == "patch", frame
         assert kinds(frame) == ["InsertChild"], frame
         assert any("NEW" in t for t in texts(frame)) or "NEW" in str(frame["patches"]), frame
 
@@ -178,40 +179,40 @@ class TestStreamOnlyHandlersRender:
 
     async def test_a_prepend_lands_at_the_front(self):
         (frame,) = await drive("Feed", ["ins_front"])
-        assert frame["type"] == "patch", frame
+        assert legacy_type(frame) == "patch", frame
         assert "InsertChild" in kinds(frame), frame
 
     async def test_stream_with_items_alone_is_rendered(self):
         (frame,) = await drive("Feed", ["many"])
-        assert frame["type"] == "patch", frame
+        assert legacy_type(frame) == "patch", frame
         assert kinds(frame).count("InsertChild") == 2, frame
 
     async def test_a_stream_delete_alone_removes_the_row(self):
         (frame,) = await drive("Feed", ["dele"])
-        assert frame["type"] == "patch", frame
+        assert legacy_type(frame) == "patch", frame
         assert kinds(frame).count("RemoveChild") == 1, frame
 
     async def test_a_stream_prune_alone_removes_the_surplus_rows(self):
         (frame,) = await drive("Feed", ["prune"])
-        assert frame["type"] == "patch", frame
+        assert legacy_type(frame) == "patch", frame
         assert kinds(frame).count("RemoveChild") == 2, frame
 
     async def test_a_stream_reset_alone_is_rendered(self):
         (frame,) = await drive("Feed", ["reset"])
-        assert frame["type"] == "patch", frame
+        assert legacy_type(frame) == "patch", frame
         assert "R0" in str(frame["patches"]), frame
 
     async def test_the_row_is_not_deferred_to_the_next_unrelated_render(self):
         """Before the fix the insert was held until some other event rendered, so
         that event's patch carried a row it never caused."""
         ins, nothing = await drive("Feed", ["ins", "nothing"])
-        assert ins["type"] == "patch" and "InsertChild" in kinds(ins), ins
-        assert nothing["type"] == "noop", nothing
+        assert legacy_type(ins) == "patch" and "InsertChild" in kinds(ins), ins
+        assert legacy_type(nothing) == "noop", nothing
 
     async def test_a_stream_insert_next_to_a_public_change_still_renders(self):
         """The case that always worked, kept as the contract."""
         (frame,) = await drive("Feed", ["ins_and_n"])
-        assert frame["type"] == "patch", frame
+        assert legacy_type(frame) == "patch", frame
         assert "InsertChild" in kinds(frame), frame
 
 
@@ -222,20 +223,20 @@ class TestAnEventThatChangesNothingStaysANoop:
 
     async def test_a_handler_that_touches_nothing_replies_noop(self):
         (frame,) = await drive("Feed", ["nothing"])
-        assert frame["type"] == "noop", frame
+        assert legacy_type(frame) == "noop", frame
 
     async def test_a_handler_that_only_reads_the_streams_replies_noop(self):
         (frame,) = await drive("Feed", ["reads_only"])
-        assert frame["type"] == "noop", frame
+        assert legacy_type(frame) == "noop", frame
 
     async def test_an_empty_stream_call_on_an_existing_stream_replies_noop(self):
         (frame,) = await drive("Feed", ["empty_stream_call"])
-        assert frame["type"] == "noop", frame
+        assert legacy_type(frame) == "noop", frame
 
     async def test_a_prune_that_removes_nothing_replies_noop(self):
         (frame,) = await drive("Feed", ["prune_noop"])
-        assert frame["type"] == "noop", frame
+        assert legacy_type(frame) == "noop", frame
 
     async def test_a_stream_turn_does_not_make_the_next_idle_event_render(self):
         _ins, idle_a, idle_b = await drive("Feed", ["ins", "nothing", "nothing"])
-        assert idle_a["type"] == "noop" and idle_b["type"] == "noop", (idle_a, idle_b)
+        assert legacy_type(idle_a) == "noop" and legacy_type(idle_b) == "noop", (idle_a, idle_b)

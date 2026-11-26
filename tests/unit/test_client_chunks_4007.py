@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 from django.test import RequestFactory, override_settings
 
+import djust
 from djust.config import config
 from djust.mixins.post_processing import CLIENT_CHUNKS, PostProcessingMixin
 
@@ -29,6 +30,10 @@ STATIC = ROOT / "python/djust/static/djust"
 class _View(PostProcessingMixin):
     def get_debug_info(self) -> dict:
         return {}
+
+
+#: The cache-busting query on every bundle and chunk URL (#3658).
+V = f"?v={djust.__version__}"
 
 
 def _client_tag(request=None) -> str:
@@ -56,24 +61,24 @@ def test_default_injects_core_with_hashed_chunk_urls_and_nonce():
     request = RequestFactory().get("/")
     request.csp_nonce = "n0nce"  # type: ignore[attr-defined]
     tag = _client_tag(request)
-    assert 'src="/static/djust/client-core.min.js"' in tag
+    assert f'src="/static/djust/client-core.min.js{V}"' in tag
     assert 'nonce="n0nce"' in tag
     chunks = json.loads(html.unescape(re.search(r'data-djust-chunks="([^"]*)"', tag).group(1)))
-    assert chunks == {name: f"/static/djust/chunks/{name}.min.js" for name in CLIENT_CHUNKS}
+    assert chunks == {name: f"/static/djust/chunks/{name}.min.js{V}" for name in CLIENT_CHUNKS}
 
 
 @override_settings(DEBUG=True)
 def test_debug_injects_readable_core_and_chunks():
     tag = _client_tag()
-    assert 'src="/static/djust/client-core.js"' in tag
+    assert f'src="/static/djust/client-core.js{V}"' in tag
     chunks = json.loads(html.unescape(re.search(r'data-djust-chunks="([^"]*)"', tag).group(1)))
-    assert chunks["uploads"] == "/static/djust/chunks/uploads.js"
+    assert chunks["uploads"] == f"/static/djust/chunks/uploads.js{V}"
 
 
 @override_settings(DEBUG=False)
 def test_full_bundle_setting_injects_client_min_js_without_chunks(full_bundle):
     tag = _client_tag()
-    assert 'src="/static/djust/client.min.js"' in tag
+    assert f'src="/static/djust/client.min.js{V}"' in tag
     assert "data-djust-chunks" not in tag
 
 

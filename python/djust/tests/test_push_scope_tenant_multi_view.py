@@ -18,11 +18,11 @@ from asgiref.sync import sync_to_async
 from django.contrib.sessions.backends.db import SessionStore
 from django.test import override_settings
 
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 from djust.push import apush_to_view, push_scope_group_name
 from djust.tenants.mixin import TenantMixin
-from djust import state
+from djust.tests._frames import frame_matches
 
 pytest.importorskip("channels")
 
@@ -87,7 +87,7 @@ def _session_key():
 async def _frame(comm, *types):
     while True:
         frame = await comm.receive_json_from(timeout=10)
-        if frame.get("type") in types:
+        if frame_matches(frame, types):
             return frame
 
 

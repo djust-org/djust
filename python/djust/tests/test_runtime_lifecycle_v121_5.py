@@ -28,6 +28,7 @@ from djust.components.descriptors.base import LiveComponent, TypedState
 from djust.decorators import event_handler, state
 from djust.mixins.async_work import AsyncWorkMixin
 from djust.runtime import ViewRuntime
+from djust.tests._frames import legacy_type
 
 _MOD = "djust.tests.test_runtime_lifecycle_v121_5"
 
@@ -88,7 +89,7 @@ async def _mounted(cls: type):
 
 
 def _frames(transport: MockTransport) -> List[Dict[str, Any]]:
-    return [f for f in transport.sent if f.get("type") in ("patch", "html_update", "noop")]
+    return [f for f in transport.sent if legacy_type(f) in ("patch", "html_update", "noop")]
 
 
 class _ScopeSession:
@@ -100,7 +101,7 @@ async def _receive_until(communicator, wanted_type, *, tries=8, timeout=30):
     last = None
     for _ in range(tries):
         last = await communicator.receive_json_from(timeout=timeout)
-        if last.get("type") == wanted_type:
+        if legacy_type(last) == wanted_type:
             return last
     return last
 
@@ -108,6 +109,7 @@ async def _receive_until(communicator, wanted_type, *, tries=8, timeout=30):
 async def _connect_and_mount(view_path: str, url: str = "/v121-5/"):
     pytest.importorskip("channels")
     from channels.testing import WebsocketCommunicator
+
     from djust.testing import with_live_session
     from djust.websocket import LiveViewConsumer
 
@@ -276,14 +278,14 @@ class TestSkipRenderOnTheComponentRoute:
             }
         )
         first = _frames(transport)[-1]
-        assert first["type"] == "noop" and first["ref"] == 1, first
+        assert legacy_type(first) == "noop" and first["ref"] == 1, first
         assert view._skip_render is False
         # The next view event is not swallowed by a leaked flag.
         await runtime.dispatch_event(
             {"type": "event", "event": "rename", "params": {"value": "Y"}, "ref": 2}
         )
         second = _frames(transport)[-1]
-        assert second["type"] in ("patch", "html_update"), second
+        assert legacy_type(second) in ("patch", "html_update"), second
         assert "Y" in str(second)
 
     @pytest.mark.asyncio
@@ -298,7 +300,7 @@ class TestSkipRenderOnTheComponentRoute:
                 "ref": 1,
             }
         )
-        assert _frames(transport)[-1]["type"] == "html_update"
+        assert legacy_type(_frames(transport)[-1]) == "html_update"
         assert view._skip_render is False
 
 

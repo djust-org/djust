@@ -417,9 +417,10 @@ class Conn:
         else:
             seen = len(self.live.frames)
             answer = await self.live.send_event(event, params)
-            kind = answer.get("type", "?")
-            if kind not in ("patch", "html_update"):
+            # One ``render`` frame per turn (#3658); its DOM part names the kind.
+            if answer.get("type") != "render" or not ("patches" in answer or "html" in answer):
                 raise RuntimeError("turn answered %r" % (answer,))
+            kind = "patch" if "patches" in answer else "html_update"
             if self.shape == "push":
                 await self._await_renders(seen, 2)
             # Every frame that arrived for this turn (a push sends two renders).
@@ -431,7 +432,9 @@ class Conn:
 
     def _renders_since(self, seen: int) -> int:
         frames = list(self.live.frames)[seen:]
-        return sum(1 for f in frames if f.get("type") in ("patch", "html_update"))
+        return sum(
+            1 for f in frames if f.get("type") == "render" and ("patches" in f or "html" in f)
+        )
 
     async def _await_renders(self, seen: int, wanted: int) -> None:
         """Wait until ``wanted`` render frames have arrived since ``seen``.

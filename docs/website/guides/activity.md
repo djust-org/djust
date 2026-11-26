@@ -95,7 +95,7 @@ child. An event for that child's hidden activity is queued on the child,
 and released when the child's activity is shown: by the child's own
 handler, by the page's handler, or by `handle_info` after a `db_notify`.
 A released event runs with the child's own checks (as any event of the
-child does) and answers with the child's `embedded_update`. One for a
+child does) and answers with a `render` frame carrying the child's `view_id` and HTML. One for a
 child that has left the page by then is dropped.
 
 ## Client API

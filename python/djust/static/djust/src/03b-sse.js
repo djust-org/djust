@@ -76,6 +76,7 @@ class LiveViewSSE {
         urlParams.set('view', viewPath);
         urlParams.set('_djust_url', window.location.pathname);
         urlParams.set('_djust_tab', djustTabId());
+        urlParams.set('protocol', String(window.djust.PROTOCOL));
         // #2966: dj-track-static. The stream GET is the mount, and an
         // EventSource auto-reconnect re-requests this same URL, so the page's
         // tracked asset URLs ride it (a POSTed mount frame would be a no-op).
@@ -354,12 +355,10 @@ class LiveViewSSE {
                 break;
             }
 
-            case 'patch':
-            case 'html_update': {
-                const event = acknowledgeEventRequest(this, data);
-                await handleServerResponse(data, event?.eventName, event?.trigger, this);
+            case 'render':
+                // One frame per turn result (#3658): DOM part, then effects.
+                await applyRenderFrame(this, data);
                 break;
-            }
 
             case 'error':
                 console.error('[SSE] Server error:', data.error);
@@ -390,20 +389,9 @@ class LiveViewSSE {
                 if (data.source !== 'async') this._recoverFailedNavigation();
                 break;
 
-            case 'noop': {
-                const event = acknowledgeEventRequest(this, data);
-                if (data.reset_form) applyFormReset(data, event?.trigger || null);
-                if (event?.eventName) {
-                    if (!data.async_pending) {
-                        globalLoadingManager.stopLoading(event.eventName, event.trigger);
-                    }
-                }
-                break;
-            }
-
             default:
                 // The frames both transports apply alike (02c-frame-dispatch.js).
-                if (!(await dispatchCommonFrame(this, data, '[SSE]')) && globalThis.djustDebug) {
+                if (!(await dispatchCommonFrame(this, data)) && globalThis.djustDebug) {
                     console.log('[SSE] Unknown message type:', data.type);
                 }
         }
@@ -558,6 +546,7 @@ class LiveViewSSE {
     sendMessage(data, keepalive = false) {
         if (!this.enabled) return false;
 
+        if (_PROTOCOL_VERBS.has(data.type)) data = { ...data, protocol: window.djust.PROTOCOL };
         const body = JSON.stringify(data);
         this.stats.sent++;
         this.stats.sentBytes += body.length;
@@ -568,7 +557,7 @@ class LiveViewSSE {
         fetch(`${this.sseBaseUrl}message/`, {
             method: 'POST',
             keepalive,
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', 'X-Djust-Protocol': String(window.djust.PROTOCOL) },
             // Explicit credentials: 'include' to mirror the EventSource
             // GET's withCredentials: true. Without this, the Django session
             // cookie isn't sent on the message POST and dispatch fails
@@ -576,7 +565,12 @@ class LiveViewSSE {
             credentials: 'include',
             body,
         })
-            .then(r => {
+            .then(async r => {
+                // #3658: the server speaks another protocol.
+                if (r.status === 409 && (await r.clone().json().catch(() => null))?.code === 'protocol_mismatch') {
+                    protocolMismatch(this);
+                    return null;
+                }
                 if (!r.ok) throw new Error(`HTTP ${r.status}`);
                 return r.json();
             })

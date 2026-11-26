@@ -37,6 +37,7 @@ from djust._late_save import LateSaveDropped, detached
 from djust._session_merge import TrackedSessionData, is_tracked, save_merged, track_session
 from djust.decorators import event_handler, state
 from djust.sse import DjustSSEMessageView, DjustSSEStreamView, _sse_sessions
+from djust.tests._frames import legacy_type
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -830,7 +831,7 @@ async def _event(communicator, name):
     with _ALLOWLIST:
         await communicator.send_json_to({"type": "event", "event": name, "params": {}})
     return await _until(
-        communicator, lambda m: m.get("type") in ("patch", "html_update", "noop", "error")
+        communicator, lambda m: legacy_type(m) in ("patch", "html_update", "noop", "error")
     )
 
 
@@ -851,7 +852,7 @@ async def test_ws_explicit_event_keeps_a_write_made_through_a_separate_store(eng
             await _mount(communicator, f"{_MOD}.Explicit3347Page", url)
             await sync_to_async(_elsewhere)(engine, key, victim=None)
             frame = await _event(communicator, "through_a_separate_store")
-            assert frame["type"] in ("patch", "html_update"), frame
+            assert legacy_type(frame) in ("patch", "html_update"), frame
         finally:
             await _settled(communicator)
         stored = await sync_to_async(_stored)(engine, key)
@@ -870,7 +871,7 @@ async def test_ws_explicit_handler_session_writes_still_reach_the_store(engine, 
             await _mount(communicator, f"{_MOD}.Explicit3347Page", url)
             await sync_to_async(_elsewhere)(engine, key, idle_ts="NEW")
             frame = await _event(communicator, "through_the_request_session")
-            assert frame["type"] in ("patch", "html_update"), frame
+            assert legacy_type(frame) in ("patch", "html_update"), frame
         finally:
             await _settled(communicator)
         stored = await sync_to_async(_stored)(engine, key)
@@ -961,7 +962,7 @@ async def test_ws_a_value_the_view_only_read_follows_the_store_across_events(eng
             for version in ("v1", "v2", "v3"):
                 await sync_to_async(_elsewhere)(engine, key, prefs={"theme": version})
                 frame = await _event(communicator, "stamp")
-                assert frame["type"] in ("patch", "html_update"), frame
+                assert legacy_type(frame) in ("patch", "html_update"), frame
                 stored = await sync_to_async(_stored)(engine, key)
                 assert stored["prefs"] == {"theme": version}, (version, stored["prefs"])
         finally:
@@ -975,13 +976,13 @@ async def test_ws_a_handler_clearing_the_session_does_not_end_merging():
     try:
         await _mount(communicator, _HANDLERS, url)
         frame = await _event(communicator, "wipe")
-        assert frame["type"] in ("patch", "html_update"), frame
+        assert legacy_type(frame) in ("patch", "html_update"), frame
         stored = await sync_to_async(_stored)(DB, key)
         assert stored["after_clear"] == "y" and "victim" not in stored
 
         await sync_to_async(_elsewhere)(DB, key, idle_ts="NEW")
         frame = await _event(communicator, "stamp")
-        assert frame["type"] in ("patch", "html_update"), frame
+        assert legacy_type(frame) in ("patch", "html_update"), frame
         stored = await sync_to_async(_stored)(DB, key)
         assert stored["idle_ts"] == "NEW", "the session stayed untracked after clear()"
         assert stored["w2"] == 1 and stored["after_clear"] == "y"

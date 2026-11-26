@@ -9,8 +9,11 @@ this file pins is the part nothing pinned: that the answer carries **every**
 queue a view can fill, in one turn, and that a queue added to the socket's
 flush cannot be forgotten here.
 
-The parity checks derive their sets from the code (the view's own ``_drain_*``
-methods, the names the socket's flush calls) rather than restating a count.
+Since #3658 every transport takes the effects off the one outbound queue with
+the same drain (``djust._render_frame``), and the HTTP answer is the same
+``render`` frame as the socket's. The parity checks derive their sets from the
+code (the kinds a view can queue, the drain every wire calls) rather than
+restating a count.
 """
 
 from __future__ import annotations
@@ -85,12 +88,19 @@ class TestOneTurnCarriesEveryQueue:
 
         assert response.status_code == 200, response.content
         data = json.loads(response.content)
-        assert data["_push_events"] == [{"event": "chart:update", "payload": {"points": [1, 2]}}]
-        assert [f["message"] for f in data["_flash"]] == ["saved"]
-        assert data["_page_metadata"]
-        assert data["_layout"] == {"path": "layouts/fullscreen.html", "html": "<main/>"}
-        [navigation] = data["_navigation"]
-        assert navigation["action"] == "live_patch" and navigation["params"] == {"tab": "two"}
+        assert data["type"] == "render"
+        assert data["effects"] == [
+            {"kind": "push_event", "event": "chart:update", "payload": {"points": [1, 2]}},
+            {"kind": "flash", "action": "put", "level": "info", "message": "saved"},
+            {"kind": "page_metadata", "action": "title", "value": "Saved"},
+            {"kind": "layout", "path": "layouts/fullscreen.html", "html": "<main/>"},
+            {
+                "kind": "navigation",
+                "action": "live_patch",
+                "replace": False,
+                "params": {"tab": "two"},
+            },
+        ]
         assert RAN == ["deferred"], "defer() callbacks run once the answer is built"
 
 
@@ -106,64 +116,31 @@ def _function(path: pathlib.Path, name: str) -> ast.AST:
     raise AssertionError("%s not found in %s" % (name, path.name))
 
 
-def _drain_refs(path: pathlib.Path, func_names: set) -> set:
-    """``_drain_*`` attribute and string references inside the named functions."""
-    tree = ast.parse(path.read_text())
-    names: set = set()
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in func_names:
-            for inner in ast.walk(node):
-                if isinstance(inner, ast.Attribute) and inner.attr.startswith("_drain_"):
-                    names.add(inner.attr)
-                elif (
-                    isinstance(inner, ast.Constant)
-                    and isinstance(inner.value, str)
-                    and inner.value.startswith("_drain_")
-                ):
-                    names.add(inner.value)
-    return names
-
-
-def _drains_in(path: pathlib.Path, func_prefix: str) -> set:
-    """``_drain_*`` names referenced by every function in ``path`` named ``func_prefix*``."""
-    tree = ast.parse(path.read_text())
-    names: set = set()
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith(
-            func_prefix
-        ):
-            names |= {a for a in _attribute_names(node) if a.startswith("_drain_")}
-    return names
-
-
 class TestParityWithTheSocketFlush:
-    def test_every_queue_a_view_defines_is_drained_on_the_fallback(self):
-        """A new ``_drain_*`` queue on the view must reach the HTTP answer."""
-        defined = {n for n in dir(LiveView) if n.startswith("_drain_")}
-        assert defined, "LiveView defines no _drain_* queue: the derivation is broken"
-        # Inside the functions that build the answer, not anywhere in the file:
-        # the TYPE_CHECKING stubs in request.py name every queue too.
-        drained = _drain_refs(
+    def test_every_kind_a_view_can_queue_has_a_rank(self):
+        """A new effect kind must have its place in the drain's order."""
+        from djust.mixins.commands import EFFECT_RANKS, QUEUED_KINDS
+
+        assert QUEUED_KINDS, "no queued kinds: the derivation is broken"
+        assert QUEUED_KINDS <= set(EFFECT_RANKS)
+
+    def test_the_fallback_and_the_socket_drain_the_same_way(self):
+        """Both answers take their effects with the one drain (``_render_frame``)."""
+        http = _function(PACKAGE / "mixins" / "request.py", "_drain_http_side_channels")
+        assert {"drain_effects", "_run_http_deferred"} <= _names(http)
+        for path in (PACKAGE / "websocket.py", PACKAGE / "runtime.py"):
+            send = _function(path, "_send_render")
+            finish = _function(path, "_finish_turn_effects")
+            assert "adrain_effects" in _names(send), path.name
+            assert "_flush_deferred" in _attribute_names(finish), path.name
+        # Nothing but the drain reads the one queue in the transports.
+        for path in (
+            PACKAGE / "websocket.py",
+            PACKAGE / "runtime.py",
             PACKAGE / "mixins" / "request.py",
-            {"_drain_http_side_channels", "_run_http_deferred", "_post_turn_body"},
-        )
-        missing = sorted(defined - drained)
-        assert not missing, (
-            "queues a view can fill that the HTTP fallback never drains "
-            "(mixins/request.py): %s" % missing
-        )
+        ):
+            assert "_drain_outbound" not in _attribute_names(ast.parse(path.read_text())), path.name
 
-    def test_every_socket_queue_has_a_framework_producer(self):
-        """Socket and fallback must cover the same framework-produced queues.
 
-        The old duck-typed accessibility drains were removed in 2.0, so the
-        socket no longer has two extra names. A new drain on either the view or
-        socket must still be accounted for by both parity checks.
-        """
-        socket_flushed = _drains_in(PACKAGE / "websocket.py", "_flush_")
-        defined = {n for n in dir(LiveView) if n.startswith("_drain_")}
-        assert socket_flushed, "the socket flushes no _drain_* queue: the derivation is broken"
-        assert socket_flushed == defined, "socket-only drains: %s; view-only drains: %s" % (
-            sorted(socket_flushed - defined),
-            sorted(defined - socket_flushed),
-        )
+def _names(node: ast.AST) -> set:
+    return {n.id for n in ast.walk(node) if isinstance(n, ast.Name)} | _attribute_names(node)

@@ -25,6 +25,7 @@ from django.utils.functional import SimpleLazyObject
 from djust import LiveView, event_handler, sse
 from djust.decorators import state
 from djust.sse import DjustSSEMessageView, DjustSSEStreamView, _sse_sessions
+from djust.tests._frames import frame_matches
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
 
@@ -157,7 +158,7 @@ async def _frame(stream, *types, timeout=10.0):
         if not chunk.startswith("data:"):
             continue
         frame = json.loads(chunk[len("data:") :])
-        if frame.get("type") in types:
+        if frame_matches(frame, types):
             return frame
 
 

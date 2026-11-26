@@ -15,6 +15,7 @@ from .handlers import HandlerMixin
 from .request import RequestMixin
 from .post_processing import PostProcessingMixin
 from .model_binding import ModelBindingMixin
+from .commands import CommandsMixin
 from .push_events import PushEventMixin
 from .navigation import NavigationMixin
 from .async_work import AsyncWorkMixin
@@ -38,6 +39,7 @@ __all__ = [
     "HandlerMixin",
     "RequestMixin",
     "ModelBindingMixin",
+    "CommandsMixin",
     "PushEventMixin",
     "NavigationMixin",
     "PostProcessingMixin",

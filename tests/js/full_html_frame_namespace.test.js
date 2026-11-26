@@ -66,7 +66,7 @@ describe('full-HTML frames keep an SVG / MathML root\'s namespace', () => {
     for (const [kind, c] of Object.entries(ROOTS)) {
         it(`html_update: ${kind} root`, async () => {
             const { api, root } = setup(c.body);
-            await sendFrame(api, { type: 'html_update', html: c.html, version: 2 });
+            await sendFrame(api, { type: 'render', html: c.html, version: 2 });
             expect(names(root)).toEqual(c.expected);
         });
 
@@ -86,7 +86,7 @@ describe('full-HTML frames keep an SVG / MathML root\'s namespace', () => {
 
     it('an HTML root parses as before', async () => {
         const { api, root } = setup('<div dj-root dj-view="app.V"><p>one</p></div>');
-        await sendFrame(api, { type: 'html_update', html: '<svg><g></g></svg><iframe></iframe>', version: 2 });
+        await sendFrame(api, { type: 'render', html: '<svg><g></g></svg><iframe></iframe>', version: 2 });
         expect(names(root)).toEqual(['svg:svg', 'svg:g', 'iframe']);
         const temp = api._parseRootHtmlLive('<math><mi>x</mi></math><p>y</p>', root);
         expect(temp.localName).toBe('div');
@@ -96,7 +96,7 @@ describe('full-HTML frames keep an SVG / MathML root\'s namespace', () => {
 
     it('an HTML integration point root (foreignObject) parses HTML', async () => {
         const { api, root } = setup('<svg><foreignObject dj-root dj-view="app.V"><p>one</p></foreignObject></svg>');
-        await sendFrame(api, { type: 'html_update', html: '<p>two</p><iframe></iframe>', version: 2 });
+        await sendFrame(api, { type: 'render', html: '<p>two</p><iframe></iframe>', version: 2 });
         expect(names(root)).toEqual(['p', 'iframe']);
     });
 
@@ -113,7 +113,7 @@ describe('full-HTML frames keep an HTML <noscript>\'s content as text', () => {
         'authored img': '<p>a</p><noscript><img src="x" onerror="window.__hit = 1"></noscript><p>b</p>',
         'link with a URL': '<p>a</p><noscript><a href="javascript:window.__hit = 1">x</a></noscript><p>b</p>',
     };
-    for (const type of ['html_update', 'html_recovery']) {
+    for (const type of ['render', 'html_recovery']) {
         for (const [label, html] of Object.entries(FRAMES)) {
             it(`${type}: ${label}`, async () => {
                 const { api, root } = setup('<div dj-root dj-view="app.V"><p>a</p><p>b</p></div>');
@@ -130,7 +130,7 @@ describe('full-HTML frames keep an HTML <noscript>\'s content as text', () => {
     it('html_update: noscript under an SVG root\'s foreignObject', async () => {
         const { api, root } = setup(ROOTS.svg.body);
         await sendFrame(api, {
-            type: 'html_update',
+            type: 'render',
             html: '<foreignObject><noscript><img src="x"></noscript></foreignObject><g>tail</g>',
             version: 2,
         });
@@ -180,7 +180,7 @@ describe('a full-HTML frame with a <noscript> runs a new element\'s handler once
         };
     }
 
-    for (const type of ['html_update', 'html_recovery']) {
+    for (const type of ['render', 'html_recovery']) {
         it(type, async () => {
             const { api, root } = setup(PAGE);
             const hits = [];

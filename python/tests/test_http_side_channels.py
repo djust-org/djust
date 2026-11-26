@@ -10,10 +10,9 @@ import json
 import pytest
 from django.contrib.sessions.middleware import SessionMiddleware
 from django.test import RequestFactory
-
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
-from djust import state
+from djust.tests._frames import payloads_of
 
 
 class FlashView(LiveView):
@@ -87,34 +86,34 @@ class TestFlashSideChannel:
         view, factory, req = _setup_view()
         data = _post_event(view, factory, req.session, "save")
 
-        assert "_flash" in data
-        assert len(data["_flash"]) == 1
-        assert data["_flash"][0]["action"] == "put"
-        assert data["_flash"][0]["level"] == "success"
-        assert data["_flash"][0]["message"] == "Record saved!"
+        assert payloads_of(data, "flash")
+        assert len(payloads_of(data, "flash")) == 1
+        assert payloads_of(data, "flash")[0]["action"] == "put"
+        assert payloads_of(data, "flash")[0]["level"] == "success"
+        assert payloads_of(data, "flash")[0]["message"] == "Record saved!"
 
     def test_multiple_flash_messages(self):
         view, factory, req = _setup_view()
         data = _post_event(view, factory, req.session, "warn_and_save")
 
-        assert "_flash" in data
-        assert len(data["_flash"]) == 2
-        assert data["_flash"][0]["level"] == "success"
-        assert data["_flash"][1]["level"] == "warning"
+        assert payloads_of(data, "flash")
+        assert len(payloads_of(data, "flash")) == 2
+        assert payloads_of(data, "flash")[0]["level"] == "success"
+        assert payloads_of(data, "flash")[1]["level"] == "warning"
 
     def test_clear_flash_in_response(self):
         view, factory, req = _setup_view()
         data = _post_event(view, factory, req.session, "clear_errors")
 
-        assert "_flash" in data
-        assert data["_flash"][0]["action"] == "clear"
-        assert data["_flash"][0]["level"] == "error"
+        assert payloads_of(data, "flash")
+        assert payloads_of(data, "flash")[0]["action"] == "clear"
+        assert payloads_of(data, "flash")[0]["level"] == "error"
 
     def test_no_flash_when_unused(self):
         view, factory, req = _setup_view()
         data = _post_event(view, factory, req.session, "noop")
 
-        assert "_flash" not in data
+        assert not payloads_of(data, "flash")
 
 
 @pytest.mark.django_db
@@ -123,16 +122,16 @@ class TestPageMetadataSideChannel:
         view, factory, req = _setup_view()
         data = _post_event(view, factory, req.session, "update_title")
 
-        assert "_page_metadata" in data
-        assert len(data["_page_metadata"]) == 1
-        assert data["_page_metadata"][0]["action"] == "title"
-        assert data["_page_metadata"][0]["value"] == "New Title"
+        assert payloads_of(data, "page_metadata")
+        assert len(payloads_of(data, "page_metadata")) == 1
+        assert payloads_of(data, "page_metadata")[0]["action"] == "title"
+        assert payloads_of(data, "page_metadata")[0]["value"] == "New Title"
 
     def test_no_metadata_when_unused(self):
         view, factory, req = _setup_view()
         data = _post_event(view, factory, req.session, "noop")
 
-        assert "_page_metadata" not in data
+        assert not payloads_of(data, "page_metadata")
 
 
 @pytest.mark.django_db
@@ -141,7 +140,7 @@ class TestCombinedSideChannels:
         view, factory, req = _setup_view()
         data = _post_event(view, factory, req.session, "flash_and_title")
 
-        assert "_flash" in data
-        assert data["_flash"][0]["level"] == "info"
-        assert "_page_metadata" in data
-        assert data["_page_metadata"][0]["value"] == "Info Page"
+        assert payloads_of(data, "flash")
+        assert payloads_of(data, "flash")[0]["level"] == "info"
+        assert payloads_of(data, "page_metadata")
+        assert payloads_of(data, "page_metadata")[0]["value"] == "Info Page"

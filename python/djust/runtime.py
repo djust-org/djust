@@ -71,6 +71,7 @@ from typing import (
 from asgiref.sync import sync_to_async
 
 from . import _per_turn
+from ._protocol import PROTOCOL_VERSION
 from ._params_form import run_handle_params
 from ._view_hooks import call_async_result, call_hook
 from ._held_rows import rows_written, writes_by
@@ -744,14 +745,7 @@ def _discard_turn_effects(view: Any) -> None:
     tasks = getattr(view, "_async_tasks", None)
     if tasks:
         view._async_tasks = {}
-    for drain in (
-        "_drain_push_events",
-        "_drain_flash",
-        "_drain_page_metadata",
-        "_drain_pending_layout",
-        "_drain_deferred",
-        "_drain_navigation",
-    ):
+    for drain in ("_drain_outbound", "_drain_deferred"):
         method = getattr(view, drain, None)
         if callable(method):
             method()
@@ -1145,10 +1139,10 @@ def template_source(template_name: str) -> str:
 
 def _queued_title(view: Any) -> bool:
     """Whether ``view`` has a ``page_title`` command waiting to be sent."""
-    pending = getattr(view, "_pending_page_metadata", None)
-    if not isinstance(pending, list):
+    pending = getattr(view, "_pending", None)
+    if not callable(pending):
         return False
-    return any(isinstance(cmd, dict) and cmd.get("action") == "title" for cmd in pending)
+    return any(cmd.get("action") == "title" for cmd in pending("page_metadata"))
 
 
 def navigation_title_variables(view: Any) -> Tuple[str, ...]:
@@ -3904,7 +3898,7 @@ class ViewRuntime(RuntimeTurnPort):
         )
         if hook_redirect:
             if not await self._refused_view("redirect", hook_redirect):
-                await self.transport.send({"type": "navigate", "to": hook_redirect})
+                await self._send_navigate(hook_redirect)
             await self._finalize_mount_auth("hook_redirect")
             self.view_instance = None
             return
@@ -4286,6 +4280,8 @@ class ViewRuntime(RuntimeTurnPort):
             "session_id": self.session_id,
             "view": view_path,
             "version": version,
+            # #3658: the client reloads when this differs from its own.
+            "protocol": PROTOCOL_VERSION,
         }
         if getattr(view_instance, "_explicit_child_vdom_tracking", False):
             # Only committed render-issued locations enter the mount protocol.
@@ -4470,7 +4466,10 @@ class ViewRuntime(RuntimeTurnPort):
             except Exception:  # noqa: BLE001 — application render errors may carry values
                 logger.error("Sticky child refresh after navigation failed")
                 continue
-            await self.transport.send({"type": "embedded_update", "view_id": slot, "html": html})
+            # Its own frame, no effects: mount drains only push events (below).
+            from ._render_frame import render_frame
+
+            await self.transport.send(render_frame(source="mount", view_id=slot, html=html))
         # From here a server-originated turn (push / tick, #3809) may address
         # this view: before the mount frame the client has nothing to patch.
         self._mount_sent_for = view_instance
@@ -4494,7 +4493,7 @@ class ViewRuntime(RuntimeTurnPort):
         # run a full event turn-end flush. ``_flush_push_events`` is sync (queues
         # the sends fire-and-forget); ``_dispatch_async_work`` takes the event_name
         # (None at mount).
-        self._flush_push_events()
+        await self._send_effects("mount", kinds=("push_event",))
         self._dispatch_async_work(None)
 
     # ------------------------------------------------------------------ #
@@ -4708,13 +4707,12 @@ class ViewRuntime(RuntimeTurnPort):
             # skip-render noop shape (type/source/event_name/ref) so the client
             # can match the ack to its pending event (#560 sequencing).
             noop_msg: Dict[str, Any] = {
-                "type": "noop",
                 "source": "event",
                 "event_name": event_name,
             }
             if event_ref is not None:
                 noop_msg["ref"] = event_ref
-            await self.transport.send(noop_msg)
+            await self._send_render(noop_msg)
             return
 
         # Security
@@ -4904,8 +4902,8 @@ class ViewRuntime(RuntimeTurnPort):
         # websocket.py:3867-3891. Guarded by force_html so an explicit
         # full-HTML request still renders.
         if not skip_render and not force_html:
-            pending = getattr(view, "_pending_push_events", None)
-            if pending:
+            has_pending = getattr(view, "_has_pending", None)
+            if callable(has_pending) and has_pending("push_event"):
                 post_identity = {k: id(v) for k, v in view.__dict__.items() if k not in _fw_attrs}
                 if pre_identity == post_identity and not has_explicit_children:
                     skip_render = True
@@ -4930,8 +4928,6 @@ class ViewRuntime(RuntimeTurnPort):
             # ``test_live_redirect_from_state_unchanging_handler_emits_navigation_frame``).
             # ``_flush_all_pending`` is the single 8-queue drain (#1646) and
             # includes ``_flush_push_events``, so this also covers the push drain.
-            if not snapshot_fields:
-                await self._flush_all_pending()
             # ref echo (#560) + source/event_name (#560 sequencing) on the noop
             # frame so the client can match the ack to its pending event (clear
             # _pendingEventRefs / stop the right loading state) and distinguish it
@@ -4940,7 +4936,6 @@ class ViewRuntime(RuntimeTurnPort):
             # runtime ADD (the WS noop omits them) for self-describing #560
             # sequencing — harmless extra fields the client tolerates.
             noop_msg = {
-                "type": "noop",
                 "source": "event",
                 "event_name": event_name,
             }
@@ -4950,13 +4945,12 @@ class ViewRuntime(RuntimeTurnPort):
                 noop_msg["async_pending"] = True
             _take_form_reset(view, noop_msg)
             noop_msg.update(async_batch.fields())
+            # The snapshot fields ride on the same frame: the client stores the
+            # snapshot at receipt, before it applies the effects, so navigation
+            # state is published before a queued redirect's before-navigate.
             noop_msg.update(snapshot_fields)
-            await self.transport.send(noop_msg)
-            if snapshot_fields:
-                # Explicit acknowledgements publish (or invalidate) navigation
-                # state before a queued redirect triggers before-navigate.
-                # Preserve the legacy side-effect ordering unchanged.
-                await self._flush_all_pending()
+            # One frame: the acknowledgement and every queued effect (#3658).
+            await self._send_render(noop_msg)
             # Dispatch background work UNCONDITIONALLY after the turn (matches WS
             # handle_event websocket.py:4235, NOT the legacy SSE which gated this
             # on has_async). The captured batch includes named and legacy work
@@ -5226,9 +5220,7 @@ class ViewRuntime(RuntimeTurnPort):
                 return
             # (_skip_render was already consumed by _resolve_skip_render —
             # it is the single owner of that reset, #2834/#2847.)
-            self._flush_push_events()
             noop_msg: Dict[str, Any] = {
-                "type": "noop",
                 "source": "event",
                 "event_name": event_name,
             }
@@ -5239,7 +5231,7 @@ class ViewRuntime(RuntimeTurnPort):
             _take_form_reset(view, noop_msg)
             noop_msg.update(async_batch.fields())
             noop_msg.update(snapshot_fields)
-            await self.transport.send(noop_msg)
+            await self._send_render(noop_msg)
             self._dispatch_async_work(event_name, async_batch)
             return
 
@@ -5361,10 +5353,10 @@ class ViewRuntime(RuntimeTurnPort):
             and not target_view._is_activity_eager(activity)
         ):
             target_view._queue_deferred_activity_event(activity, event_name, params, event_ref)
-            noop: Dict[str, Any] = {"type": "noop", "source": "event", "event_name": event_name}
+            noop: Dict[str, Any] = {"source": "event", "event_name": event_name}
             if event_ref is not None:
                 noop["ref"] = event_ref
-            await self.transport.send(noop)
+            await self._send_render(noop, self.view_instance, target_view)
             return True
 
         await self._run_child_event(
@@ -5518,7 +5510,6 @@ class ViewRuntime(RuntimeTurnPort):
         _emit_full_html_update(target_view, "embedded_child", event_name, html, 0)
 
         msg: Dict[str, Any] = {
-            "type": "embedded_update",
             "view_id": view_id,
             "html": html,
             "event_name": event_name,
@@ -5529,11 +5520,10 @@ class ViewRuntime(RuntimeTurnPort):
 
         child_batch = AsyncBatch(target_view)
         msg.update(child_batch.fields())
-        await self._send_render_frame(msg)
-        await self._flush_all_pending()
-
-        # Child side effects carry their own audio scope; drain the child's queue.
-        self._flush_push_events(target_view)
+        # Root effects first, then the child's (its side effects carry their
+        # own audio scope), in the one frame.
+        await self._send_render_frame(msg, self.view_instance, target_view)
+        await self._flush_all_pending("event", self.view_instance, target_view)
         # Dispatch any background work the child handler scheduled (WS parity).
         from ._child_async import dispatch_child_work
 
@@ -5769,7 +5759,7 @@ class ViewRuntime(RuntimeTurnPort):
                     async_batch=async_batch,
                     snapshot_fields=snapshot_fields,
                 )
-                await self._flush_all_pending()
+                await self._flush_all_pending("event")
                 self._dispatch_async_work(event_name, async_batch)
                 return True
 
@@ -5795,7 +5785,6 @@ class ViewRuntime(RuntimeTurnPort):
 
         wire_version = self.transport.next_client_version(html, version)
         msg: Dict[str, Any] = {
-            "type": "html_update",
             "html": html,
             "version": wire_version,
             "event_name": event_name,
@@ -5806,7 +5795,8 @@ class ViewRuntime(RuntimeTurnPort):
         msg.update(async_batch.fields())
         msg.update(snapshot_fields)
         await self._send_render_frame(msg)
-        await self._flush_all_pending()
+        # Effects that could not ride a frame (a refused contract manifest).
+        await self._flush_all_pending("event")
 
         # Dispatch any background work the component handler scheduled (WS parity).
         self._dispatch_async_work(event_name, async_batch)
@@ -5824,10 +5814,7 @@ class ViewRuntime(RuntimeTurnPort):
         batch) and start that batch — the view route's skip shape (#2922,
         #2924). An explicit view's noop carries the refreshed client snapshot,
         and its queued side effects follow it, as on the view route (#3231)."""
-        if not snapshot_fields:
-            await self._flush_all_pending()
         noop_msg: Dict[str, Any] = {
-            "type": "noop",
             "source": "event",
             "event_name": event_name,
         }
@@ -5836,12 +5823,9 @@ class ViewRuntime(RuntimeTurnPort):
         _take_form_reset(self.view_instance, noop_msg)
         noop_msg.update(async_batch.fields())
         if snapshot_fields:
+            # Stored at receipt, before the effects apply (see the view route).
             noop_msg.update(snapshot_fields)
-        await self.transport.send(noop_msg)
-        if snapshot_fields:
-            # Publish (or invalidate) navigation state before a queued
-            # redirect triggers before-navigate, as the view route does.
-            await self._flush_all_pending()
+        await self._send_render(noop_msg)
         self._dispatch_async_work(event_name, async_batch)
         await self._flush_deferred_activity_events()
 
@@ -5920,7 +5904,7 @@ class ViewRuntime(RuntimeTurnPort):
             from .mixins.navigation import same_origin_target
 
             self.view_instance.live_redirect(same_origin_target(uri), replace=True)
-            await self._flush_navigation()
+            await self._send_effects("url_change", kinds=("navigation",))
             return
 
         try:
@@ -5984,7 +5968,6 @@ class ViewRuntime(RuntimeTurnPort):
                 if isinstance(patches, str):
                     patches = fast_json_loads(patches)
                 msg: Dict[str, Any] = {
-                    "type": "patch",
                     "patches": patches,
                     "version": wire_version,
                     "event_name": "url_change",
@@ -5998,18 +5981,15 @@ class ViewRuntime(RuntimeTurnPort):
                 if hasattr(self.view_instance, "_extract_liveview_content"):
                     html = await sync_to_async(self.view_instance._extract_liveview_content)(html)
                 msg = {
-                    "type": "html_update",
                     "html": html,
                     "version": wire_version,
                     "event_name": "url_change",
                 }
                 await self._send_render_frame(msg)
 
-            # Full flush-queue parity with WS (#1885 / #1646): the url_change
-            # path is the runtime's one production user, so flash / page_metadata
-            # / layout / a11y queued during handle_params() were being
-            # silently dropped before this. Drain every queue in canonical order.
-            await self._flush_all_pending()
+            # The frame above carried every effect handle_params() queued; this
+            # sends what could not ride it (a refused contract manifest).
+            await self._flush_all_pending("url_change")
             # start_async()/assign_async() work handle_params() queued runs
             # after the frame, as it does on the mount and event paths;
             # without this a Back/Forward read never happened.
@@ -6293,7 +6273,7 @@ class ViewRuntime(RuntimeTurnPort):
 
         if redirect_url:
             if not await self._refused_view("login_required", redirect_url):
-                await self.transport.send({"type": "navigate", "to": redirect_url})
+                await self._send_navigate(redirect_url)
             # Finding E: the redirect verdict gates the WS close on
             # ``not _mounting_in_batch`` (#291 / #1780) — a batched login-required
             # view reports as ``navigate[]`` and closing would kill sibling mounts.
@@ -7784,7 +7764,6 @@ class ViewRuntime(RuntimeTurnPort):
 
             if patch_list is not None:
                 msg: Dict[str, Any] = {
-                    "type": "patch",
                     "patches": patch_list,
                     "version": wire_version,
                     "event_name": event_name,
@@ -7819,7 +7798,6 @@ class ViewRuntime(RuntimeTurnPort):
                         patch_count=_compressed_patch_count,
                     )
                 msg = {
-                    "type": "html_update",
                     "html": html_content,
                     "version": wire_version,
                     "event_name": event_name,
@@ -7900,7 +7878,6 @@ class ViewRuntime(RuntimeTurnPort):
                     context=_ctx_snapshot,
                 )
             msg = {
-                "type": "html_update",
                 "html": html,
                 "version": wire_version,
                 "event_name": event_name,
@@ -7916,11 +7893,13 @@ class ViewRuntime(RuntimeTurnPort):
                 msg["ref"] = event_ref
             await self._send_render_frame(_send_event_frame(msg))
 
-        # Full flush-queue parity with WS (#1885 / #1646): drain ALL 8 queues
-        # in canonical order, not just push_events/navigation/deferred.
-        await self._flush_all_pending()
+        # The frame carried every queued effect; this sends what could not
+        # ride it (a refused contract manifest).
+        await self._flush_all_pending("event")
 
-    async def _send_render_frame(self, frame: Dict[str, Any]) -> None:
+    async def _send_render_frame(
+        self, frame: Dict[str, Any], *views: Any, finish: bool = True
+    ) -> None:
         """Attach a fresh public owner snapshot to this render, not a side frame.
 
         Receivers must install it only when applying the associated DOM update.
@@ -7943,7 +7922,7 @@ class ViewRuntime(RuntimeTurnPort):
             # Keep emitting explicit clears until remount: omission must not
             # revive a client's pre-clear contracts during deferred delivery.
             self._parameter_contracts_active = True
-        await self.transport.send(frame)
+        await self._send_render(frame, *views, finish=finish)
 
     def _stamp_event_frame(
         self,
@@ -7999,7 +7978,8 @@ class ViewRuntime(RuntimeTurnPort):
         if patch is None:
             return None
         # (``_force_full_html`` is read by both callers before they get here.)
-        if getattr(view, "_pending_push_events", None):
+        has_pending = getattr(view, "_has_pending", None)
+        if callable(has_pending) and has_pending("push_event"):
             return None
         if getattr(view, "_djust_renderer", None) is not None:
             return None
@@ -8093,7 +8073,6 @@ class ViewRuntime(RuntimeTurnPort):
         html, patches, version = triple
         wire_version = self.transport.next_client_version(html, version)
         msg: Dict[str, Any] = {
-            "type": "patch",
             "patches": fast_json_loads(patches) if isinstance(patches, str) else patches,
             "version": wire_version,
             "event_name": event_name,
@@ -8116,39 +8095,84 @@ class ViewRuntime(RuntimeTurnPort):
             )
         )
 
-    def _flush_push_events(self, view: Optional[Any] = None) -> None:
-        """Drain push_events and send via the transport (sync-safe — pushes
-        get queued but the actual send is fire-and-forget to keep the
-        flush points cheap)."""
-        view = self.view_instance if view is None else view
-        if not view or not hasattr(view, "_drain_push_events"):
-            return
-        for event_name, payload in view._drain_push_events():
-            asyncio.ensure_future(
-                self.transport.send({"type": "push_event", "event": event_name, "payload": payload})
-            )
+    # ------------------------------------------------------------------ #
+    # #3658 (TC9): one ``render`` frame per turn result. The queued effects
+    # (push events, flash, page metadata, layout, navigation) of the view(s)
+    # ride in its ``effects`` list, drained once in the canonical order
+    # (``djust._render_frame``). After the frame the ``defer()`` callbacks
+    # run; whatever they queued goes out in one effects-only frame
+    # (``source: "deferred"``).
+    # ------------------------------------------------------------------ #
 
-    async def _flush_navigation(self) -> None:
-        """Drain navigation commands and AWAIT the send via the transport.
+    def _effect_views(self, views: Tuple[Any, ...]) -> Tuple[Any, ...]:
+        return views if views else (self.view_instance,)
 
-        Awaited (not fire-and-forget) to match the WS bespoke turn-end drain
-        (websocket.py ``_flush_navigation`` is ``async`` + awaited at
-        ``_flush_all_pending``). Before #1907 THE FLIP, WS events ran on the
-        bespoke path which awaited this flush WITHIN the event turn, so a
-        ``live_redirect()`` from a handler emitted its ``navigation`` frame before
-        ``handle_event`` returned. The runtime previously fired-and-forgot the send
-        (``asyncio.ensure_future``) — fine for SSE's async stream, but once WS
-        events route here that dropped the navigation frame from the event turn's
-        observable output (a real regression caught by
-        ``test_state_changing_handler_with_live_redirect_still_navigates``).
-        Awaiting restores WS parity (#1646: converge on the WS turn-end semantics)."""
-        view = self.view_instance
-        if not view or not hasattr(view, "_drain_navigation"):
-            return
-        for cmd in view._drain_navigation():
-            action = cmd.get("type")
-            payload = {k: v for k, v in cmd.items() if k != "type"}
-            await self.transport.send({"type": "navigation", "action": action, **payload})
+    async def _send_render(self, frame: Dict[str, Any], *views: Any, finish: bool = True) -> None:
+        """Send ``frame`` as a ``render`` frame carrying the queued effects.
+
+        ``frame`` holds the frame's fields (a legacy ``type`` key, if any, is
+        dropped). ``views`` are drained root first (default: the root view).
+        ``finish`` runs the ``defer()`` callbacks and sends their effects.
+        """
+        from ._render_frame import adrain_effects, raise_collected, render_frame
+
+        fields = {k: v for k, v in frame.items() if k != "type"}
+        fields.pop("effects", None)
+        errors: List[BaseException] = []
+        effects = list(frame.get("effects") or []) + await adrain_effects(
+            *self._effect_views(views), errors=errors
+        )
+        await self.transport.send(render_frame(effects=effects, **fields))
+        # A layout that failed under DEBUG is re-raised once the frame (its
+        # DOM part and the other effects) has gone out.
+        raise_collected(errors)
+        if finish:
+            await self._finish_turn_effects()
+
+    async def _send_effects(
+        self,
+        source: str,
+        *views: Any,
+        kinds: Optional[Tuple[str, ...]] = None,
+    ) -> bool:
+        """Send the queued effects in one effects-only ``render`` frame.
+
+        Nothing is sent when nothing is queued. ``kinds`` limits the drain
+        (``flush_push_events()`` sends only ``push_event``). Returns whether
+        a frame was sent.
+        """
+        from ._render_frame import adrain_effects, raise_collected, render_frame
+
+        errors: List[BaseException] = []
+        effects = await adrain_effects(*self._effect_views(views), kinds=kinds, errors=errors)
+        if effects:
+            await self.transport.send(render_frame(source=source, effects=effects))
+        raise_collected(errors)
+        return bool(effects)
+
+    async def _send_navigate(self, to: str) -> None:
+        """A refused mount: one ``render`` frame whose one effect navigates to ``to``."""
+        from ._render_frame import render_frame
+
+        await self.transport.send(
+            render_frame(source="mount", effects=[{"kind": "navigate", "to": to}])
+        )
+
+    async def _finish_turn_effects(self) -> None:
+        """Run the ``defer()`` callbacks, then send what they queued (§2.4)."""
+        await self._flush_deferred()
+        await self._send_effects("deferred")
+
+    async def _flush_all_pending(self, source: str = "deferred", *views: Any) -> None:
+        """End a turn that sent no ``render`` frame of its own.
+
+        Sends the queued effects (if any) as one effects-only frame tagged
+        ``source``, then runs the ``defer()`` callbacks and sends their
+        effects. After a ``render`` frame this is a no-op unless something
+        queued more in between.
+        """
+        await self._send_effects(source, *views)
+        await self._finish_turn_effects()
 
     async def _flush_deferred(self) -> None:
         """Run ``self.defer(...)`` callbacks. Errors are logged and
@@ -8177,112 +8201,6 @@ class ViewRuntime(RuntimeTurnPort):
                     level="warning",
                     traceback=True,
                 )
-
-    # ------------------------------------------------------------------ #
-    # Iter 0 / #1885 — full flush-queue parity with WS ``_flush_all_pending``.
-    #
-    # Before Iter 0 the runtime drained only 3 of WS's 8 queues
-    # (push_events / navigation / deferred), so the runtime's one production
-    # user (``url_change`` — dj-patch / popstate) silently dropped flash
-    # messages, page-metadata updates, layout swaps, accessibility
-    # announcements, and i18n commands queued during ``handle_params``
-    # (live #1646 instance INSIDE the convergence target). The methods
-    # below + ``_flush_all_pending`` mirror WS ``_flush_all_pending`` exactly:
-    # same queue set, same canonical drain order, same per-queue frame shape
-    # and ``_drain_*`` method names. The i18n flush went in #3502 and the
-    # accessibility flush in 2.0 (#3500): nothing defined the
-    # ``_drain_i18n_commands`` / ``_drain_announcements`` / ``_drain_focus``
-    # they called. ``_flush_all_pending``
-    # is the single source of the turn-end drain so a future queue addition
-    # can never again be wired on one path and not the other.
-    # ------------------------------------------------------------------ #
-
-    async def _flush_flash(self) -> None:
-        """Drain pending flash messages and emit ``flash`` frames (WS parity)."""
-        view = self.view_instance
-        if not view or not hasattr(view, "_drain_flash"):
-            return
-        commands = view._drain_flash()
-        if not isinstance(commands, list):
-            return
-        for cmd in commands:
-            await self.transport.send({"type": "flash", **cmd})
-
-    async def _flush_page_metadata(self) -> None:
-        """Drain pending page-metadata commands and emit ``page_metadata`` frames."""
-        view = self.view_instance
-        if not view or not hasattr(view, "_drain_page_metadata"):
-            return
-        commands = view._drain_page_metadata()
-        if not isinstance(commands, list):
-            return
-        for cmd in commands:
-            await self.transport.send({"type": "page_metadata", **cmd})
-
-    async def _flush_pending_layout(self) -> None:
-        """Render + emit a pending ``set_layout`` swap (WS parity, v0.6.0).
-
-        Mirrors ``websocket.py:_flush_pending_layout``: render the queued
-        layout template with the view's current context and emit a
-        ``{"type": "layout", "path": ..., "html": ...}`` frame. Layout
-        template errors must never kill the live connection — ``TemplateDoesNotExist``
-        warns + skips; any other error logs (and re-raises in DEBUG so
-        programmer errors surface during development).
-        """
-        view = self.view_instance
-        if not view or not hasattr(view, "_drain_pending_layout"):
-            return
-        layout_path = view._drain_pending_layout()
-        if not layout_path:
-            return
-        from django.conf import settings as django_settings
-        from django.template.exceptions import TemplateDoesNotExist
-
-        from .mixins.layout import render_pending_layout
-
-        try:
-            # #3178: context + render in one hop (was: context on the loop).
-            layout_html = await sync_to_async(render_pending_layout)(view, layout_path)
-        except TemplateDoesNotExist:
-            logger.warning(
-                "set_layout(%r) — template not found; ignoring swap request", layout_path
-            )
-            return
-        except Exception as exc:  # noqa: BLE001 — layout errors must not kill the wire
-            from ._exposure_diagnostics import log_failure
-
-            log_failure(
-                logger,
-                exc,
-                "set_layout(%r) — template rendering raised; ignoring swap request",
-                layout_path,
-                traceback=True,
-            )
-            if getattr(django_settings, "DEBUG", False):
-                raise
-            return
-        await self.transport.send({"type": "layout", "path": layout_path, "html": layout_html})
-
-    async def _flush_all_pending(self) -> None:
-        """Drain every queued client side-effect at the end of a runtime turn,
-        in WS's canonical order. Single source of truth for the turn-end drain
-        on the runtime path (mirrors ``websocket.py:_flush_all_pending``): every
-        turn-end site (event render, url_change) calls THIS so no path can drop a
-        queued command (#1646). Each ``_flush_*`` drains + clears its own queue,
-        so calling twice in one turn is a harmless no-op.
-
-        Order matches WS exactly: push_events → flash → page_metadata →
-        pending_layout → deferred → navigation. Layout
-        (replaces ``<body>``) goes after page_metadata so head mutations land
-        first and survive the swap; deferred callbacks run after the visible
-        side-effects so they observe post-patch state.
-        """
-        self._flush_push_events()
-        await self._flush_flash()
-        await self._flush_page_metadata()
-        await self._flush_pending_layout()
-        await self._flush_deferred()
-        await self._flush_navigation()
 
     # ------------------------------------------------------------------ #
     # Background work (start_async / @background) — runtime parity (#1887).
@@ -8737,7 +8655,7 @@ class ViewRuntime(RuntimeTurnPort):
         # The turn committed its declared state before it got here.
         if skip_unchanged and not force_html:
             if not await sync_to_async(sync_reports_render_needed)(view):
-                await self._flush_all_pending()
+                await self._flush_all_pending(source)
                 return
         elif hasattr(view, "_sync_state_to_rust"):
             await sync_to_async(view._sync_state_to_rust)()
@@ -8759,7 +8677,6 @@ class ViewRuntime(RuntimeTurnPort):
         if patches is not None:
             patch_list = fast_json_loads(patches) if isinstance(patches, str) else patches
             msg: Dict[str, Any] = {
-                "type": "patch",
                 "patches": patch_list,
                 "version": wire_version,
                 "event_name": event_name,
@@ -8771,7 +8688,6 @@ class ViewRuntime(RuntimeTurnPort):
             if hasattr(view, "_extract_liveview_content"):
                 html = view._extract_liveview_content(html)
             msg = {
-                "type": "html_update",
                 "html": html,
                 "version": wire_version,
                 "event_name": event_name,
@@ -8785,7 +8701,7 @@ class ViewRuntime(RuntimeTurnPort):
             # An explicit root's refreshed signed snapshot (ADR-038 E3).
             msg.update(snapshot_fields)
         await self._send_render_frame(msg)
-        await self._flush_all_pending()
+        await self._flush_all_pending(source)
 
     # ------------------------------------------------------------------ #
     # Server-originated turns without a channel layer: SSE (#3809).
@@ -9109,7 +9025,7 @@ class ViewRuntime(RuntimeTurnPort):
                     # No frame of its own (#3034): a push has no ``ref`` to acknowledge.
                     # Its hooks' session writes are still stored (#4168).
                     await store_turn_session_writes(view, "push")
-                    await self._flush_all_pending()
+                    await self._flush_all_pending("push")
                     return
                 if not await self.commit_explicit_turn(view, source="async"):
                     return
@@ -9215,7 +9131,7 @@ class ViewRuntime(RuntimeTurnPort):
                     # No frame, no commit: the hook's session writes are
                     # still stored (#4168).
                     await store_turn_session_writes(view, "tick")
-                    await self._flush_all_pending()
+                    await self._flush_all_pending("tick")
                     return False
                 force_full_html = getattr(view, "_force_full_html", False)
                 if (
@@ -9224,7 +9140,7 @@ class ViewRuntime(RuntimeTurnPort):
                     and not rows_written(view)
                 ):
                     await store_turn_session_writes(view, "tick")
-                    await self._flush_all_pending()
+                    await self._flush_all_pending("tick")
                     return False
                 if not await self.commit_explicit_turn(view, source="async"):
                     return False

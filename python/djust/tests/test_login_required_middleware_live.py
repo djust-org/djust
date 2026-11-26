@@ -29,6 +29,8 @@ from copy import copy
 
 import pytest
 
+from djust.tests._frames import frame_matches
+
 pytest.importorskip("channels")
 
 from django.conf import settings  # noqa: E402
@@ -523,7 +525,7 @@ async def _ws_mount(user, view_cls, url):
     await socket.send_json_to({"type": "mount", "view": f"{MOD}.{view_cls.__name__}", "url": url})
     frame = await socket.receive_json_from()
     closed = None
-    if frame.get("type") == "navigate":
+    if frame_matches(frame, "navigate"):
         out = await socket.receive_output()
         closed = out.get("code") if out.get("type") == "websocket.close" else None
     await socket.disconnect()
@@ -551,7 +553,7 @@ WS_CASES = [
 async def test_ws_anonymous(view_cls, url, refused):
     frame, closed = await _ws_mount(_Anon(), view_cls, url)
     if refused:
-        assert frame.get("type") == "navigate", frame
+        assert frame_matches(frame, "navigate"), frame
         assert LOGIN in json.dumps(frame)
         assert closed == 4403
     else:
@@ -593,7 +595,7 @@ async def test_ws_subclass_exemption():
         frame, _ = await _ws_mount(_Anon(), LrmPrefixView, "/lrm/open/page/")
         assert frame.get("type") == "mount", frame
         frame, closed = await _ws_mount(_Anon(), LrmEmbeddedView, "/lrm/open/page/")
-        assert frame.get("type") == "navigate" and closed == 4403, frame
+        assert frame_matches(frame, "navigate") and closed == 4403, frame
 
 
 # --------------------------------------------------------------------------- #
@@ -602,9 +604,9 @@ async def test_ws_subclass_exemption():
 
 
 async def _sse_mount(user, view_cls, request_path="/djust/sse/stream/"):
-    from djust import sse
-
     from asgiref.sync import sync_to_async
+
+    from djust import sse
 
     request = RequestFactory().get(request_path)
     request.user, request.session = await sync_to_async(_login)(user)
@@ -632,7 +634,7 @@ async def _sse_mount(user, view_cls, request_path="/djust/sse/stream/"):
 async def test_sse_anonymous_refused(view_cls):
     mounted, msgs = await _sse_mount(_Anon(), view_cls)
     assert mounted is False
-    assert any(m.get("type") == "navigate" and LOGIN in json.dumps(m) for m in msgs), msgs
+    assert any(frame_matches(m, "navigate") and LOGIN in json.dumps(m) for m in msgs), msgs
 
 
 @pytest.mark.django_db(transaction=True)
@@ -841,7 +843,7 @@ _CONSUMERS: list = []
 async def _ws_frame(socket, *types):
     while True:
         frame = await socket.receive_json_from()
-        if frame.get("type") in types:
+        if frame_matches(frame, types):
             return frame
 
 

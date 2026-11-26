@@ -25,6 +25,7 @@ from django.urls import path
 
 from djust import LiveView, event_handler
 from djust.testing import open_live_page
+from djust.tests._frames import effects_of
 from djust.uploads import (
     FRAME_CHUNK,
     FRAME_COMPLETE,
@@ -536,8 +537,12 @@ async def test_socket_view_cancel_is_pushed_to_the_browser(limits_site):
     socket = await page.connect()
     ref = await _start(socket, "doc")
     await socket.communicator.send_to(bytes_data=_chunk(ref, 0, b"0123"))
-    await socket.send_event("drop", {"ref": ref})
-    pushed = await socket.receive(("push_event",))
+    answer = await socket.send_event("drop", {"ref": ref})
+    # The cancel push rides in the answer's effects, or in a later frame (#3658).
+    found = effects_of(answer, "push_event")
+    if not found:
+        found = effects_of(await socket.receive(("push_event",)), "push_event")
+    pushed = found[0]
     assert pushed["event"] == UPLOAD_PROGRESS_PUSH_EVENT
     assert pushed["payload"]["ref"] == ref
     assert pushed["payload"]["status"] == "cancelled"

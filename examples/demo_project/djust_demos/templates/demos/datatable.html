@@ -743,6 +743,7 @@ class ProductDataTableView(LiveView):
                     headers: {
                         'Content-Type': 'application/json',
                         'X-CSRFToken': getCookie('csrftoken'),
+                        'X-Djust-Protocol': String((window.djust && window.djust.PROTOCOL) || 2),
                     },
                     body: JSON.stringify({
                         event: action,
@@ -752,9 +753,10 @@ class ProductDataTableView(LiveView):
 
                 if (response.ok) {
                     const answer = await response.json();
-                    // The handlers send rows + stats via push_event("products_updated").
-                    const pushed = (answer._push_events || []).find(
-                        (e) => e.event === 'products_updated'
+                    // The handlers send rows + stats via push_event("products_updated"),
+                    // an entry of the render frame's effects (#3658).
+                    const pushed = (answer.effects || []).find(
+                        (e) => e.kind === 'push_event' && e.event === 'products_updated'
                     );
                     const data = (pushed && pushed.payload) || {};
 

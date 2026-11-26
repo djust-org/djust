@@ -23,6 +23,7 @@ from djust.decorators import event_handler, state
 from djust.state_backends import get_backend, set_backend
 from djust.state_backends.base import describe_snapshot
 from djust.state_backends.memory import InMemoryStateBackend
+from djust.tests._frames import effects_of, frame_matches, legacy_type
 
 pytestmark = [pytest.mark.django_db]
 
@@ -290,7 +291,7 @@ class _Socket:
     async def until(self, *types):
         for _ in range(12):
             frame = await self.communicator.receive_json_from()
-            if frame.get("type") in types:
+            if frame_matches(frame, types):
                 return frame
         raise AssertionError("no %s frame" % (types,))
 
@@ -355,11 +356,11 @@ class TestTheWebSocket:
                 # The live view in this process holds no tree and no context either.
                 (live,) = RecordedStaticDiagram._mounted
                 held = describe_snapshot(live._rust_view.serialize_msgpack())
-        assert first["type"] == second["type"] == "html_update"
+        assert legacy_type(first) == legacy_type(second) == "html_update"
         assert ">open<" in first["html"] and "table_1999" in first["html"]
         assert ">closed<" in second["html"]
         assert second["version"] == first["version"] + 1
-        assert quiet["type"] == "noop"  # nothing changed: nothing rendered
+        assert legacy_type(quiet) == "noop"  # nothing changed: nothing rendered
         assert held["tree"] <= 1 and held["state"] <= 1
 
     async def test_a_normal_view_patches(self, backend):
@@ -368,7 +369,7 @@ class TestTheWebSocket:
             async with _Socket(key) as socket:
                 await socket.mount(Diagram)
                 frame = await socket.event("toggle", 1)
-        assert frame["type"] == "patch" and frame["patches"]
+        assert legacy_type(frame) == "patch" and frame["patches"]
 
     async def test_navigating_away_and_back_and_reconnecting_render_the_page(self, backend):
         key = await _session_key()
@@ -383,7 +384,7 @@ class TestTheWebSocket:
         for frame in (first, back, again):
             assert "table_1999" in frame["html"] and ">closed<" in frame["html"]
         assert ">0</p>" in away["html"] and "table_1999" not in away["html"]
-        assert after_back["type"] == "html_update" and ">open<" in after_back["html"]
+        assert legacy_type(after_back) == "html_update" and ">open<" in after_back["html"]
 
     async def test_a_mount_after_the_get_starts_from_the_small_entry(self, backend):
         request, _html = await sync_to_async(_get)(StaticDiagram)
@@ -392,7 +393,7 @@ class TestTheWebSocket:
                 mounted = await socket.mount(StaticDiagram)
                 frame = await socket.event("toggle", 1)
         assert "table_1999" in mounted["html"]
-        assert frame["type"] == "html_update" and ">open<" in frame["html"]
+        assert legacy_type(frame) == "html_update" and ">open<" in frame["html"]
         assert backend._cache == {}
 
     @pytest.mark.django_db(transaction=True)
@@ -410,7 +411,7 @@ class TestTheWebSocket:
                         result = frame
                         break
         assert ">badge-none<" in mounted["html"]
-        assert result is not None and result["type"] == "html_update", result
+        assert result is not None and legacy_type(result) == "html_update", result
         assert ">badge-3<" in result["html"] and "table_1999" in result["html"]
         assert result["version"] == mounted["version"] + 1
 
@@ -593,11 +594,7 @@ class StaticComputedTitlePage(ComputedTitlePage):
 
 
 def _titles(frames):
-    return [
-        f["value"]
-        for f in frames
-        if f.get("type") == "page_metadata" and f.get("action") == "title"
-    ]
+    return [f["value"] for f in effects_of(frames, "page_metadata") if f.get("action") == "title"]
 
 
 @pytest.mark.asyncio
@@ -611,7 +608,7 @@ class TestTheNavigationTitleSurvivesTheRelease:
             async with _Socket(key) as socket:
                 await socket.mount(SmallPage, url="/small/")
                 frames = await socket.redirect(page, "/report/")
-        assert _titles(frames) == ["Report of 3 rows"], [f.get("type") for f in frames]
+        assert _titles(frames) == ["Report of 3 rows"], [legacy_type(f) for f in frames]
 
 
 class MessagesPage(LiveView):
@@ -658,7 +655,7 @@ class TestTemporaryAssignsOnAStaticView:
                     first = await socket.event("toggle", 1)
                     await socket.event("toggle", 2)
         assert "first-message" in mounted["html"]
-        assert first["type"] == "html_update" and "first-message" not in first["html"]
+        assert legacy_type(first) == "html_update" and "first-message" not in first["html"]
         warned = [r for r in caplog.records if r.name == "djust._static_render"]
         assert len(warned) == 1, [r.getMessage() for r in warned]  # once, not per render
         text = warned[0].getMessage()
@@ -759,7 +756,7 @@ class TestLaterRendersAreWholeAndCorrect:
         for frame in (mounted, first, second):
             for shown in ("str-shape", "row-a", "row-b", "box-name", "dict-shape"):
                 assert shown in frame["html"], (frame["type"], shown)
-        assert first["type"] == second["type"] == "html_update"
+        assert legacy_type(first) == legacy_type(second) == "html_update"
         assert ">open<" in first["html"] and ">closed<" in second["html"]
 
     async def test_static_assigns_are_sent_again_because_nothing_retains_them(self, backend):
@@ -771,7 +768,7 @@ class TestLaterRendersAreWholeAndCorrect:
                 second = await socket.event("toggle", 2)
         for frame in (mounted, first, second):
             assert "table_1999" in frame["html"], frame["type"]
-        assert first["type"] == second["type"] == "html_update"
+        assert legacy_type(first) == legacy_type(second) == "html_update"
 
     async def test_a_bound_component_event_takes_the_whole_page_not_a_scoped_patch(self, backend):
         """The scoped component render (ADR-032) diffs the component's subtree
@@ -785,7 +782,7 @@ class TestLaterRendersAreWholeAndCorrect:
                 second = await socket.event("select", 2, component_id="nav", value="usage")
         assert ">overview<" in mounted["html"] and "table_1999" in mounted["html"]
         for frame, active in ((first, "billing"), (second, "usage")):
-            assert frame["type"] == "html_update", frame["type"]
+            assert legacy_type(frame) == "html_update", frame["type"]
             assert f">{active}<" in frame["html"] or f">{active}<b>" in frame["html"], frame["html"]
             assert "table_1999" in frame["html"]
 
@@ -795,7 +792,7 @@ class TestLaterRendersAreWholeAndCorrect:
             async with _Socket(key) as socket:
                 await socket.mount(NormalTabsPage)
                 frame = await socket.event("select", 1, component_id="nav", value="billing")
-        assert frame["type"] == "patch" and frame["patches"]
+        assert legacy_type(frame) == "patch" and frame["patches"]
 
     async def test_the_full_frame_is_not_a_diff_failure(self, backend, caplog):
         """A static view's full frame is by design: no DJE-053 warning, and the
@@ -821,7 +818,7 @@ class TestLaterRendersAreWholeAndCorrect:
                         frame = await socket.event("toggle", 1)
         finally:
             full_html_update.disconnect(receiver)
-        assert frame["type"] == "html_update"
+        assert legacy_type(frame) == "html_update"
         assert "DJE-053" not in caplog.text
         assert [(name, reason) for name, reason, _v in seen] == [("StaticDiagram", "static_render")]
         # The gate the reason exists for: the version is past the first render.
@@ -850,7 +847,7 @@ class TestLaterRendersAreWholeAndCorrect:
                         frame = await socket.event("toggle", 1)
         finally:
             globals().pop("Forcing", None)
-        assert frame["type"] == "html_update"
+        assert legacy_type(frame) == "html_update"
         assert "DJE-053" in caplog.text
 
 
@@ -864,9 +861,9 @@ class TestEmbeddedChildren:
                 child = await socket.event("drop", 1, view_id="dock")
                 page = await socket.event("toggle", 2)
         assert ">a</span>" in mounted["html"]
-        assert child["type"] == "embedded_update" and child["view_id"] == "dock"
+        assert legacy_type(child) == "embedded_update" and child["view_id"] == "dock"
         assert ">a</span>" not in child["html"] and ">b</span>" in child["html"]
-        assert page["type"] == "html_update" and ">open<" in page["html"]
+        assert legacy_type(page) == "html_update" and ">open<" in page["html"]
         assert "table_1999" in page["html"]
 
     async def test_a_static_child_inside_a_normal_page(self, backend):
@@ -876,6 +873,6 @@ class TestEmbeddedChildren:
                 await socket.mount(NormalHostOfStaticDock)
                 child = await socket.event("drop", 1, view_id="dock")
                 page = await socket.event("toggle", 2)
-        assert child["type"] == "embedded_update"
+        assert legacy_type(child) == "embedded_update"
         assert ">a</span>" not in child["html"] and ">b</span>" in child["html"]
-        assert page["type"] == "patch" and page["patches"]  # the page keeps its baseline
+        assert legacy_type(page) == "patch" and page["patches"]  # the page keeps its baseline

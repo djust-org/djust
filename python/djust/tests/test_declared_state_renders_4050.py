@@ -28,6 +28,7 @@ from djust.components.descriptors.base import LiveComponent
 from djust.decorators import state
 from djust.mixins.context import rendered_state_names
 from djust.presence import PresenceMixin
+from djust.tests._frames import legacy_type
 from djust.tests.test_exposure_runtime import make_request
 from djust.websocket import LiveViewConsumer
 
@@ -372,7 +373,7 @@ async def test_websocket_mount_and_event_render_a_declared_field():
             await socket.send_json_to({"type": "event", "event": "increment", "params": {}})
             frames = await receive_until(socket, has_type("patch", "html_update"))
             frames += await drain_extra(socket)
-            updates = [f for f in frames if f.get("type") in ("patch", "html_update")]
+            updates = [f for f in frames if legacy_type(f) in ("patch", "html_update")]
             assert updates, frames
             # The DOM is patched with the new value of the declared field.
             assert "[1]" in json.dumps(updates), updates

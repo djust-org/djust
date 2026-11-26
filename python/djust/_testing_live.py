@@ -40,6 +40,8 @@ from html import unescape
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple, TypeVar
 from urllib.parse import parse_qs, urlsplit
 
+from ._protocol import PROTOCOL_HEADER, PROTOCOL_QUERY_PARAM, PROTOCOL_VERSION
+
 __all__ = [
     "LivePage",
     "LiveSSE",
@@ -67,6 +69,48 @@ _TAB_META = re.compile(r'<meta name="djust-tab" content="([^"]+)">')
 _DJ_VIEW = re.compile(r'\sdj-view="([^"]+)"')
 #: The frames that answer a mount.
 _MOUNT_ANSWERS = ("mount", "error", "navigate", "redirect")
+
+#: The 1.x frame names a ``render`` frame's DOM part stands for (#3658).
+_DOM_PART_NAMES = {"patches": "patch", "html": "html_update", "embedded": "embedded_update"}
+
+
+#: The sources of effects-only ``render`` frames that answer no turn.
+_NOT_A_NOOP_SOURCES = frozenset({"deferred", "async", "push", "flush", "mount"})
+
+
+def _frame_is(frame: Dict[str, Any], types: Optional[Tuple[str, ...]]) -> bool:
+    """Whether ``frame`` is one of ``types`` (any frame when ``None``).
+
+    A ``render`` frame (#3658) also answers to the 1.x name of its DOM part
+    (``patch``, ``html_update``, ``embedded_update``, or ``noop`` for a frame
+    with no DOM part that answers a turn) and
+    to the ``kind`` of any effect it carries (``navigate``, ``push_event``...),
+    so a caller can wait for "the patch" or "the navigation" by its old name.
+    """
+    if types is None or frame.get("type") in types:
+        return True
+    if frame.get("type") != "render":
+        return False
+    from ._render_frame import dom_part
+
+    part = dom_part(frame)
+    if part is not None and _DOM_PART_NAMES[part] in types:
+        return True
+    # A 1.x ``noop`` answered a turn: an effects-only frame a later step sent
+    # on its own (a deferred callback, a push, a flush, an async result, a
+    # mount's follow-up) is not one, unless it carries a ``ref``.
+    if (
+        part is None
+        and "noop" in types
+        and (frame.get("ref") is not None or frame.get("source") not in _NOT_A_NOOP_SOURCES)
+    ):
+        return True
+    return any(
+        isinstance(effect, dict) and effect.get("kind") in types
+        for effect in frame.get("effects") or ()
+    )
+
+
 _DEFAULT_TIMEOUT = 10.0
 
 
@@ -407,6 +451,8 @@ class LivePage:
             "params": _query_params(self.url) if params is None else dict(params),
             "tab": self.tab,
             "has_prerendered": True,
+            # The client names its wire protocol (#3658).
+            "protocol": PROTOCOL_VERSION,
         }
 
     # -- HTTP fallback --------------------------------------------------------
@@ -460,7 +506,11 @@ class LivePage:
             full: Send no render digest, so the answer is the whole page.
             **extra: More request extras; they replace the ones above.
         """
-        headers: Dict[str, Any] = {**self.extra, "HTTP_X_DJUST_EVENT": event}
+        headers: Dict[str, Any] = {
+            **self.extra,
+            "HTTP_X_DJUST_EVENT": event,
+            "HTTP_X_DJUST_PROTOCOL": str(PROTOCOL_VERSION),
+        }
         if self.tab:
             headers["HTTP_X_DJUST_TAB"] = self.tab
         token = self.csrf_token
@@ -612,7 +662,13 @@ class LivePage:
         )
         client.cookies = self.client.cookies  # one browser: the same cookie jar
         query: Dict[str, Any] = _query_params(self.url) if params is None else dict(params)
-        query.update({"view": self._view(view_path), "_djust_url": self.path})
+        query.update(
+            {
+                "view": self._view(view_path),
+                "_djust_url": self.path,
+                PROTOCOL_QUERY_PARAM: str(PROTOCOL_VERSION),
+            }
+        )
         if self.tab:
             query["_djust_tab"] = self.tab
         stream = LiveSSE(self, session_id, client, message_url, timeout=timeout)
@@ -841,7 +897,7 @@ class _Transport:
             if remaining <= 0 and not self._unread:
                 raise asyncio.TimeoutError("no frame of %r within %ss" % (types, wait))
             frame = await self._next(max(remaining, 0))
-            if types is None or frame.get("type") in types:
+            if _frame_is(frame, types):
                 return frame
 
     async def receive_nothing(
@@ -867,7 +923,7 @@ class _Transport:
                     return
                 except AssertionError:
                     return  # the connection ended: nothing more can arrive
-                if types is None or frame.get("type") in types:
+                if _frame_is(frame, types):
                     raise AssertionError(
                         "expected no %s frame within %ss, got %r"
                         % (" / ".join(types) if types else "", within, frame)
@@ -1117,7 +1173,11 @@ class LiveSSE(_Transport):
     def _headers(self) -> Dict[str, str]:
         # The test client sends the host (testserver) itself; a page opened
         # with ``HTTP_HOST`` sends that one through the extras.
-        return {**_http_headers(self.page.extra), "Origin": self.page.origin}
+        return {
+            **_http_headers(self.page.extra),
+            "Origin": self.page.origin,
+            PROTOCOL_HEADER: str(PROTOCOL_VERSION),
+        }
 
     def _start(self, response: Any) -> None:
         self.response = response

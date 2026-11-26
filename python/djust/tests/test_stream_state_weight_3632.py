@@ -29,9 +29,9 @@ from channels.testing import WebsocketCommunicator
 from django.contrib.sessions.backends.db import SessionStore
 from django.test import override_settings
 
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
-from djust import state
+from djust.tests._frames import legacy_type
 
 pytestmark = [pytest.mark.django_db]
 
@@ -138,7 +138,7 @@ async def _drive(events, *, candidate=False):
 
 
 def _kinds(patches):
-    return [p["type"] for p in patches]
+    return [legacy_type(p) for p in patches]
 
 
 @pytest.mark.asyncio

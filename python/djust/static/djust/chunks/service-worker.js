@@ -150,6 +150,10 @@ if (!window.djust || typeof window.djust._chunkShouldRun !== 'function' || !wind
         }, 100);
     }
 
+    // The frames that carry the client's protocol (#3658). This chunk has its
+    // own scope, so it cannot read the core bundle's _PROTOCOL_VERBS.
+    const _BRIDGE_PROTOCOL_VERBS = ['mount', 'mount_batch', 'live_redirect_mount'];
+
     function initReconnectionBridge() {
         if (!_swAvailable()) return;
         const connectionId = _genConnectionId();
@@ -176,6 +180,13 @@ if (!window.djust || typeof window.djust._chunkShouldRun !== 'function' || !wind
                 const OPEN = (typeof WebSocket !== 'undefined') ? WebSocket.OPEN : 1;
                 const state = ws.ws && ws.ws.readyState;
                 if (state !== OPEN) {
+                    // The buffered payload is replayed raw (ws.ws.send), past
+                    // sendMessage, so a mount verb names the protocol here, as
+                    // sendMessage would; without it the server answers the
+                    // replay with a protocol reload (4409, #3658).
+                    if (data && _BRIDGE_PROTOCOL_VERBS.indexOf(data.type) !== -1) {
+                        data = Object.assign({}, data, { protocol: globalThis.djust.PROTOCOL });
+                    }
                     let payload;
                     try {
                         payload = JSON.stringify(data);

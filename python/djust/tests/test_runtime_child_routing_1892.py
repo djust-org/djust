@@ -34,6 +34,8 @@ import django
 import pytest
 from django.conf import settings
 
+from djust.tests._frames import legacy_type
+
 # Configure Django before importing anything that needs settings.
 if not settings.configured:
     settings.configure(
@@ -64,11 +66,10 @@ if not settings.configured:
     django.setup()
 
 from djust import LiveView  # noqa: E402
+from djust._parameter_metadata import expand_parameter_manifest
 from djust.components.base import LiveComponent  # noqa: E402
 from djust.decorators import event_handler, state  # noqa: E402
 from djust.runtime import ViewRuntime  # noqa: E402
-from djust._parameter_metadata import expand_parameter_manifest
-
 
 # ------------------------------------------------------------------ #
 # Test transport — captures send() calls (mirrors test_runtime.py)
@@ -124,7 +125,7 @@ class MockTransport:
 
 
 def _frame_types(transport: MockTransport) -> List[str]:
-    return [f.get("type") for f in transport.sent]
+    return [legacy_type(f) for f in transport.sent]
 
 
 # ------------------------------------------------------------------ #
@@ -301,11 +302,11 @@ class TestRuntimeStickyChildRouting:
                 assert results == []
                 # An explicit owner reports the lost child value-free and renders nothing.
                 assert [u["code"] for u in updates] == ["async_error"]
-                assert all(u["type"] != "embedded_update" for u in updates)
+                assert all(legacy_type(u) != "embedded_update" for u in updates)
             else:
                 assert results == ["child"]
                 assert len(updates) == 1
-                assert updates[0]["type"] == "embedded_update"
+                assert legacy_type(updates[0]) == "embedded_update"
                 assert updates[0]["view_id"] == "child"
                 assert "count=9" in updates[0]["html"]
                 owner = next(
@@ -347,7 +348,7 @@ class TestRuntimeStickyChildRouting:
         assert parent.parent_count == 0
 
         assert "embedded_update" in _frame_types(transport), _frame_types(transport)
-        frame = next(f for f in transport.sent if f.get("type") == "embedded_update")
+        frame = next(f for f in transport.sent if legacy_type(f) == "embedded_update")
         assert frame["view_id"] == "child"
         assert frame["event_name"] == "bump"
         assert "count=3" in frame["html"]
@@ -437,7 +438,7 @@ class TestRuntimeComponentRouting:
         # A full-HTML frame scoped to the PARENT was emitted (component VDOM is
         # separate from the parent's).
         assert "html_update" in _frame_types(transport), _frame_types(transport)
-        frame = next(f for f in transport.sent if f.get("type") == "html_update")
+        frame = next(f for f in transport.sent if legacy_type(f) == "html_update")
         assert frame["event_name"] == "item_clicked"
         assert frame["source"] == "event"
         assert frame["ref"] == 9
@@ -564,7 +565,7 @@ class TestRuntimeEmbeddedRender:
             ws_mod.render_embedded_child_html = original
 
         assert calls == [child]  # runtime delegated to the single-sourced helper
-        frame = next(f for f in transport.sent if f.get("type") == "embedded_update")
+        frame = next(f for f in transport.sent if legacy_type(f) == "embedded_update")
         assert "count=1" in frame["html"]
 
     def test_an_explicit_embedded_render_failure_is_value_free(self):

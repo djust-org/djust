@@ -43,7 +43,7 @@ describe.each(['LiveViewWebSocket', 'LiveViewSSE'])('%s djust:patched', name => 
         const { dom, transport, patched, rendered } = setup(name);
         try {
             await transport.handleMessage({
-                type: 'html_update', html: '<p id="t">new</p>', source, broadcast: source === 'broadcast',
+                type: 'render', html: '<p id="t">new</p>', source, broadcast: source === 'broadcast',
             });
             expect(patched).toHaveLength(1);
             expect(patched[0].source).toBe(source);
@@ -57,7 +57,7 @@ describe.each(['LiveViewWebSocket', 'LiveViewSSE'])('%s djust:patched', name => 
     it('fires for the response to the page\'s own event, with rendered', async () => {
         const { dom, transport, patched, rendered } = setup(name);
         try {
-            await transport.handleMessage({ type: 'html_update', html: '<p id="t">mine</p>' });
+            await transport.handleMessage({ type: 'render', html: '<p id="t">mine</p>' });
             expect(patched).toHaveLength(1);
             expect(patched[0].source).toBe('event');
             expect(patched[0].text).toBe('mine');
@@ -68,7 +68,7 @@ describe.each(['LiveViewWebSocket', 'LiveViewSSE'])('%s djust:patched', name => 
     it('does not fire for a frame that changed nothing', async () => {
         const { dom, transport, patched } = setup(name);
         try {
-            await transport.handleMessage({ type: 'noop' });
+            await transport.handleMessage({ type: 'render' });
             expect(patched).toHaveLength(0);
         } finally { dom.window.close(); }
     });

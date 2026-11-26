@@ -24,10 +24,10 @@ import pytest
 from asgiref.sync import sync_to_async
 from django.test import override_settings
 
-from djust import LiveView
+from djust import LiveView, state
 from djust.config import config as djust_config
 from djust.decorators import event_handler
-from djust import state
+from djust.tests._frames import legacy_type
 
 pytest.importorskip("channels")
 
@@ -103,7 +103,7 @@ async def _receive_until(communicator, wanted, *, tries=8, timeout=30):
     last = None
     for _ in range(tries):
         last = await communicator.receive_json_from(timeout=timeout)
-        if last.get("type") == wanted:
+        if legacy_type(last) == wanted:
             return last
     return last
 
@@ -141,7 +141,7 @@ async def test_pool_runs_two_sessions_concurrently_each_pinned_to_one_thread(wor
                 fa, fb = await asyncio.gather(
                     _receive_until(a, "patch"), _receive_until(b, "patch")
                 )
-                assert fa.get("type") == "patch" and fb.get("type") == "patch", (fa, fb)
+                assert legacy_type(fa) == "patch" and legacy_type(fb) == "patch", (fa, fb)
         finally:
             await a.disconnect()
             await b.disconnect()

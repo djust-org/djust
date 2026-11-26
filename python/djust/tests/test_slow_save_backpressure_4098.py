@@ -35,6 +35,7 @@ from djust import runtime as runtime_module
 from djust._exposure_sessions import MAX_EXPLICIT_STATE_SAVE_TIMEOUT_S
 from djust.decorators import state
 from djust.tests import test_rapid_events_persisted_4098 as rapid
+from djust.tests._frames import legacy_type
 from djust.tests._ws_frames import drain_extra, has_frame, receive_until
 from djust.tests.test_exposure_runtime import make_request
 from djust.tests.test_rapid_events_persisted_4098 import (
@@ -202,7 +203,7 @@ async def test_a_tick_and_a_notify_are_skipped_and_a_push_is_queued_while_a_save
 
     # The event's own frame first, then the push that waited for it. The tick
     # and the notification were skipped for good: nothing replays them.
-    shown = [(f.get("source"), _shown(f)) for f in frames if f.get("type") == "patch"]
+    shown = [(f.get("source"), _shown(f)) for f in frames if legacy_type(f) == "patch"]
     assert shown == [("event", 1), ("broadcast", 11)], frames
     assert (view._ticks, view._infos) == (0, 0)
     assert not [f for f in frames if f.get("type") == "error"], frames
@@ -242,7 +243,7 @@ async def test_over_a_websocket_a_backlog_behind_a_slow_save_waits_and_does_not_
     errors = [f for f in frames if f.get("type") == "error"]
     assert [bool(e.get("transient")) for e in errors] == [True], errors
     assert RAN == [1, 2, 3]
-    rendered = [f for f in frames if f.get("type") in {"patch", "html_update"}]
+    rendered = [f for f in frames if legacy_type(f) in {"patch", "html_update"}]
     assert [f.get("ref") for f in rendered if f.get("ref")] == [2, 3], frames
     assert [_shown(f) for f in rendered] == sorted(_shown(f) for f in rendered)
     assert _shown(rendered[-1]) == 3
@@ -290,7 +291,7 @@ async def test_turns_on_other_threads_behind_a_stuck_save_escalate_to_the_reload
 
     assert len(transport.errors) == 3, transport.errors
     catch_up = [f for f in transport.sent if f.get("source") == "async"]
-    assert [(f["type"], _shown(f)) for f in catch_up] == [("html_update", 3)], transport.sent
+    assert [(legacy_type(f), _shown(f)) for f in catch_up] == [("html_update", 3)], transport.sent
     # The held write (1) lands first, the catch-up's (3) after it.
     assert gate.landed == [1, 3]
     assert await _stored(request.session.session_key) == 3
@@ -329,7 +330,7 @@ async def test_frames_for_a_view_beside_the_page_are_not_read_while_a_save_is_he
         await socket.disconnect()
 
     assert not [f for f in frames if f.get("type") == "error"], frames
-    slot = [f for f in frames if f.get("target_id") == "w" and f.get("type") == "patch"]
+    slot = [f for f in frames if f.get("target_id") == "w" and legacy_type(f) == "patch"]
     assert [(f["ref"], _shown(f)) for f in slot] == [(1, 1), (2, 2), (3, 3), (4, 4)], frames
 
 
@@ -375,5 +376,5 @@ async def test_a_request_scoped_save_queued_past_the_start_bound_is_deferred_the
 
     assert len(transport.errors) == 1, transport.errors
     catch_up = [f for f in transport.sent if f.get("source") == "async"]
-    assert [(f["type"], _shown(f)) for f in catch_up] == [("html_update", 1)], transport.sent
+    assert [(legacy_type(f), _shown(f)) for f in catch_up] == [("html_update", 1)], transport.sent
     assert await _stored(request.session.session_key) == 1

@@ -23,6 +23,7 @@ from djust.decorators import state
 from djust.observability.registry import register_view, unregister_view
 from djust.observability.views import view_assigns
 from djust.runtime import ViewRuntime
+from djust.tests._frames import legacy_type
 from djust.tests.test_exposure_schema_versions import make_request
 from djust.tests.test_runtime_state_save_tt_1894 import MockTransport
 
@@ -129,12 +130,12 @@ async def test_stream_insert_and_delete_render_identically_in_rust_and_django(st
         assert rust == django == f"<div dj-root>{expected[index]}</div>"
         if frame_html is not None:
             assert frame_html == expected[index]
-    insert = next(f for f in frames["add_item"] if f.get("type") == "patch")
+    insert = next(f for f in frames["add_item"] if legacy_type(f) == "patch")
     assert any(
         p["type"] == "InsertChild" and p["node"]["attrs"]["id"] == "items-2"
         for p in insert["patches"]
     )
-    delete = next(f for f in frames["remove_item"] if f.get("type") == "patch")
+    delete = next(f for f in frames["remove_item"] if legacy_type(f) == "patch")
     assert any(p["type"] == "RemoveChild" for p in delete["patches"])
 
 

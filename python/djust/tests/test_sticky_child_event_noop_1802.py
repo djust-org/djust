@@ -30,7 +30,7 @@ import pytest
 
 from djust import LiveView
 from djust.decorators import event_handler, state
-
+from djust.tests._frames import legacy_type
 
 # ---------------------------------------------------------------------------
 # Test views — module-level so they resolve by dotted path for import_string().
@@ -87,7 +87,7 @@ async def _receive_until(communicator, wanted_type, *, tries=6, timeout=30):
     last = None
     for _ in range(tries):
         last = await communicator.receive_json_from(timeout=timeout)
-        if last.get("type") == wanted_type:
+        if legacy_type(last) == wanted_type:
             return last
     return last
 
@@ -96,6 +96,7 @@ async def _connect_and_mount(view_path: str, url: str):
     """Connect a WebsocketCommunicator and mount ``view_path``. Returns
     (communicator, mount_response)."""
     from channels.testing import WebsocketCommunicator
+
     from djust.testing import with_live_session
     from djust.websocket import LiveViewConsumer
 
@@ -155,13 +156,13 @@ async def test_embedded_sticky_child_event_produces_update_not_noop():
         )
         resp = await communicator.receive_json_from()
 
-        assert resp.get("type") != "noop", (
+        assert legacy_type(resp) != "noop", (
             "Embedded sticky-child event returned a bare noop — no patch/HTML was "
             "produced. The auto-skip-render block compared the PARENT's assigns "
             "(unchanged) instead of the child's, so the embedded render branch "
             "never ran. This is #1802."
         )
-        assert resp.get("type") == "embedded_update", (
+        assert legacy_type(resp) == "embedded_update", (
             f"expected an embedded_update frame for the sticky child; got {resp!r}"
         )
         assert resp.get("view_id") == "notifications", (
@@ -203,11 +204,11 @@ async def test_notifications_view_dismiss_works_standalone_control():
         )
         resp = await communicator.receive_json_from()
 
-        assert resp.get("type") != "noop", (
+        assert legacy_type(resp) != "noop", (
             "Standalone NotificationsView.dismiss must NOT noop — the handler "
             f"mutates state. Got {resp!r}"
         )
-        assert resp.get("type") in ("patch", "html_update"), (
+        assert legacy_type(resp) in ("patch", "html_update"), (
             f"standalone dismiss should produce a render frame; got {resp!r}"
         )
 
@@ -256,7 +257,8 @@ def test_handle_event_autoskip_snapshots_target_view_source():
         "(render_embedded_child_html(target_view)) — so an embedded child's "
         "mutation is reflected, never auto-skipped to a parent noop (#1802 / #1907)."
     )
-    assert '"type": "embedded_update"' in source and "view_id" in source, (
-        "the runtime sticky-child render must emit a child-scoped embedded_update "
-        "frame keyed by view_id (#1802)."
+    # #3658: the embedded child is a render frame's DOM part, ``view_id`` + ``html``.
+    assert '"view_id": view_id' in source and '"html": html' in source, (
+        "the runtime sticky-child render must emit a child-scoped render frame "
+        "(view_id + html) keyed by view_id (#1802)."
     )

@@ -27,12 +27,12 @@ from django.contrib.sessions.backends.db import SessionStore
 from django.test import override_settings
 from django.urls import path
 
-from djust import LiveView, event_handler
-from djust import _exposure_sessions
+from djust import LiveView, _exposure_sessions, event_handler
 from djust import runtime as runtime_module
 from djust.decorators import state
-from djust.tests._worker_connections import close_new_worker_connections
 from djust.sse import DjustSSEMessageView, DjustSSEStreamView, _sse_sessions
+from djust.tests._frames import legacy_type
+from djust.tests._worker_connections import close_new_worker_connections
 from djust.tests.test_exposure_sse_resilience_3200 import BackgroundPage, _fresh_key, _request
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
@@ -449,4 +449,4 @@ async def test_a_websocket_save_keeps_its_unbounded_queue_wait(monkeypatch):
     await asyncio.wait_for(dispatch, 10)
     await asyncio.gather(*blockers)
     assert not transport.errors, transport.errors
-    assert any(f.get("type") in {"patch", "html_update"} for f in transport.sent)
+    assert any(legacy_type(f) in {"patch", "html_update"} for f in transport.sent)

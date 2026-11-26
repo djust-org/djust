@@ -15,23 +15,34 @@ execution — see ADR-002 Phase 1a.
 
 from typing import TYPE_CHECKING, Any, Dict, List, Tuple
 
+from .commands import CommandsMixin
+
 from .._surviving_work import refuse_if_disposed
 
 if TYPE_CHECKING:
     from djust.js import JSChain
 
 
-class PushEventMixin:
+class PushEventMixin(CommandsMixin):
     """
     Mixin that provides push_event() for sending events to client JS.
 
-    Events are queued during handler execution and flushed by the WebSocket
-    consumer after the response is sent.
+    Events are queued during handler execution on the view's one outbound
+    queue (:class:`~djust.mixins.commands.CommandsMixin`) and sent with the
+    turn's answer.
     """
 
-    def __init__(self, **kwargs) -> None:
-        super().__init__(**kwargs)
-        self._pending_push_events: List[Tuple[str, Dict[str, Any]]] = []
+    @property
+    def _pending_push_events(self) -> List[Tuple[str, Dict[str, Any]]]:
+        """The queued push events as ``(event, payload)`` pairs (a copy).
+
+        Assigning a list replaces them (``= []`` drops them all).
+        """
+        return [(p["event"], p["payload"]) for p in self._pending("push_event")]
+
+    @_pending_push_events.setter
+    def _pending_push_events(self, events: Any) -> None:
+        self._replace_pending("push_event", [{"event": e, "payload": p} for e, p in (events or [])])
 
     def push_event(self, event: str, payload: Dict[str, Any] = None) -> None:
         """
@@ -55,7 +66,7 @@ class PushEventMixin:
         refuse_if_disposed(self, "push events")
         if payload is None:
             payload = {}
-        self._pending_push_events.append((event, payload))
+        self._enqueue("push_event", {"event": event, "payload": payload})
 
     def trigger_submit(self, selector: str) -> None:
         """Trigger a native HTML form POST on the client after this handler.
@@ -159,6 +170,11 @@ class PushEventMixin:
         No-op if neither is available (e.g. in tests, or on the HTTP
         fallback, where the queued events ride the POST response instead).
 
+        The events go out in one effects-only ``render`` frame with
+        ``source: "flush"`` (#3658). The client applies it on arrival, even
+        while one of its own events is pending; it waits only behind server
+        frames the client already holds, so arrival order is kept.
+
         Usage::
 
             @event_handler
@@ -170,14 +186,16 @@ class PushEventMixin:
                 self.push_event("step", {"n": 2})
                 await self.flush_push_events()   # client sees step 2 NOW
         """
-        if not self._pending_push_events:
+        if not self._has_pending("push_event"):
             return
         # Prefer dynamic lookup via _ws_consumer — always current, even
         # after reconnect (#698).
         consumer = getattr(self, "_ws_consumer", None)
-        flush_fn = getattr(consumer, "_flush_push_events", None)
-        if flush_fn is not None:
-            await flush_fn()
+        send_effects = getattr(consumer, "_send_effects", None)
+        if send_effects is not None:
+            # ``source="flush"``: outside the sources the client holds while
+            # an event is pending (#560), so the events arrive NOW (#3658).
+            await send_effects("flush", self, kinds=("push_event",))
             return
         if consumer is not None:
             return
@@ -186,11 +204,13 @@ class PushEventMixin:
         runtime = sse_runtime_for(self)
         if runtime is None:
             return  # HTTP fallback / tests: events stay queued for the response
-        send = runtime.transport.send
-        # Drain (never iterate in place): the SSE turn end drains too, so each
-        # event is sent exactly once.
-        for name, payload in self._drain_push_events():
-            await send({"type": "push_event", "event": name, "payload": payload})
+        # One effects-only ``render`` frame (#3658). Drained (never read in
+        # place): the SSE turn end drains too, so each event is sent once.
+        from .._render_frame import drain_effects, render_frame
+
+        effects = drain_effects(self, kinds=("push_event",))
+        if effects:
+            await runtime.transport.send(render_frame(source="flush", effects=effects))
 
     def clear_push_events(self) -> List[Tuple[str, Dict[str, Any]]]:
         """Drop the push events queued so far in this turn, and return them.
@@ -211,16 +231,12 @@ class PushEventMixin:
         Returns:
             The dropped ``(event, payload)`` pairs, oldest first.
         """
-        dropped = self._pending_push_events
-        self._pending_push_events = []
-        return list(dropped)
+        return self._drain_push_events()
 
     def _drain_push_events(self) -> List[Tuple[str, Dict[str, Any]]]:
-        """
-        Drain and return all pending push events.
+        """Drain and return the queued push events as ``(event, payload)`` pairs.
 
-        Called by the WebSocket consumer after sending the main response.
+        A view of the one outbound queue (#3658): only ``push_event`` effects
+        are taken; the other kinds stay queued.
         """
-        events = self._pending_push_events
-        self._pending_push_events = []
-        return events
+        return [(p["event"], p["payload"]) for _k, p in self._drain_outbound(("push_event",))]

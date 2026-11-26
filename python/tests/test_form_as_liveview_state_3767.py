@@ -57,10 +57,10 @@ from django.forms import formset_factory
 from django.template import Context, Engine
 from django.test import override_settings
 from django.utils.safestring import mark_safe
-
 from djust import LiveView
 from djust.decorators import event_handler, state
 from djust.testing import LiveViewTestClient
+from djust.tests._frames import legacy_type
 
 pytestmark = [pytest.mark.pr_tier]
 
@@ -760,10 +760,8 @@ class HttpFormView(_Held):
 
 async def _ws_run(view_path: str, events: list[str]) -> list[str]:
     """The html after mount, and (via ``request_html``) after each event."""
-    from channels.testing import WebsocketCommunicator
-
     from asgiref.sync import sync_to_async
-
+    from channels.testing import WebsocketCommunicator
     from djust.testing import with_live_session
     from djust.websocket import LiveViewConsumer
 
@@ -785,7 +783,7 @@ async def _ws_run(view_path: str, events: list[str]) -> list[str]:
         await communicator.send_json_to({"type": "event", "event": event, "params": {}, "ref": ref})
         for _ in range(8):
             frame = await communicator.receive_json_from(timeout=30)
-            if frame.get("type") in ("patch", "html_update", "error", "noop"):
+            if legacy_type(frame) in ("patch", "html_update", "error", "noop"):
                 break
         assert frame.get("type") != "error", frame
         await communicator.send_json_to({"type": "request_html"})
@@ -889,7 +887,6 @@ class TestTheSseTransport:
         from asgiref.sync import sync_to_async
         from django.contrib.auth import get_user
         from django.test import RequestFactory
-
         from djust.runtime import SSESessionTransport, ViewRuntime
         from djust.sse import SSESession, _sse_sessions
         from djust.testing import with_live_session
@@ -930,7 +927,7 @@ class TestTheSseTransport:
                 await session.runtime.dispatch_event(
                     {"type": "event", "event": "to_invalid", "params": {}, "ref": 1}
                 )
-                after = [f for f in frames() if f.get("type") in {"patch", "html_update"}]
+                after = [f for f in frames() if legacy_type(f) in {"patch", "html_update"}]
                 assert after, "no frame after the event"
                 assert REQUIRED in "".join(str(f) for f in after)
         finally:

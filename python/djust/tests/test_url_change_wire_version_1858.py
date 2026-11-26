@@ -36,9 +36,9 @@ from __future__ import annotations
 import pytest
 from asgiref.sync import sync_to_async
 
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
-from djust import state
+from djust.tests._frames import legacy_type
 
 
 class _UrlChangeView(LiveView):
@@ -79,7 +79,7 @@ async def _receive_until(communicator, wanted_type, *, tries=8, timeout=30):
     last = None
     for _ in range(tries):
         last = await communicator.receive_json_from(timeout=timeout)
-        if last.get("type") == wanted_type:
+        if legacy_type(last) == wanted_type:
             return last
     return last
 
@@ -162,7 +162,7 @@ async def test_url_change_stamps_consumer_version_not_rust_counter():
         # counter (this is the half that works in the bug report).
         await communicator.send_json_to({"type": "event", "event": "bump", "params": {}, "ref": 1})
         click = await _receive_until(communicator, "patch")
-        assert click.get("type") == "patch", f"dj-click should patch, got {click!r}"
+        assert legacy_type(click) == "patch", f"dj-click should patch, got {click!r}"
         vc = _v(click)
         assert vc == m + 1, (
             f"CONTROL: dj-click must stamp consumer counter m+1 ({m + 1}), got {vc!r}. "
@@ -174,7 +174,7 @@ async def test_url_change_stamps_consumer_version_not_rust_counter():
             {"type": "url_change", "params": {"tab": ["settings"]}, "uri": "/tabs/?tab=settings"}
         )
         uc = await _receive_until(communicator, "patch")
-        assert uc.get("type") in ("patch", "html_update"), (
+        assert legacy_type(uc) in ("patch", "html_update"), (
             f"url_change must emit a render frame, got {uc!r}"
         )
         assert uc.get("event_name") == "url_change", (

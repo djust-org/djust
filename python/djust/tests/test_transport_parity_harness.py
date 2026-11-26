@@ -29,10 +29,11 @@ from django.contrib.auth.models import AnonymousUser
 from django.contrib.sessions.middleware import SessionMiddleware
 from django.test import RequestFactory, override_settings
 
-from djust.testing import live_session
 from djust import LiveView
 from djust.decorators import event_handler
 from djust.sse import DjustSSEMessageView, DjustSSEStreamView, _sse_sessions
+from djust.testing import live_session
+from djust.tests._frames import payloads_of
 from djust.websocket import LiveViewConsumer
 
 from .test_exposure_runtime import make_request
@@ -118,34 +119,29 @@ def _observe_frames(frames: List[Dict[str, Any]]) -> Dict[str, Any]:
     """WebSocket / SSE frames → an observation."""
     obs: Dict[str, Any] = _empty()
     for f in frames:
-        kind = f.get("type")
-        if kind in ("patch", "html_update", "embedded_update"):
-            obs["rendered"] = obs["rendered"] or bool(f.get("patches") or f.get("html"))
-        elif kind == "flash":
-            obs["flash"].append({k: v for k, v in f.items() if k != "type"})
-        elif kind == "page_metadata":
-            obs["page_metadata"].append({k: v for k, v in f.items() if k != "type"})
-        elif kind == "push_event":
-            obs["push_events"].append((f.get("event"), f.get("payload")))
-        elif kind == "layout":
-            obs["layout"] = f.get("path")
-        elif kind == "navigation":
-            obs["navigation"].append(f.get("action"))
+        if f.get("type") == "render":
+            _observe_render(obs, f)
     return obs
 
 
 def _observe_http(answer: Dict[str, Any]) -> Dict[str, Any]:
-    """An HTTP fallback JSON answer → an observation."""
+    """An HTTP fallback JSON answer (one ``render`` frame) → an observation."""
     obs: Dict[str, Any] = _empty()
-    obs["rendered"] = bool(answer.get("patches") or answer.get("html"))
-    obs["flash"] = list(answer.get("_flash") or [])
-    obs["page_metadata"] = list(answer.get("_page_metadata") or [])
-    obs["push_events"] = [
-        (e.get("event"), e.get("payload")) for e in answer.get("_push_events") or []
-    ]
-    obs["layout"] = (answer.get("_layout") or {}).get("path")
-    obs["navigation"] = [f.get("action") for f in answer.get("_navigation") or []]
+    _observe_render(obs, answer)
     return obs
+
+
+def _observe_render(obs: Dict[str, Any], frame: Dict[str, Any]) -> None:
+    """Fold one ``render`` frame (#3658) into ``obs``."""
+    obs["rendered"] = obs["rendered"] or bool(frame.get("patches") or frame.get("html"))
+    obs["flash"].extend(payloads_of(frame, "flash"))
+    obs["page_metadata"].extend(payloads_of(frame, "page_metadata"))
+    obs["push_events"].extend(
+        (e.get("event"), e.get("payload")) for e in payloads_of(frame, "push_event")
+    )
+    for e in payloads_of(frame, "layout"):
+        obs["layout"] = e.get("path")
+    obs["navigation"].extend(e.get("action") for e in payloads_of(frame, "navigation"))
 
 
 def _empty() -> Dict[str, Any]:

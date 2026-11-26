@@ -26,6 +26,7 @@ from django.test import override_settings
 
 from djust import LiveView, event_handler
 from djust.decorators import state
+from djust.tests._frames import frame_matches, legacy_type
 
 pytest.importorskip("channels")
 
@@ -112,7 +113,7 @@ async def _until_frame(communicator, *types, timeout=15.0):
         remaining = deadline - loop.time()
         assert remaining > 0, "no frame of type %r; got %r" % (types, frames)
         frames.append(await communicator.receive_json_from(timeout=remaining))
-        if frames[-1].get("type") in types:
+        if frame_matches(frames[-1], types):
             return frames[-1]
 
 
@@ -166,7 +167,7 @@ async def test_client_state_round_trips_through_the_signed_token(verb):
         # The next event starts from the restored value, and from a fresh
         # ``scratch``: only the declared client field travelled.
         after = await _bump(socket)
-        assert after["type"] in ("patch", "html_update"), after
+        assert legacy_type(after) in ("patch", "html_update"), after
         assert "step=3" in str(after), after
     finally:
         await socket.disconnect()

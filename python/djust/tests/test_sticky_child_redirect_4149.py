@@ -27,6 +27,7 @@ from django.urls import path
 
 from djust import LiveView, event_handler
 from djust.decorators import state
+from djust.tests._frames import legacy_type
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
 
@@ -176,7 +177,7 @@ async def _event(comm, event, **params):
     await comm.send_json_to({"type": "event", "event": event, "params": params})
     while True:
         frame = await comm.receive_json_from()
-        if frame.get("type") in {"embedded_update", "error", "patch", "html_update", "noop"}:
+        if legacy_type(frame) in {"embedded_update", "error", "patch", "html_update", "noop"}:
             return frame
 
 
@@ -193,15 +194,15 @@ async def _redirect(comm, view, url):
 
 def _hold(frames):
     holds = [f for f in frames if f.get("type") == "sticky_hold"]
-    assert holds, [f.get("type") for f in frames]
-    types = [f.get("type") for f in frames]
+    assert holds, [legacy_type(f) for f in frames]
+    types = [legacy_type(f) for f in frames]
     assert types.index("sticky_hold") < types.index("mount"), types
     return holds[0]["views"]
 
 
 async def _advance(comm):
     reply = await _event(comm, "next_track", view_id="player")
-    assert reply["type"] == "embedded_update", reply
+    assert legacy_type(reply) == "embedded_update", reply
     assert "track=two" in reply["html"], reply
     return reply
 
@@ -222,7 +223,7 @@ async def test_explicit_sticky_child_survives_redirect_to_another_page():
             assert "track=one" not in mount["html"]
             assert Player.mounts == 1
             reply = await _event(comm, "next_track", view_id="player")
-            assert reply["type"] == "embedded_update", reply
+            assert legacy_type(reply) == "embedded_update", reply
             assert "track=three" in reply["html"], reply
             # Explicit exposure: nothing outside get_context_data/state() is sent.
             wire = json.dumps(frames) + json.dumps(reply)
@@ -352,7 +353,7 @@ async def test_carried_child_stores_its_state_under_the_destination():
             assert _hold(frames) == ["stored"]
             assert (await _stored(key, "/sb/")) == {"count": 2}
             reply = await _event(comm, "bump", view_id="stored")
-            assert reply["type"] == "embedded_update", reply
+            assert legacy_type(reply) == "embedded_update", reply
             assert "count=3" in reply["html"], reply
         finally:
             await comm.disconnect()

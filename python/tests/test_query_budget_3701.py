@@ -24,23 +24,21 @@ from io import StringIO
 from unittest.mock import patch
 
 import pytest
-from django import forms
 from asgiref.sync import sync_to_async
+from django import forms
 from django.contrib.auth.models import User
 from django.contrib.sessions.backends.db import SessionStore
 from django.core.management import call_command
 from django.db import connection
 from django.test import override_settings
 from django.urls import path
-
-from djust import LiveView
+from djust import LiveView, state
 from djust._query_budget import Budget, QueryBudgetExceeded, parse_budget
 from djust.config import config as djust_config
 from djust.decorators import event_handler
 from djust.testing import LiveViewSmokeTest, LiveViewTestClient
-
+from djust.tests._frames import legacy_type
 from djust.tests._ws_frames import drain_extra, receive_until
-from djust import state
 
 LOGGER = "djust._query_budget"
 
@@ -844,7 +842,6 @@ class _ScopeSession:
 async def _connect(view_name, url):
     pytest.importorskip("channels")
     from channels.testing import WebsocketCommunicator
-
     from djust.websocket import LiveViewConsumer
 
     def _create_session():
@@ -885,7 +882,6 @@ class TestWebSocket:
         """On the socket the form binds in a guarded ``handle_params`` step on a worker thread."""
         pytest.importorskip("channels")
         from channels.testing import WebsocketCommunicator
-
         from djust.websocket import LiveViewConsumer
 
         def _create_session():
@@ -923,7 +919,7 @@ class TestWebSocket:
         await communicator.send_json_to({"type": "event", "event": "spend", "params": {}, "ref": 1})
         await receive_until(
             communicator,
-            lambda fs: any(f.get("type") in ("patch", "html_update", "error", "noop") for f in fs),
+            lambda fs: any(legacy_type(f) in ("patch", "html_update", "error", "noop") for f in fs),
         )
         new = warned()[before:]
         assert "SpendView: event spend ran 5 queries, over its query_budget of 1" in new
@@ -935,7 +931,7 @@ class TestWebSocket:
         await communicator.send_json_to({"type": "event", "event": "spend", "params": {}, "ref": 1})
         await receive_until(
             communicator,
-            lambda fs: any(f.get("type") in ("patch", "html_update", "error", "noop") for f in fs),
+            lambda fs: any(legacy_type(f) in ("patch", "html_update", "error", "noop") for f in fs),
         )
         assert warned() == []
         await communicator.disconnect()
@@ -957,7 +953,7 @@ class TestWebSocket:
                 frames = await receive_until(
                     communicator,
                     lambda fs: any(
-                        f.get("type") in ("patch", "html_update", "error", "noop") for f in fs
+                        legacy_type(f) in ("patch", "html_update", "error", "noop") for f in fs
                     ),
                 )
             assert frames[-1]["type"] == "error", frames

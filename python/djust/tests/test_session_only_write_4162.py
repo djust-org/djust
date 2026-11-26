@@ -41,6 +41,7 @@ from djust.components.mixins.base import TypedState
 from djust.decorators import event_handler
 from djust.state_store import StateKey, ViewStateStore
 from djust.tests import _per_turn_harness as harness
+from djust.tests._frames import legacy_type
 
 pytestmark = pytest.mark.django_db(transaction=True)
 MODULE = __name__
@@ -431,7 +432,7 @@ async def ws_turns(
         for name in names:
             SAVES.clear()
             frame = await harness.event(comm, name, params)
-            assert frame["type"] in ("patch", "noop", "html_update", "embedded_update"), frame
+            assert legacy_type(frame) in ("patch", "noop", "html_update", "embedded_update"), frame
             await _settle(settled)
             counts.append(len(SAVES))
     finally:
@@ -712,7 +713,7 @@ async def test_background_work_writes_the_session_after_the_reply(interval):
                 # No render frame when the result changed nothing the template
                 # reads (#4123): the batch's ``async_complete`` ends it then.
                 lambda frames: any(
-                    f.get("type") in ("patch", "noop", "html_update", "async_complete")
+                    legacy_type(f) in ("patch", "noop", "html_update", "async_complete")
                     for f in frames
                 ),
                 what="the background result",

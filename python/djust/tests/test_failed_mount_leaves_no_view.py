@@ -36,10 +36,11 @@ from django.test import RequestFactory, override_settings
 from django.urls import path
 from django.utils.functional import SimpleLazyObject
 
-from djust.testing import live_session
 from djust import LiveView, event_handler, sse
 from djust.presence import PresenceManager, PresenceMixin
 from djust.sse import DjustSSEMessageView, DjustSSEStreamView, _sse_sessions
+from djust.testing import live_session
+from djust.tests._frames import frame_matches, legacy_type
 from djust.websocket import LiveViewConsumer
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
@@ -209,7 +210,7 @@ async def _reveal(communicator, target_id=None, ref=1):
 
 
 def _types(frames):
-    return [f.get("type") for f in frames]
+    return [legacy_type(f) for f in frames]
 
 
 def _assert_left_nothing(consumer=None):
@@ -420,7 +421,7 @@ async def _sse_frame(stream, *types, timeout=10.0):
         chunk = await asyncio.wait_for(stream.__anext__(), timeout=deadline - loop.time())
         if chunk.startswith("data:"):
             frame = json.loads(chunk[len("data:") :])
-            if frame.get("type") in types:
+            if frame_matches(frame, types):
                 return frame
 
 

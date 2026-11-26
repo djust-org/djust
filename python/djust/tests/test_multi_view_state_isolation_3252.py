@@ -22,6 +22,7 @@ from django.test import override_settings
 
 from djust import LiveView, event_handler
 from djust.decorators import state
+from djust.tests._frames import frame_matches
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
 
@@ -95,7 +96,7 @@ async def _until_frame(communicator, *types, timeout=15.0):
         remaining = deadline - loop.time()
         assert remaining > 0, "no frame of type %r; got %r" % (types, frames)
         frames.append(await communicator.receive_json_from(timeout=remaining))
-        if frames[-1].get("type") in types:
+        if frame_matches(frames[-1], types):
             return frames[-1]
 
 

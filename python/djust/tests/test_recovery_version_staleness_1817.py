@@ -41,6 +41,7 @@ from asgiref.sync import sync_to_async
 
 from djust import LiveView
 from djust.decorators import event_handler
+from djust.tests._frames import legacy_type
 
 
 class _RecoveryView(LiveView):
@@ -135,7 +136,7 @@ async def _receive_until(communicator, wanted_type, *, ref=None, tries=8, timeou
     last = None
     for _ in range(tries):
         last = await _recv(communicator, timeout)
-        if last.get("type") == wanted_type and (ref is None or _solicited_by(last, ref)):
+        if legacy_type(last) == wanted_type and (ref is None or _solicited_by(last, ref)):
             return last
     return last
 

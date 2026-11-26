@@ -27,9 +27,10 @@ import sys
 from unittest.mock import patch
 
 import pytest
-
 from django.test import RequestFactory, override_settings
+
 from djust import state
+from djust.tests._frames import frame_matches
 
 pytestmark = pytest.mark.tenants
 
@@ -123,7 +124,7 @@ class TestHttpWsTenantParity:
         await communicator.receive_json_from()
         await communicator.send_json_to({"type": "mount", "view": _VIEW_PATH})
         mount_resp = await communicator.receive_json_from()
-        assert mount_resp.get("type") != "navigate", f"unexpected redirect: {mount_resp!r}"
+        assert not frame_matches(mount_resp, "navigate"), f"unexpected redirect: {mount_resp!r}"
         await communicator.disconnect()
 
         assert _RESOLVED_TENANT_ID == "acme", (

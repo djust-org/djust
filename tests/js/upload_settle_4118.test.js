@@ -11,6 +11,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { PROTOCOL } from './_helpers.js';
 import { JSDOM } from 'jsdom';
 import fs from 'fs';
 
@@ -62,7 +63,7 @@ async function startUpload() {
     const page = createPage();
     await tick();
     const socket = page.sockets[0];
-    socket.onmessage({ data: JSON.stringify({ type: 'connect', session_id: 's1' }) });
+    socket.onmessage({ data: JSON.stringify({ type: 'connect', protocol: PROTOCOL, session_id: 's1' }) });
     await tick();
     socket.onmessage({ data: JSON.stringify({
         type: 'mount', view: 'app.Page', version: 1, html: '<p dj-id="1">page</p>', has_ids: true,
@@ -93,12 +94,12 @@ describe('#4118: the server stopping an upload settles uploadFile()', () => {
         const events = [];
         win.addEventListener('djust:upload:progress', (e) => events.push(e.detail));
 
-        serve({
-            type: 'push_event',
+        serve({ type: 'render', effects: [{
+            kind: 'push_event',
             event: 'djust:upload_progress',
             payload: { type: 'upload_progress', ref, progress: 0, status: 'cancelled',
                 error: 'Upload cancelled by the server.' },
-        });
+        }] });
 
         expect(await outcome).toEqual({ error: 'Upload cancelled by the server.' });
         expect(win.djust.uploads.activeUploads.has(ref)).toBe(false);
@@ -141,8 +142,8 @@ describe('#4118: the server stopping an upload settles uploadFile()', () => {
 
     it('ignores other push events', async () => {
         const { win, ref, serve } = await startUpload();
-        serve({ type: 'push_event', event: 'something_else',
-            payload: { ref, status: 'cancelled' } });
+        serve({ type: 'render', effects: [{ kind: 'push_event', event: 'something_else',
+            payload: { ref, status: 'cancelled' } }] });
         await tick();
         expect(win.djust.uploads.activeUploads.has(ref)).toBe(true);
     });

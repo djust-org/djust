@@ -45,6 +45,7 @@ from djust import LiveView, event_handler
 from djust.hooks import on_mount
 from djust.observability import tracebacks
 from djust.sse import DjustSSEMessageView, DjustSSEStreamView, _sse_sessions
+from djust.tests._frames import legacy_type
 from djust.websocket import LiveViewConsumer
 
 from ._ws_frames import drain_extra, receive_type, types_of
@@ -447,12 +448,12 @@ async def test_ws_request_html_failure(monkeypatch, caplog, debug, policy):
     try:
         await _mount(socket)
         await socket.send_json_to({"type": "event", "event": "bump", "params": {}, "ref": 1})
-        assert any(frame["type"] == "patch" for frame in await _frames(socket, "patch"))
+        assert any(legacy_type(frame) == "patch" for frame in await _frames(socket, "patch"))
         monkeypatch.setattr(EntryView, "fail_at", "recovery")
         caplog.clear()
         await socket.send_json_to({"type": "request_html"})
         frames = await _frames(socket, "error")
-        assert [frame["type"] for frame in frames] == ["error"], frames
+        assert [legacy_type(frame) for frame in frames] == ["error"], frames
         observed = _observe(caplog, json.dumps(frames))
         if debug:
             # Every policy: the detailed DEBUG error frame, log and ring.
@@ -484,7 +485,7 @@ async def test_ws_live_redirect_mount_failure(monkeypatch, caplog, debug, policy
             {"type": "live_redirect_mount", "view": VIEW_PATH, "url": "/entry/"}
         )
         frames = await _frames(socket, "error")
-        assert "error" in [frame["type"] for frame in frames], frames
+        assert "error" in [legacy_type(frame) for frame in frames], frames
         observed = _observe(caplog, json.dumps(frames))
         if debug:
             # Every policy: the detailed DEBUG error frame, log and ring.

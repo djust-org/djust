@@ -23,6 +23,7 @@ from django.urls import path
 
 from djust import LiveView
 from djust.forms import ModelFormMixin
+from djust.tests._frames import legacy_type
 
 EVENTS: list = []
 REVOKED: set = set()
@@ -366,6 +367,7 @@ def test_generic_subscription_is_optional_at_runtime():
 
 async def _ws_session(view_class, user, url, params=None):
     from channels.testing import WebsocketCommunicator
+
     from djust.tests.test_exposure_runtime import make_request
     from djust.websocket import LiveViewConsumer
 
@@ -401,7 +403,7 @@ async def _ws_event(socket, ref, event, params):
     for _ in range(6):
         frame = await socket.receive_json_from()
         frames.append(frame)
-        if frame.get("type") in {"patch", "html_update", "error", "noop"}:
+        if legacy_type(frame) in {"patch", "html_update", "error", "noop"}:
             break
     return frames
 

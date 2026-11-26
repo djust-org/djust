@@ -17,6 +17,7 @@ from djust._exposure_sessions import server_state_adapter
 from djust.decorators import state
 from djust.runtime import ViewRuntime
 from djust.tenants.mixin import TenantMixin
+from djust.tests._frames import effects_of, legacy_type
 from djust.tests.test_runtime_state_save_tt_1894 import MockTransport
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
@@ -215,7 +216,13 @@ async def test_denied_reconnect_does_not_restore_or_write_state(staged, monkeypa
             {"type": "mount", "view": __name__ + ".RuntimeView", "url": fresh.path}
         )
     # An anonymous denied user is redirected by the production auth sequence.
-    assert transport.sent == [{"type": "navigate", "to": "/accounts/login/"}]
+    assert transport.sent == [
+        {
+            "type": "render",
+            "source": "mount",
+            "effects": [{"kind": "navigate", "to": "/accounts/login/"}],
+        }
+    ]
     assert not any(frame.get("type") == "mount" for frame in transport.sent)
     assert await fresh.session.aload() == before
 
@@ -223,6 +230,7 @@ async def test_denied_reconnect_does_not_restore_or_write_state(staged, monkeypa
 @pytest.mark.parametrize("failure", ["denied", "exception", "user", "tenant", "missing"])
 async def test_explicit_events_fail_closed_on_fresh_auth_failure(staged, monkeypatch, failure):
     from types import SimpleNamespace
+
     from djust.tenants.resolvers import TenantInfo
 
     request = await sync_to_async(make_request)()
@@ -259,8 +267,10 @@ async def test_explicit_events_fail_closed_on_fresh_auth_failure(staged, monkeyp
 
 @pytest.mark.parametrize("revocation", ["logout", "inactive", "password"])
 async def test_socket_adapter_reloads_auth_instead_of_mount_cache(staged, revocation):
-    from django.contrib.auth import get_user_model, login
     from types import SimpleNamespace
+
+    from django.contrib.auth import get_user_model, login
+
     from djust.runtime import WSConsumerTransport
 
     def authenticated_request():
@@ -297,6 +307,7 @@ async def test_socket_adapter_reloads_auth_instead_of_mount_cache(staged, revoca
 
 async def test_sse_adapter_uses_current_post_request_and_view_route_for_save(staged):
     from types import SimpleNamespace
+
     from djust.runtime import SSESessionTransport
 
     request = await sync_to_async(make_request)()
@@ -321,6 +332,7 @@ async def test_real_websocket_persists_reconnects_and_refuses_deleted_session(
     staged, tenant_enabled
 ):
     from channels.testing import WebsocketCommunicator
+
     from djust.websocket import LiveViewConsumer
 
     request = await sync_to_async(make_request)()
@@ -357,7 +369,7 @@ async def test_real_websocket_persists_reconnects_and_refuses_deleted_session(
             assert ">5<" in frame["html"]
             await comm.send_json_to({"type": "event", "event": "increment", "params": {}})
             reply = await comm.receive_json_from()
-            assert reply["type"] in {"patch", "html_update"}, reply
+            assert legacy_type(reply) in {"patch", "html_update"}, reply
             assert "SENTINEL" not in json.dumps(reply)
         finally:
             await comm.disconnect()
@@ -379,6 +391,7 @@ async def test_real_websocket_persists_reconnects_and_refuses_deleted_session(
 async def test_concurrent_sse_turns_keep_their_own_auth_request(staged, monkeypatch):
     import asyncio
     from types import SimpleNamespace
+
     from djust.runtime import SSESessionTransport
 
     request = await sync_to_async(make_request)()
@@ -481,6 +494,7 @@ async def test_tenant_change_refuses_old_runtime_and_http_remounts(staged):
 
 async def test_required_tenant_failure_restores_callers_context(staged):
     from django.http import Http404
+
     from djust.tenants.middleware import get_current_tenant, tenant_context
     from djust.tenants.resolvers import TenantInfo
 
@@ -617,7 +631,7 @@ async def test_successful_event_refreshes_client_snapshot(staged, mode, frame_ty
     await runtime.dispatch_event(
         {"type": "event", "event": "change_navigation", "params": {"mode": mode}, "ref": 42}
     )
-    frame = next(frame for frame in transport.sent if frame.get("type") == frame_type)
+    frame = next(frame for frame in transport.sent if legacy_type(frame) == frame_type)
     assert frame["ref"] == 42
     assert frame["view"] == __name__ + ".SnapshotRuntimeView"
     token = frame["state_snapshot_signed"]
@@ -646,11 +660,11 @@ async def test_event_snapshot_unavailable_explicitly_invalidates_old_token(stage
         # The session identity changed inside the handler, so the explicit
         # save is refused: no success frame, and the state_error carries the
         # revocation instead (ADR-038 E3).
-        assert not [f for f in transport.sent if f.get("type") in {"noop", "patch", "html_update"}]
+        assert not [f for f in transport.sent if legacy_type(f) in {"noop", "patch", "html_update"}]
         frame = next(frame for frame in transport.sent if frame.get("type") == "error")
         assert frame["code"] == "state_error"
     else:
-        frame = next(frame for frame in transport.sent if frame.get("type") == "noop")
+        frame = next(frame for frame in transport.sent if legacy_type(frame) == "noop")
     assert frame["state_snapshot_signed"] is None
     assert frame["view"] == __name__ + ".SnapshotRuntimeView"
     assert "SENTINEL" not in caplog.text
@@ -689,7 +703,8 @@ async def test_snapshot_ack_precedes_noop_handler_navigation(staged):
         {"type": "event", "event": "change_navigation", "params": {"mode": "navigate"}}
     )
     frames = transport.sent
-    ack = next(i for i, frame in enumerate(frames) if frame.get("type") == "noop")
-    navigation = next(i for i, frame in enumerate(frames) if frame.get("type") == "navigation")
-    assert ack < navigation
-    assert frames[ack]["state_snapshot_signed"]
+    # One render frame (#3658): the snapshot rides on the ack, and the client
+    # applies the navigation effect after it stored the snapshot.
+    [ack] = [frame for frame in frames if effects_of(frame, "navigation")]
+    assert legacy_type(ack) == "noop", frames
+    assert ack["state_snapshot_signed"]

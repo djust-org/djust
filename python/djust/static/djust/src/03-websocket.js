@@ -256,12 +256,13 @@ function storeSignedSnapshot(data, primaryViewPath) {
     // Server-originated turns (background results, ticks, pushes, NOTIFY)
     // commit declared state and carry the refreshed token for the primary
     // view, like event acknowledgements (ADR-038 E3). Child frames never do.
-    const serverTurn = ['async', 'tick', 'broadcast'].includes(data.source) &&
-        data.view === primaryViewPath && ['patch', 'html_update'].includes(data.type);
-    const eligible = revocation || serverTurn || data.type === 'mount' || (
-        data.source === 'event' && data.view === primaryViewPath &&
-        ['patch', 'html_update', 'noop'].includes(data.type)
-    );
+    // (An embedded child's frame, `view_id`, is never the page view's.)
+    const primaryRender = data.type === 'render' && data.view_id === undefined &&
+        data.view === primaryViewPath;
+    const serverTurn = primaryRender && ['async', 'tick', 'broadcast'].includes(data.source) &&
+        (Array.isArray(data.patches) || typeof data.html === 'string');
+    const eligible = revocation || serverTurn || data.type === 'mount' ||
+        (primaryRender && data.source === 'event');
     if (!eligible || typeof data.view !== 'string' || !data.view ||
         ['__proto__', 'constructor', 'prototype'].includes(data.view)) return;
     // #4164: the turn serial of the state this frame shows. A reconnect sends
@@ -526,7 +527,10 @@ class LiveViewWebSocket {
             if (this.ws !== socket) return;
             if (globalThis.djustDebug) console.log('[LiveView] WebSocket disconnected');
             this.viewMounted = false;
-            const authRefused = event.code === 4401 || event.code === 4403;
+            // 4409: the server speaks another protocol (#3658). Its `reload`
+            // frame usually came first; reconnecting would only be refused again.
+            // (Named for the auth codes; a 4409 dispatches no auth event.)
+            const authRefused = event.code === 4401 || event.code === 4403 || event.code === 4409;
             // Disable before notifying hooks: a refused session must not retry
             // the socket, host-root path, or SSE transport (#3265).
             if (authRefused) this.enabled = false;
@@ -584,9 +588,14 @@ class LiveViewWebSocket {
                 // code of the refusal frame that preceded it, if one did (#3319).
                 const refusalCode = this._lastRefusalCode || null;
                 this._lastRefusalCode = null;
-                window.dispatchEvent(new CustomEvent('djust:auth-refused', {
+                if (event.code !== 4409) window.dispatchEvent(new CustomEvent('djust:auth-refused', {
                     detail: { code: event.code, reason: event.reason || '', error_code: refusalCode }
                 }));
+                // A bare 4409 (no `reload` frame on this socket): the server's
+                // reload breaker tripped (#3658). The client's own 30 s guard
+                // decides between one reload and `djust:error` protocol_mismatch.
+                else if (this._protocolReloadSocket !== socket) protocolMismatch(this);
+                this._protocolReloadSocket = null;
                 return;
             }
 
@@ -1118,86 +1127,12 @@ class LiveViewWebSocket {
                 break;
             }
 
-            case 'patch':
-            case 'html_update': {
-                // Event sequencing (#560): if this is a server-initiated update
-                // (tick, broadcast, async) and we have pending user events,
-                // buffer it and apply after the event responses arrive. This
-                // prevents server pushes from consuming event loading state
-                // and ensures version numbers stay sequential.
-                const isServerInitiated = (
-                    data.source === 'tick' ||
-                    data.source === 'broadcast' ||
-                    data.source === 'async'
-                );
-                const isEventResponse = (
-                    !isServerInitiated && data.ref != null && _pendingEventOwners.get(data.ref) === this
-                );
-
-                if (!isEventResponse && isServerInitiated && hasPendingEventRequests(this)) {
-                    // Buffer server-initiated patch — will be applied after
-                    // all pending event responses arrive. Marked so the version
-                    // check treats the resulting gap as our own deferral rather
-                    // than a dropped patch (#2829). The marker is client-side
-                    // only and never goes back over the wire.
-                    const contiguous = (
-                        clientVdomVersion !== null &&
-                        typeof data.version === 'number' &&
-                        data.version === clientVdomVersion + 1
-                    );
-                    bufferServerUpdate(this, {
-                        ...data,
-                        _deferred: true,
-                        _versionConsumed: contiguous,
-                    }, data);
-                    // Consume the version HERE, at receipt — but ONLY when it is
-                    // CONTIGUOUS with the cursor. The frame has arrived and will
-                    // be applied on flush, so a contiguous version must already
-                    // be accounted for; otherwise the next in-order frame (an
-                    // event response arriving after this deferral) sees a
-                    // phantom gap in a sequence the server issued legitimately,
-                    // and forces a full-HTML recovery (#2829).
-                    //
-                    // Contiguity is the whole guard. Consuming a NON-contiguous
-                    // version would vouch for every version between the cursor
-                    // and this frame — frames the server allocated and never
-                    // shipped, the drop class `_hotreload_broadcast_suppressed`
-                    // exists for (#763/#2215/#2233). Silently accepting those
-                    // leaves the client permanently diverged with recovery never
-                    // firing.
-                    //
-                    // Declining the version is only half of it: the decision has
-                    // to SURVIVE to the flush, or the replay re-vouches for the
-                    // frame (that is what swallowed the drop on the noop-close
-                    // path, where the closing frame runs no strict check). So the
-                    // frame carries `_versionConsumed`, and the replay advances
-                    // the cursor only for frames whose version really was
-                    // consumed. A declined frame falls through to the strict
-                    // check and the loss still surfaces — via the closing frame,
-                    // or via the flush when the window closed with a noop.
-                    if (contiguous) {
-                        clientVdomVersion = data.version;
-                    }
-                    if (globalThis.djustDebug) {
-                        djLog('[LiveView] Buffered %s patch (v%s) — waiting for %d pending event(s)', String(data.source), String(data.version), _pendingEventRefs.size);
-                    }
-                    break;
-                }
-
-                // Determine event name and trigger for loading state
-                const event = acknowledgeEventRequest(this, data);
-                await handleServerResponse(data, event?.eventName, event?.trigger, this);
-
-                // After processing the event response, flush buffered
-                // patches only when ALL pending events have resolved.
-                if (isEventResponse && !hasPendingEventRequests(this) && _tickBuffer.length > 0) {
-                    if (globalThis.djustDebug) {
-                        djLog('[LiveView] Flushing ' + _tickBuffer.length + ' buffered patches');
-                    }
-                    await flushServerUpdates(this);
-                }
+            case 'render':
+                // One frame per turn result (#3658). A server-initiated one is
+                // held, effects included, while this page's events are pending.
+                if (this._holdServerFrame(data)) break;
+                await applyRenderFrame(this, data);
                 break;
-            }
 
             case 'html_recovery': {
                 // Server response to request_html — morph DOM with recovered HTML.
@@ -1301,29 +1236,6 @@ class LiveViewWebSocket {
                 }
                 break;
 
-            case 'noop': {
-                // Server acknowledged event but no DOM changes needed (auto-detected
-                // or explicit _skip_render). Clear loading state unless async pending.
-                const event = acknowledgeEventRequest(this, data);
-                const noopEvName = event?.eventName;
-                const noopTrigger = event?.trigger;
-                if (data.reset_form) applyFormReset(data, noopTrigger || null);
-
-                if (noopEvName) {
-                    if (!data.async_pending) {
-                        globalLoadingManager.stopLoading(noopEvName, noopTrigger);
-                    } else {
-                        if (globalThis.djustDebug) console.log('[LiveView] Keeping loading state — async work pending');
-                    }
-                }
-
-                // Flush buffered patches only when all pending events resolved
-                if (!hasPendingEventRequests(this) && _tickBuffer.length > 0) {
-                    await flushServerUpdates(this);
-                }
-                break;
-            }
-
             case 'presence_event':
                 // broadcast_to_presence() (and LiveCursorMixin's cursor_move)
                 // fanned out to every session in the presence group (#3501).
@@ -1416,13 +1328,71 @@ class LiveViewWebSocket {
                 break;
             default:
                 // The frames both transports apply alike (02c-frame-dispatch.js).
-                await dispatchCommonFrame(this, data, '[LiveView]');
+                await dispatchCommonFrame(this, data);
         }
     }
 
     /** A frame addressed to a view mounted beside the page view (#3252); see handleSlotFrame. */
     async _handleSlotFrame(data) {
         return handleSlotFrame(this, data, true);
+    }
+
+    /**
+     * Event sequencing (#560): hold a server-initiated `render` frame (a tick,
+     * broadcast, async result, push or NOTIFY turn) while this page's own
+     * events are pending, and apply it, effects included, once they settle.
+     * The server's pushes then neither consume an event's loading state nor
+     * overtake its answer. Returns true when the frame was held.
+     *
+     * Arrival order is kept for the rest too: a frame that answers no event
+     * (no `ref`: a `defer()` follow-up, an effects-only frame) is held behind
+     * frames this socket already holds, so a deferred `live_redirect` or
+     * `push_event` never lands before its own turn's held DOM part.
+     */
+    _holdServerFrame(data) {
+        const serverTurn = _SERVER_TURN_SOURCES.includes(data.source) && hasPendingEventRequests(this);
+        const behindHeld = !serverTurn && data.ref == null && _tickBuffer.length > 0 &&
+            hasHeldServerUpdates(this);
+        if (!serverTurn && !behindHeld) return false;
+        // Marked so the version check treats the resulting gap as our own
+        // deferral rather than a dropped patch (#2829). The marker is
+        // client-side only and never goes back over the wire.
+        const contiguous = (
+            clientVdomVersion !== null &&
+            typeof data.version === 'number' &&
+            data.version === clientVdomVersion + 1
+        );
+        bufferServerUpdate(this, {
+            ...data,
+            _deferred: true,
+            _versionConsumed: contiguous,
+        }, data);
+        // Consume the version HERE, at receipt — but ONLY when it is
+        // CONTIGUOUS with the cursor. The frame has arrived and will be
+        // applied on flush, so a contiguous version must already be accounted
+        // for; otherwise the next in-order frame (an event response arriving
+        // after this deferral) sees a phantom gap in a sequence the server
+        // issued legitimately, and forces a full-HTML recovery (#2829).
+        //
+        // Contiguity is the whole guard. Consuming a NON-contiguous version
+        // would vouch for every version between the cursor and this frame —
+        // frames the server allocated and never shipped, the drop class
+        // `_hotreload_broadcast_suppressed` exists for (#763/#2215/#2233).
+        //
+        // Declining the version is only half of it: the decision has to
+        // SURVIVE to the flush, or the replay re-vouches for the frame. So the
+        // frame carries `_versionConsumed`, and the replay advances the cursor
+        // only for frames whose version really was consumed. A declined frame
+        // falls through to the strict check and the loss still surfaces — via
+        // the closing frame, or via the flush when the window closed with an
+        // acknowledgement that carries no DOM part.
+        if (contiguous) {
+            clientVdomVersion = data.version;
+        }
+        if (globalThis.djustDebug) {
+            djLog('[LiveView] Buffered %s frame (v%s) — waiting for %d pending event(s)', String(data.source), String(data.version), _pendingEventRefs.size);
+        }
+        return true;
     }
 
     /**
@@ -1541,6 +1511,8 @@ class LiveViewWebSocket {
      * @param {Object} data - Data to send (will be JSON stringified)
      */
     sendMessage(data) {
+        // #3658: every mount verb names the protocol this bundle speaks.
+        if (_PROTOCOL_VERBS.has(data.type)) data = { ...data, protocol: window.djust.PROTOCOL };
         const message = JSON.stringify(data);
         const messageBytes = message.length;
 

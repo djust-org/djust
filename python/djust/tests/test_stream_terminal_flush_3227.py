@@ -26,10 +26,10 @@ import time
 import pytest
 from asgiref.sync import sync_to_async
 
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 from djust.streaming import StreamingMixin
-from djust import state
+from djust.tests._frames import legacy_type
 
 _MODULE = __name__
 _TARGET = "[dj-stream='reply']"
@@ -144,7 +144,8 @@ async def test_done_arrives_after_the_queued_settle_over_websocket(monkeypatch, 
         frames = await receive_until(
             communicator,
             lambda fs: any(
-                f.get("type") in ("patch", "html_update") and f.get("source") == "async" for f in fs
+                legacy_type(f) in ("patch", "html_update") and f.get("source") == "async"
+                for f in fs
             ),
             what="the end-of-callback render",
         )

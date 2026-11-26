@@ -5,9 +5,9 @@ import json
 import pytest
 from django.template import Context, Template
 from django.test import override_settings
-
 from djust import LiveView
 from djust.audio import AudioMixin, Sound, SoundBank
+from djust.tests._frames import effects_of
 
 
 class ContextBase(LiveView):
@@ -150,8 +150,8 @@ def test_connected_mount_cues_are_discarded_before_first_render():
 @pytest.mark.asyncio
 @pytest.mark.django_db(transaction=True)
 async def test_tick_with_audio_only_flushes_without_rendering():
-    from djust.websocket import LiveViewConsumer
     from djust.tests._live_session import amount_on_consumer
+    from djust.websocket import LiveViewConsumer
 
     consumer = LiveViewConsumer()
     sent = []
@@ -166,14 +166,15 @@ async def test_tick_with_audio_only_flushes_without_rendering():
         sent.clear()
         assert await consumer._tick_once() is False
     assert len(sent) == 1
-    assert sent[0]["event"] == "djust:audio"
+    assert effects_of(sent[0])[0]["event"] == "djust:audio"
 
 
 @pytest.mark.asyncio
 async def test_ws_and_sse_transports_preserve_scope_and_batch():
     import asyncio
     from unittest.mock import AsyncMock
-    from djust.runtime import ViewRuntime, SSESessionTransport, WSConsumerTransport
+
+    from djust.runtime import SSESessionTransport, ViewRuntime, WSConsumerTransport
     from djust.sse import SSESession
 
     for kind in ("ws", "sse"):
@@ -187,11 +188,12 @@ async def test_ws_and_sse_transports_preserve_scope_and_batch():
             transport = WSConsumerTransport(consumer)
         runtime = ViewRuntime(transport)
         runtime.view_instance = view
-        runtime._flush_push_events()
+        await runtime._send_effects("tick", kinds=("push_event",))
         await asyncio.sleep(0)
         frame = (
             session.queue.get_nowait() if kind == "sse" else consumer.send_json.call_args.args[0]
         )
+        [frame] = effects_of(frame)  # one effects-only render frame (#3658)
         assert frame["payload"]["scope"] == view._audio_scope
         assert [item["id"] for item in frame["payload"]["events"]] == ["one", "two"]
         assert not view._drain_push_events()

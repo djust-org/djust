@@ -54,6 +54,7 @@ from djust._exposure_sessions import MAX_EXPLICIT_STATE_SAVE_TIMEOUT_S, server_s
 from djust.components.descriptors.base import LiveComponent, TypedState
 from djust.decorators import state
 from djust.runtime import ViewRuntime
+from djust.tests._frames import frame_matches, legacy_type
 from djust.tests._ws_frames import drain_extra, has_frame, receive_until
 from djust.tests.test_exposure_runtime import make_request
 from djust.tests.test_runtime_state_save_tt_1894 import MockTransport
@@ -234,7 +235,7 @@ def _shown(frame) -> Optional[int]:
 def _answers(frames) -> list:
     """(type, ref, shown) of every frame that answers an event."""
     kinds = {"patch", "html_update", "error", "noop", "embedded_update"}
-    return [(f["type"], f.get("ref"), _shown(f)) for f in frames if f.get("type") in kinds]
+    return [(legacy_type(f), f.get("ref"), _shown(f)) for f in frames if frame_matches(f, kinds)]
 
 
 def _event(ref: int, name: str = "increment", **params: Any) -> dict:
@@ -441,7 +442,7 @@ async def test_a_burst_of_embedded_child_events_while_the_first_save_is_slow(set
         await asyncio.gather(*turns)
 
     assert not transport.errors, transport.errors
-    updates = [f for f in transport.sent if f.get("type") == "embedded_update"]
+    updates = [f for f in transport.sent if legacy_type(f) == "embedded_update"]
     assert [re.search(r"Count=(\d+)", json.dumps(f)).group(1) for f in updates] == ["2", "3", "4"]
     assert child.count == 4 and child._handler_calls == 3
     restored, _, _ = await child_events.mount(request.session.session_key)

@@ -46,6 +46,7 @@ from djust.serialization import (
     _SidecarModelProxy,
     normalize_django_value,
 )
+from djust.tests._frames import legacy_type
 
 LEAK = "LEAK-2614"
 
@@ -318,7 +319,7 @@ class TestRealRenderPaths:
             for _ in range(6):
                 f = await comm.receive_json_from()
                 frames.append(f)
-                if f.get("type") in ("patch", "html_update"):
+                if legacy_type(f) in ("patch", "html_update"):
                     break
             await comm.disconnect()
 
@@ -813,7 +814,7 @@ class TestRustQuerySetRealRenderPaths:
             for _ in range(6):
                 f = await comm.receive_json_from()
                 event_frames.append(f)
-                if f.get("type") in ("patch", "html_update"):
+                if legacy_type(f) in ("patch", "html_update"):
                     break
             assert event_frames, "no frame for the event"
             await comm.disconnect()

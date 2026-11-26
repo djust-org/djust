@@ -21,6 +21,7 @@ from django.urls import path
 from djust import LiveView
 from djust.decorators import event_handler, state
 from djust.forms import FormMixin
+from djust.tests._frames import legacy_type
 
 PAGE = "<!DOCTYPE html><html><head><title>t</title></head><body>\n<div dj-root>%s</div>\n</body></html>"
 
@@ -485,7 +486,7 @@ async def run_websocket(url: str, view_path: str, events: list[tuple[str, dict]]
     async def until(types: tuple[str, ...]) -> dict:
         for _ in range(20):
             frame = json.loads(await comm.receive_from(timeout=30))
-            if frame.get("type") in types:
+            if legacy_type(frame) in types:  # a render frame by its DOM part (#3658)
                 return frame
         raise AssertionError("no frame of %r" % (types,))
 
@@ -507,7 +508,7 @@ async def run_websocket(url: str, view_path: str, events: list[tuple[str, dict]]
         await comm.send_json_to({"type": "event", "event": event, "params": params, "ref": ref})
         frame = await until(("patch", "html_update", "noop", "error"))
         assert frame["type"] != "error", frame
-        kinds.append(frame["type"])
+        kinds.append(legacy_type(frame))
     view = consumers[-1].view_instance
     final = await sync_to_async(lambda: view.render_with_diff()[0], thread_sensitive=True)()
     await comm.disconnect()

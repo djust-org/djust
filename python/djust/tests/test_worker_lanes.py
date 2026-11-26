@@ -33,10 +33,10 @@ import pytest
 from asgiref.sync import SyncToAsync, sync_to_async
 from django.test import override_settings
 
-from djust import LiveView
+from djust import LiveView, state
 from djust.config import config as djust_config
 from djust.decorators import event_handler
-from djust import state
+from djust.tests._frames import legacy_type
 
 pytest.importorskip("channels")
 
@@ -109,7 +109,7 @@ async def _receive_until(communicator, wanted, *, tries=8, timeout=10):
     last = None
     for _ in range(tries):
         last = await communicator.receive_json_from(timeout=timeout)
-        if last.get("type") == wanted:
+        if legacy_type(last) == wanted:
             return last
     return last
 
@@ -164,7 +164,7 @@ async def _slow_neighbour_case():
 async def test_pinned_a_connection_on_a_slow_ones_thread_waits_for_it(pool):
     pool(2, True)
     c_latency, fa, fc = await _slow_neighbour_case()
-    assert fa.get("type") == "patch" and fc.get("type") == "patch", (fa, fc)
+    assert legacy_type(fa) == "patch" and legacy_type(fc) == "patch", (fa, fc)
     (a_end,) = _events("A", "end")
     (c_start,) = _events("C", "start")
     # Pinned: A and C share a thread, so C's handler started only after A's ended.
@@ -178,7 +178,7 @@ async def test_pinned_a_connection_on_a_slow_ones_thread_waits_for_it(pool):
 async def test_lanes_a_slow_connection_holds_up_only_itself(pool):
     pool(2, False)
     c_latency, fa, fc = await _slow_neighbour_case()
-    assert fa.get("type") == "patch" and fc.get("type") == "patch", (fa, fc)
+    assert legacy_type(fa) == "patch" and legacy_type(fc) == "patch", (fa, fc)
     (a_start,) = _events("A", "start")
     (a_end,) = _events("A", "end")
     (c_start,) = _events("C", "start")

@@ -24,8 +24,9 @@ from django.test import override_settings
 from djust import LiveView
 from djust.config import config as djust_config
 from djust.decorators import event_handler, state
-from djust.testing import with_live_session
 from djust.push import apush_to_view
+from djust.testing import with_live_session
+from djust.tests._frames import legacy_type
 
 pytest.importorskip("channels")
 
@@ -84,7 +85,7 @@ async def _receive_until(communicator, wanted, *, tries=8, timeout=30):
     last = None
     for _ in range(tries):
         last = await communicator.receive_json_from(timeout=timeout)
-        if last.get("type") == wanted:
+        if legacy_type(last) == wanted:
             return last
     return last
 
@@ -121,7 +122,7 @@ async def test_async_push_hook_runs_on_the_loop(pool):
             frame = await _receive_until(comm, "patch")
         finally:
             await comm.disconnect()
-    assert frame.get("type") == "patch", frame
+    assert legacy_type(frame) == "patch", frame
     assert frame["source"] == "broadcast"
     assert "awaited" in json.dumps(frame["patches"])
     assert _SEEN["async_hook"] == [loop_thread]

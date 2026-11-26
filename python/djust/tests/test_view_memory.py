@@ -37,6 +37,7 @@ from djust import _per_turn
 from djust.tests import _per_turn_harness as harness
 from djust.tests import _view_memory as vm
 from djust.tests import _view_memory_scenarios as scenarios
+from djust.tests._frames import legacy_type
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
 
@@ -344,7 +345,7 @@ async def test_a_change_between_turns_reaches_the_next_frame(monkeypatch, switch
         finally:
             await comm.disconnect()
     text = "".join(str(frame) for frame in frames)
-    assert frames[-1]["type"] in ("patch", "html_update"), frames
+    assert legacy_type(frames[-1]) in ("patch", "html_update"), frames
     assert expected.rstrip("<") in text, (label, text[:400])
 
 

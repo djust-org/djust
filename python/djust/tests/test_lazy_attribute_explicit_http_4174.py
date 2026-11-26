@@ -18,6 +18,7 @@ from django.contrib.sessions.backends.db import SessionStore
 from django.test import RequestFactory, override_settings
 
 from djust import LiveView, event_handler, state
+from djust.tests._frames import legacy_type
 
 MOD = __name__
 TAG = '<div dj-view="' + MOD + '.Child" dj-lazy></div>'
@@ -94,7 +95,7 @@ def post(session, view_id, event="inc", cls=Page):
 def values(response):
     assert response.status_code == 200, response.content
     data = json.loads(response.content)
-    assert data["type"] == "embedded_update"
+    assert legacy_type(data) == "embedded_update"
     html = data["html"]
     count = int(re.search(r'class="count"[^>]*>(\d+)<', html).group(1))
     clicks = int(re.search(r'class="clicks"[^>]*>(\d+)<', html).group(1))

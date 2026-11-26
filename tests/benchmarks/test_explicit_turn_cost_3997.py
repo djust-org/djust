@@ -58,11 +58,11 @@ import time
 from typing import Any, Dict, List
 
 import pytest
-
 from djust import LiveView, event_handler
 from djust.components.descriptors.base import LiveComponent, TypedState
 from djust.decorators import state
 from djust.tests import _per_turn_harness as harness
+from djust.tests._frames import frame_matches, legacy_type
 
 MODULE = __name__
 SETTINGS = ("explicit", "explicit_nosave", "explicit_interval")
@@ -248,7 +248,7 @@ async def _turn(comm: Any) -> Dict[str, Any]:
     await comm.send_json_to({"type": "event", "event": "inc", "params": {}, "ref": ref})
     while True:
         frame: Dict[str, Any] = await comm.receive_json_from(timeout=30)
-        if frame.get("ref") == ref and frame.get("type") in harness.REPLY_TYPES:
+        if frame.get("ref") == ref and frame_matches(frame, harness.REPLY_TYPES):
             return frame
 
 
@@ -270,7 +270,7 @@ async def _measure(shape: str, rounds: int) -> Dict[str, List[float]]:
                 start = time.perf_counter()
                 frame = await _turn(comms[setting])
                 elapsed = time.perf_counter() - start
-                assert frame["type"] == "patch", (shape, setting, frame)
+                assert legacy_type(frame) == "patch", (shape, setting, frame)
                 if n >= WARMUP:
                     times[setting].append(elapsed)
                 if n < WARMUP + 2:
