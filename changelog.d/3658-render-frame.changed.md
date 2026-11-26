@@ -19,5 +19,9 @@
   every mount and POST, and a tab running an older cached bundle reloads itself
   once (WebSocket close code 4409, an SSE `reload` frame, or HTTP 409
   `protocol_mismatch`). The client bundle URLs carry `?v=<djust version>` so the
-  reload fetches the new bundle. Tests that read frames: match `"render"` and read
-  `effects` instead of the old frame types.
+  reload fetches the new bundle. This changes the wire format: custom JavaScript
+  that read the old frames or the `_*` answer keys must read the `render` frame's
+  DOM part and `effects` (hooks, `djust:*` events and `{% dj_flash %}` are
+  unchanged), and tests that read frames match `"render"` and read `effects`. See
+  "The wire format changed" in the 2.0 migration guide and the new Wire Protocol
+  page.

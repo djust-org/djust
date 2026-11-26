@@ -1224,6 +1224,38 @@ test that targets the old markup needs the new selector:
   Rust-only tag inside it (`{% call %}`, `{% component %}`) is no longer
   available there.
 
+### The wire format changed
+
+The frames the server sends to the browser changed in 2.0
+([#3658](https://github.com/djust-org/djust/issues/3658)). Every turn result is
+now one `render` frame, on the WebSocket, over SSE and as the HTTP fallback's
+answer. Its DOM part (`patches`, `html`, or an embedded child's `view_id` and
+`html`) and an ordered `effects` list replace the `patch`, `html_update`,
+`noop`, `embedded_update`, `push_event`, `flash`, `page_metadata`, `layout`,
+`navigation` and `navigate` frames, and the HTTP answer's `_push_events`,
+`_flash`, `_page_metadata`, `_layout` and `_navigation` keys. An effect is the
+old frame with `type` renamed to `kind`. The
+[Wire Protocol](../advanced/wire-protocol.md) page has the shape.
+
+- **Open tabs reload once after the upgrade.** The server and the client bundle
+  name a protocol version. A tab still running the 1.x bundle is told to reload
+  (WebSocket close code `4409`, an SSE `reload` frame, or HTTP `409` with
+  `code: "protocol_mismatch"`), fetches the new bundle and carries on. Unsaved
+  form input in such a tab is lost, as on any reload. The bundle URLs now carry
+  `?v=<djust version>`, so a cache keyed on the URL serves the new bundle.
+- **Custom JavaScript that read raw frames must change.** Code that listened
+  to the socket's messages, wrapped `handleMessage`, or read the HTTP answer
+  for one of the old frame types or `_*` keys sees `{"type": "render"}` instead:
+  read the DOM part and `effects`. Hooks (`handleEvent`), `djust:*` DOM events,
+  `{% dj_flash %}` and `dj-hook` callbacks are unchanged.
+- **Tests that read frames.** Match `"render"` and read `effects`.
+  `LivePage.receive(("patch",))` and `receive(("push_event",))` from
+  `djust.testing` still match, by the frame's DOM part or an effect's `kind`.
+  A test that sends a `mount` frame, an SSE stream GET or a fallback POST by
+  hand names the version (`"protocol": 2`, `&protocol=2`, the
+  `X-Djust-Protocol` header), or sets `DJUST_ALLOW_MISSING_PROTOCOL = True` in
+  its settings.
+
 ### State a legacy view no longer keeps
 
 A 1.3 legacy view kept these between requests and reconnects. None of them
@@ -1563,4 +1595,4 @@ removed setting at startup, and `exposure_policy = "legacy"`,
 module that states it is imported. `djust_exposure_inventory` lists any view
 still on `[policy: legacy]`; run `--fix` on it.
 
-<!-- generated-doc prose-sha256: bf007fb2bd43 -->
+<!-- generated-doc prose-sha256: 7cea00ae80bc -->

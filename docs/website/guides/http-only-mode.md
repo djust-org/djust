@@ -195,7 +195,7 @@ Whenever the fallback runs `mount()` it then runs `handle_params(params, uri)`, 
 - **An embedded child's event** answers with the child's own HTML. The page is mounted only to register its children, so the work its `mount()` queued is discarded, not run; the work the child's handler queued on the child or on its page does run.
 - **An event the view does not define** starts none of the page's `mount()`-queued work (it passes no `@rate_limit` check).
 
-A `live_redirect()` or `live_patch()` that a handler queues is returned in the answer's `_navigation` list, in the shape of the WebSocket `navigation` frame, and the client applies it. After a `live_redirect()` nothing is rendered or saved for that request, so a handler can call `logout()` and then redirect. The flip side: a handler that changes state and then calls `live_redirect()` back to the same view's URL does not keep that change over the HTTP fallback, because the state is not saved. A `live_patch()` renders as usual and carries its frame beside the patches.
+A `live_redirect()` or `live_patch()` that a handler queues is returned as a `navigation` effect in the answer's `effects` list, as over the WebSocket ([Wire Protocol](../advanced/wire-protocol.md)), and the client applies it. After a `live_redirect()` nothing is rendered or saved for that request, so a handler can call `logout()` and then redirect. The flip side: a handler that changes state and then calls `live_redirect()` back to the same view's URL does not keep that change over the HTTP fallback, because the state is not saved. A `live_patch()` renders as usual and carries its effect beside the patches.
 
 ### What of the view is kept in the session
 

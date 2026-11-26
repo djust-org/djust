@@ -160,6 +160,7 @@ Internal architecture and advanced patterns.
 | ------------------------------------------------------ | --------------------------------------------------------- |
 | **[VDOM Architecture](advanced/vdom-architecture.md)** | How the Rust virtual DOM and diffing works                |
 | **[Server Push](advanced/server-push.md)**             | Push updates from background tasks and signals            |
+| **[Wire Protocol](advanced/wire-protocol.md)**         | The `render` frame, its effects and the protocol version  |
 | **[Debug Panel](advanced/debug-panel.md)**             | Built-in developer tooling                                |
 | **[Security](advanced/security.md)**                   | XSS prevention, CSRF, permissions, multi-tenant isolation |
 

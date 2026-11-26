@@ -245,7 +245,7 @@ Not the render itself, nor authorization checks.
   not count.
 
 When W and R are both known and share no table, nothing is read again and a
-handler that changed nothing on the view still answers `noop`: a click that
+handler that changed nothing on the view still answers with a bare `render` acknowledgement: a click that
 writes an audit row costs what it did before. **Otherwise everything the view
 holds is read again before its next render**: every held QuerySet (public or
 private, and in the dicts, lists, tuples and sets it holds, at any depth;
@@ -825,10 +825,10 @@ What still works, and what it costs:
 - **Every later render sends the whole page.** An event that changes state (a
   page-shell handler such as an account menu), a server push, an async result,
   `request_html` recovery: the view renders in full and the client receives an
-  `html_update` frame (the HTTP fallback answers `html`) instead of patches.
+  `render` frame carrying `html` (the HTTP fallback answers the same) instead of patches.
   Nothing is wrong on the page; the cost is a full render on the server and a
   full-page frame on the wire, each time. An event that changes nothing still
-  answers `noop`. Versions stay consecutive, so the client never reloads.
+  answers with a `render` frame that has no DOM part. Versions stay consecutive, so the client never reloads.
 - **Navigation and reconnects re-render.** A `dj-navigate` back to the page, a
   reconnect and an HTTP fallback POST render the page from the view's state, as
   a socket mount always does; there is no stored tree to start from.
