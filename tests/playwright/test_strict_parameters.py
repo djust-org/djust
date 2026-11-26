@@ -161,6 +161,7 @@ async def run(browser, transport, failures):
         status = await page.evaluate(
             """async () => (await fetch(location.href, {method: 'POST',
                 headers: {'Content-Type': 'application/json', 'X-CSRFToken': window.djust.csrfToken(),
+                          'X-Djust-Protocol': String(window.djust.PROTOCOL),
                           'X-Djust-Event': 'pick'},
                 body: JSON.stringify({item_id: '8', component: 'forged'})})).status"""
         )

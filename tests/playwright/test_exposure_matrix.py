@@ -66,6 +66,7 @@ from playwright.async_api import async_playwright
 
 from _exposure_session_contract import FLOOR_SENTINEL, stored_session_failures
 from _transports import INIT, TransportWatch
+from djust._protocol import PROTOCOL_VERSION
 
 BASE = os.environ.get("E5_BASE", "http://localhost:8002")
 SECOND = os.environ.get("E5_SECOND", "http://localhost:8003")
@@ -140,14 +141,23 @@ async def session_key_of(context):
 # the session cookie (cookies ignore the port), so this is a reconnect of the
 # same session landing on a different process.
 CROSS_WORKER_MOUNT = """
-async ([wsUrl, view, path]) => new Promise((resolve) => {
+async ([wsUrl, view, path, protocol]) => new Promise((resolve) => {
     const socket = new WebSocket(wsUrl);
     const timer = setTimeout(() => { socket.close(); resolve({error: 'timeout'}); }, 8000);
+    // A mount frame that does not name the wire protocol is closed with 4409
+    // (#3658); report the close code instead of waiting for the timeout.
+    socket.onclose = (event) => {
+        clearTimeout(timer);
+        resolve({error: 'closed ' + event.code + ' ' + (event.reason || '')});
+    };
     socket.onmessage = (event) => {
         const frame = JSON.parse(event.data);
         if (frame.type === 'connect') {
-            socket.send(JSON.stringify({type: 'mount', view: view, params: {}, url: path}));
-        } else if (frame.type === 'mount' || frame.type === 'error') {
+            socket.send(JSON.stringify({
+                type: 'mount', protocol: protocol, view: view, params: {}, url: path,
+            }));
+        } else if (frame.type === 'mount' || frame.type === 'error'
+                   || (frame.type === 'render' && frame.source === 'mount')) {
             clearTimeout(timer); socket.close(); resolve(frame);
         }
     };
@@ -301,8 +311,11 @@ async def run_flow(browser, transport, failures, notes):
         if reachable(SECOND + path):
             ws_url = SECOND.replace("http", "ws", 1) + "/ws/live/"
             view = "djust_demos.views.exposure_demo.ExposureMatrixView"
-            frame = await page.evaluate(CROSS_WORKER_MOUNT, [ws_url, view, path])
-            if frame.get("type") == "mount" and ">12<" in (frame.get("html") or ""):
+            frame = await page.evaluate(CROSS_WORKER_MOUNT, [ws_url, view, path, PROTOCOL_VERSION])
+            if (
+                frame.get("type") == "mount"
+                or (frame.get("type") == "render" and frame.get("source") == "mount")
+            ) and ">12<" in (frame.get("html") or ""):
                 notes.append(f"{label}: cross-worker WebSocket restore on {SECOND} verified")
             else:
                 failures.append(f"{label}: cross-worker restore failed: {json.dumps(frame)[:300]}")
