@@ -21,6 +21,7 @@ from typing import (
     ContextManager,
     Deque,
     Dict,
+    Hashable,
     List,
     NamedTuple,
     Optional,
@@ -572,6 +573,7 @@ def _snapshot_assigns(view_instance: Any) -> Dict[str, Any]:
             # and post snapshots take the same kind for the same value
             # (``change_detection.native_digest`` is a function of the value).
             native = native_digest(v, rows=type(v) is list)
+            content_fp: Hashable
             if native is not None:
                 content_fp, truncated = native[0], False
                 if keep is not None:
