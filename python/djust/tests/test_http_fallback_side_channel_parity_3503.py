@@ -139,7 +139,8 @@ def _drains_in(path: pathlib.Path, func_prefix: str) -> set:
 class TestParityWithTheSocketFlush:
     def test_every_queue_a_view_defines_is_drained_on_the_fallback(self):
         """A new ``_drain_*`` queue on the view must reach the HTTP answer."""
-        defined = {n for n in dir(LiveView) if n.startswith("_drain_")}
+        # ``_drain_outbound`` is the one queue (#3658) the per-kind drains read.
+        defined = {n for n in dir(LiveView) if n.startswith("_drain_")} - {"_drain_outbound"}
         assert defined, "LiveView defines no _drain_* queue: the derivation is broken"
         # Inside the functions that build the answer, not anywhere in the file:
         # the TYPE_CHECKING stubs in request.py name every queue too.
@@ -161,7 +162,8 @@ class TestParityWithTheSocketFlush:
         socket must still be accounted for by both parity checks.
         """
         socket_flushed = _drains_in(PACKAGE / "websocket.py", "_flush_")
-        defined = {n for n in dir(LiveView) if n.startswith("_drain_")}
+        # ``_drain_outbound`` is the one queue (#3658) the per-kind drains read.
+        defined = {n for n in dir(LiveView) if n.startswith("_drain_")} - {"_drain_outbound"}
         assert socket_flushed, "the socket flushes no _drain_* queue: the derivation is broken"
         assert socket_flushed == defined, "socket-only drains: %s; view-only drains: %s" % (
             sorted(socket_flushed - defined),

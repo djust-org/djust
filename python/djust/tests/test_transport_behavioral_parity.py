@@ -984,7 +984,9 @@ class TestEventSpineEnumeration:
         # 4. _notify_waiters (ADR-002).
         assert "_notify_waiters" in src, "_notify_waiters (ADR-002) missing from the spine"
         # 5. #700 identity push-only skip.
-        assert "_pending_push_events" in src, "#700 identity push-only skip missing from the spine"
+        assert 'has_pending("push_event")' in src, (
+            "#700 identity push-only skip missing from the spine"
+        )
         assert "pre_identity" in src and "post_identity" in src, (
             "#700 identity comparison (pre_identity/post_identity) missing from the spine"
         )

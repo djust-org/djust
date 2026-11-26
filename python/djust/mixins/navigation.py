@@ -10,6 +10,8 @@ Inspired by Phoenix LiveView's live_patch and live_redirect.
 import logging
 from typing import Any, Dict, List, Optional
 
+from .commands import CommandsMixin
+
 logger = logging.getLogger(__name__)
 
 
@@ -54,7 +56,17 @@ def same_origin_target(url: str) -> str:
     return path + ("?" + parts.query if parts.query else "")
 
 
-class NavigationMixin:
+def _legacy_navigation(effect: Dict[str, Any]) -> Dict[str, Any]:
+    """A ``navigation`` effect as the 1.x queue entry: ``action`` under ``type``."""
+    return {("type" if k == "action" else k): v for k, v in effect.items()}
+
+
+def _navigation_effect(command: Dict[str, Any]) -> Dict[str, Any]:
+    """A 1.x queue entry (``type`` is the action) as a ``navigation`` effect."""
+    return {("action" if k == "type" else k): v for k, v in command.items()}
+
+
+class NavigationMixin(CommandsMixin):
     """
     Adds URL navigation capabilities to a LiveView.
 
@@ -70,8 +82,23 @@ class NavigationMixin:
     """
 
     def _init_navigation(self) -> None:
-        """Initialize navigation state. Called from __init__."""
-        self._pending_navigation: List[Dict[str, Any]] = []
+        """Initialize navigation state. Called from __init__.
+
+        The queue is the view's one outbound queue
+        (:class:`~djust.mixins.commands.CommandsMixin`); nothing is left to set.
+        """
+
+    @property
+    def _pending_navigation(self) -> List[Dict[str, Any]]:
+        """The queued navigation commands in their 1.x shape (``type`` is the action).
+
+        A copy; assigning a list (or ``None``) replaces them.
+        """
+        return [_legacy_navigation(p) for p in self._pending("navigation")]
+
+    @_pending_navigation.setter
+    def _pending_navigation(self, commands: Any) -> None:
+        self._replace_pending("navigation", [_navigation_effect(c) for c in (commands or [])])
 
     def live_patch(
         self,
@@ -99,8 +126,8 @@ class NavigationMixin:
                 self.category = category
                 self.live_patch(params={"category": category, "page": 1})
         """
-        nav = {
-            "type": "live_patch",
+        nav: Dict[str, Any] = {
+            "action": "live_patch",
             "replace": replace,
         }
         if params is not None:
@@ -112,7 +139,7 @@ class NavigationMixin:
             note_patched_url(self, params)
         if path is not None:
             nav["path"] = path
-        self._pending_navigation.append(nav)
+        self._enqueue("navigation", nav)
 
     def live_redirect(
         self,
@@ -137,20 +164,18 @@ class NavigationMixin:
             def go_to_detail(self, item_id: Any, **kwargs):
                 self.live_redirect(f"/items/{item_id}/")
         """
-        nav = {
-            "type": "live_redirect",
+        nav: Dict[str, Any] = {
+            "action": "live_redirect",
             "path": path,
             "replace": replace,
         }
         if params is not None:
             nav["params"] = params
-        self._pending_navigation.append(nav)
+        self._enqueue("navigation", nav)
 
     def _drain_navigation(self) -> List[Dict[str, Any]]:
-        """Drain and return pending navigation commands."""
-        commands = self._pending_navigation
-        self._pending_navigation = []
-        return commands
+        """Drain and return the queued navigation commands in their 1.x shape."""
+        return [_legacy_navigation(p) for _k, p in self._drain_outbound(("navigation",))]
 
     def handle_params(self, params: Dict[str, Any], uri: str) -> None:
         """

@@ -1529,7 +1529,7 @@ def check_reserved_view_attributes(app_configs: Any, **kwargs: Any) -> list[Chec
     """V022 (Warning): view code assigns an attribute djust keeps its state under.
 
     ``LiveView.__init__`` sets ``_streams``, ``_components``,
-    ``_pending_navigation`` and others. A view (or a mixin it uses) that
+    ``_outbound`` and others. A view (or a mixin it uses) that
     assigns one of them replaces djust's state, and the error surfaces far
     from the assignment — ``self._streams = {...}`` failed every render with
     ``'builtin_function_or_method' object is not iterable``.

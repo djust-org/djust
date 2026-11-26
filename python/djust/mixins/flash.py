@@ -17,18 +17,26 @@ notifications (success, error, info, warning) in the browser:
 
 from typing import Any, Dict, List, Optional
 
+from .commands import CommandsMixin
 
-class FlashMixin:
+
+class FlashMixin(CommandsMixin):
     """
     Mixin that provides put_flash() and clear_flash() for LiveView.
 
-    Flash messages are queued during handler execution and flushed by the
-    WebSocket consumer after the response is sent.
+    Flash messages are queued during handler execution on the view's one
+    outbound queue (:class:`~djust.mixins.commands.CommandsMixin`) and sent
+    with the turn's answer.
     """
 
-    def __init__(self, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
-        self._pending_flash: List[Dict[str, str]] = []
+    @property
+    def _pending_flash(self) -> List[Dict[str, str]]:
+        """The queued flash commands (a copy). Assigning a list replaces them."""
+        return self._pending("flash")
+
+    @_pending_flash.setter
+    def _pending_flash(self, commands: Any) -> None:
+        self._replace_pending("flash", list(commands or []))
 
     def put_flash(self, level: str, message: str) -> None:
         """
@@ -50,12 +58,13 @@ class FlashMixin:
                 self.save_data()
                 self.put_flash("success", "Changes saved successfully.")
         """
-        self._pending_flash.append(
+        self._enqueue(
+            "flash",
             {
                 "action": "put",
                 "level": level,
                 "message": message,
-            }
+            },
         )
 
     def clear_flash(self, level: Optional[str] = None) -> None:
@@ -75,14 +84,8 @@ class FlashMixin:
         cmd: Dict[str, str] = {"action": "clear"}
         if level is not None:
             cmd["level"] = level
-        self._pending_flash.append(cmd)
+        self._enqueue("flash", cmd)
 
     def _drain_flash(self) -> List[Dict[str, str]]:
-        """
-        Drain and return all pending flash commands.
-
-        Called by the WebSocket consumer after sending the main response.
-        """
-        commands = self._pending_flash
-        self._pending_flash = []
-        return commands
+        """Drain and return the queued flash commands (only the ``flash`` effects)."""
+        return [payload for _k, payload in self._drain_outbound(("flash",))]

@@ -5358,9 +5358,9 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         view = self.view_instance
         if not title or view is None or _queued_title(view):
             return
-        pending = getattr(view, "_pending_page_metadata", None)
-        if isinstance(pending, list):
-            pending.append({"action": "title", "value": title})
+        enqueue = getattr(view, "_enqueue", None)
+        if callable(enqueue):
+            enqueue("page_metadata", {"action": "title", "value": title})
 
     def _resolve_view_path_from_url(self, url: str) -> Optional[str]:
         """Resolve a ``live_redirect`` destination URL to its djust LiveView

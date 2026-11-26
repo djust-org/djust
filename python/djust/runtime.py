@@ -745,14 +745,7 @@ def _discard_turn_effects(view: Any) -> None:
     tasks = getattr(view, "_async_tasks", None)
     if tasks:
         view._async_tasks = {}
-    for drain in (
-        "_drain_push_events",
-        "_drain_flash",
-        "_drain_page_metadata",
-        "_drain_pending_layout",
-        "_drain_deferred",
-        "_drain_navigation",
-    ):
+    for drain in ("_drain_outbound", "_drain_deferred"):
         method = getattr(view, drain, None)
         if callable(method):
             method()
@@ -1146,10 +1139,10 @@ def template_source(template_name: str) -> str:
 
 def _queued_title(view: Any) -> bool:
     """Whether ``view`` has a ``page_title`` command waiting to be sent."""
-    pending = getattr(view, "_pending_page_metadata", None)
-    if not isinstance(pending, list):
+    pending = getattr(view, "_pending", None)
+    if not callable(pending):
         return False
-    return any(isinstance(cmd, dict) and cmd.get("action") == "title" for cmd in pending)
+    return any(cmd.get("action") == "title" for cmd in pending("page_metadata"))
 
 
 def navigation_title_variables(view: Any) -> Tuple[str, ...]:
@@ -4907,8 +4900,8 @@ class ViewRuntime(RuntimeTurnPort):
         # websocket.py:3867-3891. Guarded by force_html so an explicit
         # full-HTML request still renders.
         if not skip_render and not force_html:
-            pending = getattr(view, "_pending_push_events", None)
-            if pending:
+            has_pending = getattr(view, "_has_pending", None)
+            if callable(has_pending) and has_pending("push_event"):
                 post_identity = {k: id(v) for k, v in view.__dict__.items() if k not in _fw_attrs}
                 if pre_identity == post_identity and not has_explicit_children:
                     skip_render = True
@@ -8002,7 +7995,8 @@ class ViewRuntime(RuntimeTurnPort):
         if patch is None:
             return None
         # (``_force_full_html`` is read by both callers before they get here.)
-        if getattr(view, "_pending_push_events", None):
+        has_pending = getattr(view, "_has_pending", None)
+        if callable(has_pending) and has_pending("push_event"):
             return None
         if getattr(view, "_djust_renderer", None) is not None:
             return None
