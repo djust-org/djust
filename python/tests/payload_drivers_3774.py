@@ -267,7 +267,22 @@ def modal(mode):
     ] + [render_modal({"title": PAYLOAD}, body + " data-dj-modal-description ")]
 
 
+def nav_dropdown(mode):
+    """A ``{% nav_item %}`` whose body holds nav items draws the dropdown branch (#4331); the
+    sweep's own call hands the handler a body without one, so that branch needs a driver."""
+    from djust.components.rust_handlers import NavItemHandler
+
+    value = URL_PAYLOAD if mode == "url" else PAYLOAD
+    kw = {"label": PAYLOAD, "href": value, "id": PAYLOAD, "event": PAYLOAD, "mega": True}
+    child = NavItemHandler().render_kwargs(kw, "")
+    return [
+        NavItemHandler().render_kwargs(kw, child),
+        NavItemHandler().render_kwargs({**kw, "active": PAYLOAD}, child),
+    ]
+
+
 DRIVERS = [
+    ("nav_dropdown", nav_dropdown),
     ("live_render", live_render),
     ("render_modal", modal),
     ("live_input", live_input),

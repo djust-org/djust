@@ -6441,129 +6441,57 @@ def do_page_header_actions(parser: Any, token: Any) -> template.Node:
 # ---------------------------------------------------------------------------
 
 
+def _native_kwargs(kwargs: Any, context: Any) -> dict[str, Any]:
+    """A node's arguments resolved, as the native handler's ``render_kwargs`` reads them
+    (``rust_handlers.python_operands``, #4331)."""
+    from djust.components.rust_handlers import python_operands
+
+    return python_operands({k: _resolve(v, context) for k, v in kwargs.items()})
+
+
 class SidebarItemNode(template.Node):
-    """A single sidebar menu item."""
+    """``{% sidebar_item %}``: drawn by ``SidebarItemHandler`` (#4331), the one implementation.
+    Its rendered body (sub-items at any depth, or any other markup) is the item's submenu."""
 
     def __init__(self, kwargs: Any, nodelist: Any) -> None:
         self.kwargs = kwargs
-        self.nodelist = nodelist  # sub-items if nested
+        self.nodelist = nodelist
 
     def render(self, context: Any) -> SafeString:
-        return ""  # rendered by parent SidebarNode
+        from djust.components.rust_handlers import SidebarItemHandler
+
+        kw = _native_kwargs(self.kwargs, context)
+        return mark_safe(SidebarItemHandler().render_kwargs(kw, self.nodelist.render(context)))
 
 
 class SidebarSectionNode(template.Node):
-    """A section header within a sidebar."""
+    """``{% sidebar_section %}``: drawn by ``SidebarSectionHandler`` (#4331)."""
 
     def __init__(self, kwargs: Any) -> None:
         self.kwargs = kwargs
 
     def render(self, context: Any) -> SafeString:
-        return ""  # rendered by parent SidebarNode
+        from djust.components.rust_handlers import SidebarSectionHandler
+
+        return mark_safe(
+            SidebarSectionHandler().render_kwargs(_native_kwargs(self.kwargs, context))
+        )
 
 
 class SidebarNode(template.Node):
+    """``{% sidebar %}``: drawn by ``SidebarHandler`` (#4331), the one implementation. The body
+    is rendered as the native block handler is handed it: every item, section and other markup
+    in it is kept, and the sidebar's ``active=`` reaches the items through their markers."""
+
     def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
-    def _render_item(self, item: Any, context: Any, active_path: Any, level: Any = 0) -> Any:
-        kw = {k: _resolve(v, context) for k, v in item.kwargs.items()}
-        label = kw.get("label", "")
-        href = kw.get("href", "#")
-        icon = kw.get("icon", "")
-        item_id = kw.get("id", "")
-        event = kw.get("event", "")
-
-        is_active = item_id == active_path or href == active_path
-        active_cls = " dj-sidebar__item--active" if is_active else ""
-        level_cls = f" dj-sidebar__item--level-{level}" if level > 0 else ""
-
-        icon_html = ""
-        if icon:
-            icon_html = f'<span class="dj-sidebar__icon">{conditional_escape(icon)}</span>'
-
-        # Check for nested sub-items
-        sub_items = [n for n in item.nodelist if isinstance(n, SidebarItemNode)]
-
-        if event:
-            trigger = (
-                f'<button class="dj-sidebar__link{active_cls}{level_cls}" '
-                f'dj-click="{attr_text(event)}">'
-                f'{icon_html}<span class="dj-sidebar__label">'
-                f"{conditional_escape(label)}</span></button>"
-            )
-        else:
-            trigger = (
-                f'<a class="dj-sidebar__link{active_cls}{level_cls}" '
-                f'href="{safe_url(href)}">'
-                f'{icon_html}<span class="dj-sidebar__label">'
-                f"{conditional_escape(label)}</span></a>"
-            )
-
-        if sub_items:
-            children = "".join(
-                self._render_item(si, context, active_path, level + 1) for si in sub_items
-            )
-            return (
-                f'<li class="dj-sidebar__item dj-sidebar__item--parent">'
-                f"{trigger}"
-                f'<ul class="dj-sidebar__submenu">{children}</ul></li>'
-            )
-
-        return f'<li class="dj-sidebar__item">{trigger}</li>'
-
     def render(self, context: Any) -> SafeString:
-        kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
-        sidebar_id = kw.get("id", "sidebar")
-        active = kw.get("active", "")
-        collapsed = kw.get("collapsed", False)
-        title = kw.get("title", "")
-        toggle_event = kw.get("toggle_event", "toggle_sidebar")
-        custom_class = kw.get("class", "")
-        # ``component_id=`` names which ``Sidebar`` the toggle drives (#4134).
-        cid_attr = _cid(kw.get("component_id"))
+        from djust.components.rust_handlers import SidebarHandler
 
-        collapsed_cls = " dj-sidebar--collapsed" if collapsed else ""
-        cls = f"dj-sidebar{collapsed_cls}"
-        if custom_class:
-            cls += f" {attr_text(custom_class)}"
-
-        header_html = ""
-        if title:
-            header_html = (
-                f'<div class="dj-sidebar__header">'
-                f'<span class="dj-sidebar__title">{conditional_escape(title)}</span>'
-                f'<button class="dj-sidebar__toggle" dj-click="{attr_text(toggle_event)}"'
-                f"{cid_attr}>&#9776;</button></div>"
-            )
-
-        # Collect sections and items
-        parts = []
-        for node in self.nodelist:
-            if isinstance(node, SidebarSectionNode):
-                skw = {k: _resolve(v, context) for k, v in node.kwargs.items()}
-                section_label = skw.get("label", "")
-                parts.append(
-                    f'<li class="dj-sidebar__section">'
-                    f'<span class="dj-sidebar__section-label">'
-                    f"{conditional_escape(section_label)}</span></li>"
-                )
-            elif isinstance(node, SidebarItemNode):
-                parts.append(self._render_item(node, context, active))
-
-        menu_html = f'<ul class="dj-sidebar__menu">{"".join(parts)}</ul>'
-
-        # Mobile overlay backdrop
-        backdrop = (
-            f'<div class="dj-sidebar__backdrop" dj-click="{attr_text(toggle_event)}"'
-            f"{cid_attr}></div>"
-        )
-
-        return mark_safe(
-            f'<nav class="{cls}" id="{attr_text(sidebar_id)}" role="navigation">'
-            f"{header_html}{menu_html}{backdrop}</nav>"
-        )
+        kw = _native_kwargs(self.kwargs, context)
+        return mark_safe(SidebarHandler().render_kwargs(kw, self.nodelist.render(context)))
 
 
 @register.tag("sidebar")
@@ -6596,21 +6524,13 @@ def do_sidebar_section(parser: Any, token: Any) -> template.Node:
 # ---------------------------------------------------------------------------
 
 
-#: The context key a ``{% nav_menu %}`` / ``{% nav_item %}`` sets for the items rendered in
-#: its body (#3873, #3878): the menu's ``active`` and the depth of the items below, plus a
-#: count the item bumps so its parent knows it holds sub-items. A context entry, not the
-#: render context, so an item reached through ``{% include %}`` still finds its menu.
-_NAV_FRAME = "_djust_nav_frame"
-
-
 class NavItemNode(template.Node):
-    """A single nav menu item, optionally containing dropdown children.
+    """``{% nav_item %}``: drawn by ``NavItemHandler`` (#4331), the one implementation.
 
-    The item renders its own body first, as the native block handler is handed it rendered
-    (#3873, #3878): a sub-item at any depth is drawn, and so is one a template puts inside
-    ``{% if %}`` / ``{% for %}``. An item with sub-items is a dropdown whose list is that body;
-    an item without is a link or a button and its body is ignored. Outside a ``{% nav_menu %}``
-    it draws nothing.
+    The item renders its own body first, as the native block handler is handed it (#3873,
+    #3878): a body holding nav items makes it a dropdown, at any depth and inside ``{% if %}`` /
+    ``{% for %}``. Without ``active=`` of its own it leaves a marker the enclosing
+    ``{% nav_menu %}`` resolves against the menu's ``active``.
     """
 
     def __init__(self, kwargs: Any, nodelist: Any) -> None:
@@ -6618,108 +6538,24 @@ class NavItemNode(template.Node):
         self.nodelist = nodelist
 
     def render(self, context: Any) -> SafeString:
-        frame = context.get(_NAV_FRAME)
-        if not isinstance(frame, dict):
-            return SafeString("")
-        frame["items"] += 1
-        kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
-        label = kw.get("label", "")
-        href = kw.get("href", "#")
-        item_id = kw.get("id", "")
-        event = kw.get("event", "")
-        mega = kw.get("mega", False)
-        desc = kw.get("description", "")
-        depth = frame["depth"]
-        # The item's own ``active=`` (what the native item reads), else the menu's.
-        active_path = kw.get("active", frame["active"])
+        from djust.components.rust_handlers import NavItemHandler
 
-        own: dict[str, Any] = {"active": frame["active"], "depth": depth + 1, "items": 0}
-        with context.push(**{_NAV_FRAME: own}):
-            content = self.nodelist.render(context)
-
-        # Truthiness first, as the native item: no ``id`` and no menu ``active`` is not a match.
-        is_active = bool(item_id and item_id == active_path) or bool(href and href == active_path)
-        # The same classes at every depth, as the native handler draws them (#4127): a nested
-        # item is styled by where it sits (``.dj-nav__dropdown-list .dj-nav__item``), not by a
-        # second class family. ``dj-nav__dropdown-item`` / ``-link`` stay styled in
-        # components.css for markup that still names them.
-        li_cls = "dj-nav__item"
-        link_cls = "dj-nav__link"
-        active_cls = " dj-nav__item--active" if is_active else ""
-
-        if own["items"]:
-            mega_cls = " dj-nav__dropdown--mega" if mega else ""
-            return mark_safe(
-                f'<li class="{li_cls} dj-nav__item--has-dropdown{active_cls}">'
-                f'<button class="{link_cls}">{conditional_escape(label)}'
-                f'<span class="dj-nav__caret">&#9662;</span></button>'
-                f'<div class="dj-nav__dropdown{mega_cls}">'
-                f'<ul class="dj-nav__dropdown-list">{content}</ul></div></li>'
-            )
-
-        desc_html = ""
-        if desc:
-            desc_html = f'<span class="dj-nav__dropdown-desc">{conditional_escape(desc)}</span>'
-
-        if event:
-            return mark_safe(
-                f'<li class="{li_cls}{active_cls}">'
-                f'<button class="{link_cls}" dj-click="{attr_text(event)}">'
-                f"{conditional_escape(label)}{desc_html}</button></li>"
-            )
-
-        return mark_safe(
-            f'<li class="{li_cls}{active_cls}">'
-            f'<a class="{link_cls}" href="{safe_url(href)}">'
-            f"{conditional_escape(label)}{desc_html}</a></li>"
-        )
+        kw = _native_kwargs(self.kwargs, context)
+        return mark_safe(NavItemHandler().render_kwargs(kw, self.nodelist.render(context)))
 
 
 class NavMenuNode(template.Node):
+    """``{% nav_menu %}``: drawn by ``NavMenuHandler`` (#4331), the one implementation."""
+
     def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
     def render(self, context: Any) -> SafeString:
-        kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
-        nav_id = kw.get("id", "nav-menu")
-        active = kw.get("active", "")
-        brand = kw.get("brand", "")
-        brand_href = kw.get("brand_href", "/")
-        toggle_event = kw.get("toggle_event", "toggle_nav")
-        mobile_open = kw.get("mobile_open", False)
-        custom_class = kw.get("class", "")
+        from djust.components.rust_handlers import NavMenuHandler
 
-        cls = "dj-nav"
-        if custom_class:
-            cls += f" {attr_text(custom_class)}"
-
-        mobile_cls = " dj-nav__list--open" if mobile_open else ""
-
-        brand_html = ""
-        if brand:
-            brand_html = (
-                f'<a class="dj-nav__brand" href="{safe_url(brand_href)}">'
-                f"{conditional_escape(brand)}</a>"
-            )
-
-        hamburger = (
-            f'<button class="dj-nav__hamburger" dj-click="{attr_text(toggle_event)}"'
-            f'{_cid(kw.get("component_id"))} aria-label="Toggle navigation">&#9776;</button>'
-        )
-
-        # The body as rendered, as the native handler is handed it (#3878): every item at
-        # every depth, wherever the template put it.
-        with context.push(**{_NAV_FRAME: {"active": active, "depth": 0, "items": 0}}):
-            items_html = self.nodelist.render(context)
-
-        return mark_safe(
-            f'<nav class="{cls}" id="{attr_text(nav_id)}" role="navigation">'
-            f'<div class="dj-nav__container">'
-            f"{brand_html}{hamburger}"
-            f'<ul class="dj-nav__list{mobile_cls}">{items_html}</ul>'
-            f"</div></nav>"
-        )
+        kw = _native_kwargs(self.kwargs, context)
+        return mark_safe(NavMenuHandler().render_kwargs(kw, self.nodelist.render(context)))
 
 
 @register.tag("nav_menu")
@@ -6888,39 +6724,19 @@ class ToolbarOverflowNode(template.Node):
 
 
 class ToolbarNode(template.Node):
+    """``{% toolbar %}``: drawn by ``ToolbarHandler`` (#4331), the one implementation. The
+    children between two ``{% toolbar_separator %}`` form one ``dj-toolbar__group`` (they used to
+    be wrapped one node at a time, which split ``<button>{{ x }}</button>`` across three groups)."""
+
     def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs
 
     def render(self, context: Any) -> SafeString:
-        kw = {k: _resolve(v, context) for k, v in self.kwargs.items()}
-        # A default id that repeats on every render of the same call (#4108):
-        # a random one differs on each, so the page never renders the same twice.
-        toolbar_id = (
-            kw["id"]
-            if "id" in kw
-            else _render_id("toolbar", sorted(kw.items(), key=repr), context=context)
-        )
-        custom_class = kw.get("class", "")
-        size = kw.get("size", "md")
-        variant = kw.get("variant", "default")
+        from djust.components.rust_handlers import ToolbarHandler
 
-        cls = f"dj-toolbar dj-toolbar--{attr_text(size)} dj-toolbar--{attr_text(variant)}"
-        if custom_class:
-            cls += f" {attr_text(custom_class)}"
-
-        parts = []
-        for node in self.nodelist:
-            if isinstance(node, (ToolbarSeparatorNode, ToolbarOverflowNode)):
-                parts.append(node.render(context))
-            else:
-                rendered = node.render(context)
-                if rendered.strip():
-                    parts.append(f'<div class="dj-toolbar__group">{rendered}</div>')
-
-        return mark_safe(
-            f'<div class="{cls}" id="{attr_text(toolbar_id)}" role="toolbar">{"".join(parts)}</div>'
-        )
+        kw = _native_kwargs(self.kwargs, context)
+        return mark_safe(ToolbarHandler().render_kwargs(kw, self.nodelist.render(context)))
 
 
 @register.tag("toolbar")

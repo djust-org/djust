@@ -2132,15 +2132,38 @@ class PageHeaderHandler:
         return _safe(html)
 
 
+def python_operands(params: Mapping[str, object]) -> dict[str, object]:
+    """A Django node's resolved arguments as a native handler's ``render_kwargs`` reads them
+    (#4331): what ``_parse_args`` makes of the same operands under the Rust engine (a scalar, a
+    tuple, a lazy or marked-safe string through ``plain_operand``; a list, dict or object as the
+    JSON-able value of the engine's text for it). An unresolved variable is ``""`` on both sides.
+    """
+    return {key: _python_operand(value) for key, value in params.items()}
+
+
+#: How a ``{% sidebar_item %}`` with no ``active=`` of its own asks the ``{% sidebar %}`` that
+#: holds it whether the sidebar's ``active`` names it (#4331), as ``{% nav_item %}`` asks its menu
+#: (``_NAV_ACTIVE_MARK``). The item is rendered before the sidebar, so it leaves the hex of its
+#: ``[id, href]`` pair (only ``0-9a-f``: no value can end the comment, open another, or read as
+#: markup) in a comment right before its link; the sidebar reads and removes every one, adding the
+#: active class to the matching links. Outside a sidebar the comment is invisible.
+_SIDEBAR_ACTIVE_MARK = _re_filters.compile(
+    r'<!--djust-sidebar-key:([0-9a-f]*)--><(a|button) class="dj-sidebar__link"'
+)
+
+
 class SidebarHandler:
     """Block handler for {% sidebar %}...{% endsidebar %}
 
     Renders a collapsible sidebar navigation with menu items, sections,
-    and mobile drawer support.
+    and mobile drawer support. The one renderer of the tag on both engines (#4331): the
+    Django node hands ``render_kwargs`` its resolved arguments and rendered body.
     """
 
     def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
-        kw = _parse_args(args, context)
+        return self.render_kwargs(_parse_args(args, context), content)
+
+    def render_kwargs(self, kw: Mapping[str, object], content: str) -> str:
         sidebar_id = attr_text(kw.get("id", "sidebar"))
         collapsed = kw.get("collapsed", False)
         title = kw.get("title", "")
@@ -2165,6 +2188,20 @@ class SidebarHandler:
 
         backdrop = f'<div class="dj-sidebar__backdrop" dj-click="{toggle_event}"{cid_attr}></div>'
 
+        # The sidebar's ``active`` reaches the items that left a marker: each marker and the
+        # opening of the link after it become that opening, with the active class for a match.
+        # Only literals are written, so ``content`` stays the rendered body.
+        active = kw.get("active", "")
+
+        def _link(match: Any) -> str:
+            hit = _nav_key_matches(match.group(1), active)
+            element = "a" if match.group(2) == "a" else "button"
+            return f'<{element} class="dj-sidebar__link' + (
+                ' dj-sidebar__item--active"' if hit else '"'
+            )
+
+        content = _SIDEBAR_ACTIVE_MARK.sub(_link, content)
+
         return _safe(
             f'<nav class="{cls}" id="{sidebar_id}" role="navigation">'
             f"{header_html}"
@@ -2174,10 +2211,18 @@ class SidebarHandler:
 
 
 class SidebarItemHandler:
-    """Block handler for {% sidebar_item %}...{% endsidebar_item %}"""
+    """Block handler for {% sidebar_item %}...{% endsidebar_item %}
+
+    A non-blank body is the item's submenu, whatever it holds (nested items at any depth, or
+    other markup). The item is active when its own ``active=`` is ``True`` or names its ``id`` /
+    ``href``; without ``active=`` the enclosing ``{% sidebar active=... %}`` decides
+    (``_SIDEBAR_ACTIVE_MARK``). One renderer on both engines (#4331).
+    """
 
     def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
-        kw = _parse_args(args, context)
+        return self.render_kwargs(_parse_args(args, context), content)
+
+    def render_kwargs(self, kw: Mapping[str, object], content: str) -> str:
         label = conditional_escape(kw.get("label", ""))
         href = conditional_escape(kw.get("href", "#"))
         icon = kw.get("icon", "")
@@ -2185,8 +2230,18 @@ class SidebarItemHandler:
         event = kw.get("event", "")
         active = conditional_escape(kw.get("active", ""))
 
-        is_active = (item_id and item_id == active) or (href and href == active)
+        is_active = (
+            kw.get("active") is True or (item_id and item_id == active) or (href and href == active)
+        )
         active_cls = " dj-sidebar__item--active" if is_active else ""
+        # No ``active=`` of its own: the enclosing sidebar's ``active`` decides. Written as a
+        # literal around the escaped hex key, which only holds ``0-9a-f``.
+        mark = ""
+        if "active" not in kw:
+            mark = (
+                "<!--djust-sidebar-key:"
+                f"{conditional_escape(_nav_active_key(kw.get('id', ''), kw.get('href', '#')))}-->"
+            )
 
         icon_html = ""
         if icon:
@@ -2209,18 +2264,20 @@ class SidebarItemHandler:
         if has_children:
             return _safe(
                 f'<li class="dj-sidebar__item dj-sidebar__item--parent">'
-                f"{trigger}"
+                f"{mark}{trigger}"
                 f'<ul class="dj-sidebar__submenu">{content}</ul></li>'
             )
 
-        return _safe(f'<li class="dj-sidebar__item">{trigger}</li>')
+        return _safe(f'<li class="dj-sidebar__item">{mark}{trigger}</li>')
 
 
 class SidebarSectionHandler:
     """Inline handler for {% sidebar_section label="..." %}"""
 
     def render(self, args: list[str], context: dict[str, object]) -> str:
-        kw = _parse_args(args, context)
+        return self.render_kwargs(_parse_args(args, context))
+
+    def render_kwargs(self, kw: Mapping[str, object]) -> str:
         label = conditional_escape(kw.get("label", ""))
         return _safe(
             f'<li class="dj-sidebar__section">'
@@ -2232,11 +2289,13 @@ class NavMenuHandler:
     """Block handler for {% nav_menu %}...{% endnav_menu %}
 
     Renders a top horizontal navigation bar with brand, hamburger toggle,
-    and responsive mobile collapse.
+    and responsive mobile collapse. The one renderer on both engines (#4331).
     """
 
     def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
-        kw = _parse_args(args, context)
+        return self.render_kwargs(_parse_args(args, context), content)
+
+    def render_kwargs(self, kw: Mapping[str, object], content: str) -> str:
         nav_id = attr_text(kw.get("id", "nav-menu"))
         brand = kw.get("brand", "")
         brand_href = data_url_attr(kw.get("brand_href", "/"))
@@ -2324,10 +2383,13 @@ class NavItemHandler:
     """Block handler for {% nav_item %}...{% endnav_item %}
 
     Renders a navigation item. If content is present, it becomes a dropdown parent.
+    The one renderer on both engines (#4331).
     """
 
     def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
-        kw = _parse_args(args, context)
+        return self.render_kwargs(_parse_args(args, context), content)
+
+    def render_kwargs(self, kw: Mapping[str, object], content: str) -> str:
         label = conditional_escape(kw.get("label", ""))
         href = conditional_escape(kw.get("href", "#"))
         event = kw.get("event", "")
@@ -2348,13 +2410,12 @@ class NavItemHandler:
             )
 
         # A dropdown parent only when the body holds nav ITEMS (this handler's own ``<li>``).
-        # The Python tag counts child ``{% nav_item %}`` nodes and ignores any other body, so
-        # an item with an ``event`` and a text body stays a clickable button there; "any
-        # non-blank body" dropped that ``dj-click`` (#3669).
-        # A block handler is handed rendered HTML, so a child is recognised by the markup this
-        # handler draws (a literal ``<li class="dj-nav__item">`` in the body matches too). A
-        # sub-item at any depth, or inside ``{% if %}`` / ``{% for %}``, counts; the Django node
-        # renders its body the same way since #3873 / #3878.
+        # Any other body is ignored, so an item with an ``event`` and a text body stays a
+        # clickable button; "any non-blank body" dropped that ``dj-click`` (#3669).
+        # The body is rendered HTML (on both engines: the Django node calls ``render_kwargs``,
+        # #4331), so a child is recognised by the markup this handler draws (a literal
+        # ``<li class="dj-nav__item">`` in the body matches too). A sub-item at any depth, or
+        # inside ``{% if %}`` / ``{% for %}``, counts (#3873 / #3878).
         has_children = _NAV_ITEM_MARKUP in content
 
         if has_children:
@@ -2563,15 +2624,96 @@ class AppContentHandler:
         return _root_layout_html(content, self._render_root_parts(args, content, context))
 
 
+class _ToolbarPartsParser(HTMLParser):
+    """The top-level ``{% toolbar_separator %}`` / ``{% toolbar_overflow %}`` elements of a
+    rendered toolbar body, as ``(start, end)`` offsets (#4331).
+
+    Only an element at the top of the body counts: a separator a template puts inside its own
+    ``<span>`` belongs to that element. The body is read, never reserialized; an element left
+    open runs to the end of the body.
+    """
+
+    _VOID_TAGS = _AppShellSlotParser._VOID_TAGS
+    _CLASSES = frozenset({"dj-toolbar__separator", "dj-toolbar__overflow"})
+
+    def __init__(self, content: str) -> None:
+        super().__init__(convert_charrefs=False)
+        self._content = content
+        self._line_offsets = [0]
+        for line in content.split("\n"):
+            self._line_offsets.append(self._line_offsets[-1] + len(line) + 1)
+        self._stack: list[str] = []
+        self._open: int | None = None
+        self.parts: list[tuple[int, int]] = []
+
+    def _offset(self) -> int:
+        line, column = self.getpos()
+        return self._line_offsets[line - 1] + column
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in self._VOID_TAGS:
+            return
+        if not self._stack and tag == "div" and dict(attrs).get("class") in self._CLASSES:
+            self._open = self._offset()
+        self._stack.append(tag)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag not in self._stack:
+            return
+        index = len(self._stack) - 1 - self._stack[::-1].index(tag)
+        del self._stack[index:]
+        if not self._stack and self._open is not None:
+            end = self._content.find(">", self._offset())
+            self.parts.append((self._open, len(self._content) if end < 0 else end + 1))
+            self._open = None
+
+    def finish(self) -> list[tuple[int, int]]:
+        self.feed(self._content)
+        self.close()
+        if self._open is not None:
+            self.parts.append((self._open, len(self._content)))
+            self._open = None
+        return self.parts
+
+
+def _toolbar_groups(content: str) -> str:
+    """``content`` with each run of children between two separators (or a separator and an
+    overflow menu, or an end of the body) wrapped in one ``dj-toolbar__group`` (#4331). A run that
+    is only whitespace draws no group. The separators and the overflow menu stay where they are,
+    outside every group. Only literal markup is added around slices of ``content``."""
+    out: list[str] = []
+    pos = 0
+    for start, end in [*_ToolbarPartsParser(content).finish(), (len(content), len(content))]:
+        run = content[pos:start]
+        if run.strip():
+            out.append('<div class="dj-toolbar__group">' + run + "</div>")
+        out.append(content[start:end])
+        pos = end
+    return "".join(out)
+
+
 class ToolbarHandler:
     """Block handler for {% toolbar %}...{% endtoolbar %}
 
-    Horizontal action bar with grouped buttons, separators, overflow menu.
+    Horizontal action bar with grouped buttons, separators, overflow menu. The one renderer
+    on both engines (#4331): the children between two ``{% toolbar_separator %}`` form one
+    ``dj-toolbar__group``. With no ``id=`` the id is derived from the arguments
+    (``toolbar-<hash>``), so it repeats on every render of the same call (#4108) and is the same
+    on both engines.
     """
 
     def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
-        kw = _parse_args(args, context)
-        toolbar_id = attr_text(kw.get("id", "toolbar"))
+        return self.render_kwargs(_parse_args(args, context), content)
+
+    def render_kwargs(self, kw: Mapping[str, object], content: str) -> str:
+        if "id" in kw:
+            toolbar_id = attr_text(kw["id"])
+        else:
+            # The Django tags' rule for a default id (#4108), over the operands as both engines
+            # hand them here; there is no per-render count to tell two identical calls apart.
+            from djust.components.templatetags.djust_components import _stable_id
+
+            toolbar_id = attr_text(_stable_id("toolbar", sorted(kw.items(), key=repr)))
         custom_class = attr_text(kw.get("class", ""))
         size = attr_text(kw.get("size", "md"))
         variant = attr_text(kw.get("variant", "default"))
@@ -2580,7 +2722,8 @@ class ToolbarHandler:
         if custom_class:
             cls += f" {custom_class}"
 
-        return _safe(f'<div class="{cls}" id="{toolbar_id}" role="toolbar">{content}</div>')
+        body = _toolbar_groups(content)
+        return _safe(f'<div class="{cls}" id="{toolbar_id}" role="toolbar">{body}</div>')
 
 
 class ToolbarSeparatorHandler:

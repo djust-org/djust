@@ -87,22 +87,26 @@ def test_the_component_census_matches_adr_030():
     # confirm_dialog_block renders its body only when open; the startup registration
     # (`rust_handlers.bridged_handler`) routes it as a wrapper all the same, and the
     # parents that read their children take the raw-body route (`RAW_BODY_TAGS`).
-    for parent in ("tabs", "accordion", "modal", "sidebar", "confirm_dialog_block"):
+    for parent in ("tabs", "accordion", "modal", "confirm_dialog_block"):
         assert "does not render its body" in reasons[parent], parent
     # Renders its body under a pushed variable: the one shape that would
     # diverge from Django silently on the bridge, so it must be refused.
-    # nav_menu joined this side in #3873: it renders every nesting level under
-    # a pushed _djust_nav_frame instead of reading its child nodes, and it is
-    # refused all the same (the counts below do not move).
-    for parent in ("form_array", "nav_menu"):
+    # nav_menu was on this side from #3873 until #4331, when it and sidebar (and their items)
+    # became thin wrappers over their native handlers that render the body as it is.
+    for parent in ("form_array",):
         assert "modified context" in reasons[parent], parent
+    for wrapper in ("sidebar", "sidebar_item", "nav_menu", "nav_item", "toolbar"):
+        assert reasons[wrapper] is None, wrapper
     wrappers = sorted(name for name, reason in reasons.items() if reason is None)
     refused = sorted(name for name, reason in reasons.items() if reason is not None)
     # A deliberate pin: a new body-consuming component tag moves one of these
     # counts, and the change should say which side it landed on.
     # modal_description (a wrapper: it always renders its body) is the 41st;
     # it has its own Rust block handler, so it does not need the bridge.
-    assert len(wrappers) == 41 and len(refused) == 18, (wrappers, refused)
+    # #4331 moved four layout tags (whose Django nodes now draw their body) and sidebar /
+    # sidebar_item / nav_menu / nav_item to the wrapper side; each has its own native handler,
+    # so none of them needs the bridge either.
+    assert len(wrappers) == 49 and len(refused) == 10, (wrappers, refused)
 
 
 def test_a_bridged_wrapper_renders_through_the_rust_engine(bridged_components):

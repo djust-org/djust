@@ -360,17 +360,6 @@ AUDITED: dict[tuple[str, str], Audit] = {
         (DC, "e_title = conditional_escape(str(title))"),
         (DC, "breadcrumb_content = self.nodelist.render(context)"),
     ),
-    (DC, "SidebarNode.render"): S(
-        1,
-        "title, class, ids and events escaped (attr_text / escape in an attribute, conditional_escape in text: #4009); items come from _render_item (labels escaped, hrefs through safe_url)",
-        (DC, 'menu_html = f\'<ul class="dj-sidebar__menu">{"".join(parts)}</ul>\''),
-        (
-            DC,
-            "def _render_item(self, item: Any, context: Any, active_path: Any, level: Any = 0) -> Any:",
-            "SidebarNode._render_item",
-        ),
-        (DC, "f'href=\"{safe_url(href)}\">'", "SidebarNode._render_item"),
-    ),
     (DC, "render_dropdown_menu"): S(
         1,
         "label, event, class and align escaped (attr_text / escape in an attribute, conditional_escape in text: #4009); items come from render_menu_item (labels escaped, href through url_attr); a block body is the rendered tag body",
@@ -450,12 +439,44 @@ AUDITED: dict[tuple[str, str], Audit] = {
         (RH, "content = content[:end] + cid_attr + content[end:]"),
         (RH, "for match in _ACCORDION_TOKEN.finditer(content):", "_accordion_trigger_ends"),
     ),
-    (RH, "NavMenuHandler.render"): S(
+    (RH, "NavMenuHandler.render_kwargs"): S(
         1,
-        'class, id and toggle event escaped (attr_text / escape in an attribute); brand and hamburger built from escaped values and component_id_attr; `content` is the rendered block body, in which the marker NavItemHandler writes right after an item\'s `<li class="...` is replaced by literal text (`">` or ` dj-nav__item--active">`); the marker carries conditional_escape of a hex key and starts with `<!--`, which escaped data cannot spell',
+        'the one implementation of the tag on both engines since #4331: `render` parses the Rust engine\'s operands, the Django node hands `render_kwargs` the same operands as Python values (`python_operands`) and its `self.nodelist.render(context)`, so `content` is the rendered block body on both engines (a SafeString: `_root_layout_html` for the engine side); the guard trusts that parameter only on `render(self, args, content, context)`. class, id and toggle event escaped (attr_text / escape in an attribute); brand and hamburger built from escaped values and component_id_attr; in `content` the marker NavItemHandler writes right after an item\'s `<li class="...` is replaced by literal text (`">` or ` dj-nav__item--active">`); the marker carries conditional_escape of a hex key and starts with `<!--`, which escaped data cannot spell',
         (RH, "for key in _nav_active_keys(content):"),
         (RH, "' dj-nav__item--active\">' if hit else '\">',"),
         (RH, 'return payload.encode("utf-8").hex()', "_nav_active_key"),
+    ),
+    (RH, "NavItemHandler.render_kwargs"): S(
+        1,
+        "the one implementation of the tag on both engines since #4331: `render` parses the Rust engine's operands, the Django node hands `render_kwargs` the same operands as Python values (`python_operands`) and its `self.nodelist.render(context)`, so `content` is the rendered block body on both engines (a SafeString: `_root_layout_html` for the engine side); the guard trusts that parameter only on `render(self, args, content, context)`. label through conditional_escape, the event through attr_text, the href through data_url_attr; `mark` is a literal comment around conditional_escape of the hex of a JSON pair (only 0-9a-f); `content` is the rendered body, placed whole inside the dropdown list",
+        (RH, 'label = conditional_escape(kw.get("label", ""))'),
+        (RH, 'return payload.encode("utf-8").hex()', "_nav_active_key"),
+        (RH, "has_children = _NAV_ITEM_MARKUP in content"),
+    ),
+    (RH, "SidebarHandler.render_kwargs"): S(
+        1,
+        "the one implementation of the tag on both engines since #4331: `render` parses the Rust engine's operands, the Django node hands `render_kwargs` the same operands as Python values (`python_operands`) and its `self.nodelist.render(context)`, so `content` is the rendered block body on both engines (a SafeString: `_root_layout_html` for the engine side); the guard trusts that parameter only on `render(self, args, content, context)`. id, class and toggle event through attr_text, the title through conditional_escape, the toggle's component id through component_id_attr; `content` is the rendered body, in which `_SIDEBAR_ACTIVE_MARK` (a literal `<!--djust-sidebar-key:` + hex + `-->` followed by the literal opening of a link SidebarItemHandler wrote) is replaced by literal text only (`_link` returns one of four constant strings); escaped data cannot spell `<!--`",
+        (RH, 'sidebar_id = attr_text(kw.get("id", "sidebar"))'),
+        (RH, "content = _SIDEBAR_ACTIVE_MARK.sub(_link, content)"),
+        (
+            RH,
+            'element = "a" if match.group(2) == "a" else "button"',
+            "SidebarHandler.render_kwargs._link",
+        ),
+    ),
+    (RH, "SidebarItemHandler.render_kwargs"): S(
+        1,
+        "the one implementation of the tag on both engines since #4331: `render` parses the Rust engine's operands, the Django node hands `render_kwargs` the same operands as Python values (`python_operands`) and its `self.nodelist.render(context)`, so `content` is the rendered block body on both engines (a SafeString: `_root_layout_html` for the engine side); the guard trusts that parameter only on `render(self, args, content, context)`. label and icon through conditional_escape, the event through attr_text, the href through data_url_attr; `mark` is a literal comment around conditional_escape of the hex of a JSON pair (only 0-9a-f, `_nav_active_key`); `content` is the rendered body, placed whole inside the submenu",
+        (RH, 'label = conditional_escape(kw.get("label", ""))'),
+        (RH, '"<!--djust-sidebar-key:"'),
+        (RH, 'return payload.encode("utf-8").hex()', "_nav_active_key"),
+    ),
+    (RH, "ToolbarHandler.render_kwargs"): S(
+        1,
+        "the one implementation of the tag on both engines since #4331: `render` parses the Rust engine's operands, the Django node hands `render_kwargs` the same operands as Python values (`python_operands`) and its `self.nodelist.render(context)`, so `content` is the rendered block body on both engines (a SafeString: `_root_layout_html` for the engine side); the guard trusts that parameter only on `render(self, args, content, context)`. id, class, size and variant through attr_text (a default id is `_stable_id`: a prefix and hex digest); `body` is `_toolbar_groups(content)`: slices of the rendered body cut at the offsets `_ToolbarPartsParser` finds (the start and end of a top-level element, so each slice starts and ends between elements), joined with the literal group wrapper",
+        (RH, 'toolbar_id = attr_text(kw["id"])'),
+        (RH, "body = _toolbar_groups(content)"),
+        (RH, 'out.append(\'<div class="dj-toolbar__group">\' + run + "</div>")', "_toolbar_groups"),
     ),
     (RH, "PageHeaderHandler.render"): S(
         1,
