@@ -79,7 +79,7 @@ def test_the_client_script_carries_the_nonce(settings):
 
 def test_every_debug_script_carries_the_nonce(settings):
     tags = _external_scripts(_inject(nonce="abc123", debug=True, settings=settings))
-    names = [re.search(r'src="[^"]*/([^"/]+)"', tag).group(1) for tag in tags]
+    names = [re.search(r'src="[^"]*/([^"/?]+)[^"]*"', tag).group(1) for tag in tags]
     # #4007: the injected bundle is the core one; its chunks take the same nonce client-side.
     assert names == ["client-core.js", "debug-panel.js", "client-dev.js"], names
     assert all('nonce="abc123"' in tag for tag in tags), tags

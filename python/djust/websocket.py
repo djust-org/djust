@@ -40,6 +40,14 @@ from ._background_render import (
     snapshot_delivers_nothing,
 )
 from ._automatic_state import turn_serial
+from ._protocol import (
+    MOUNT_VERBS,
+    PROTOCOL_CLOSE_CODE,
+    PROTOCOL_FIELD,
+    PROTOCOL_VERSION,
+    frame_protocol_ok,
+    reload_frame,
+)
 from ._render_operation import settle_render_operation
 from ._child_rendering import reconcile_child_render
 from . import _per_turn
@@ -2583,6 +2591,17 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         peer = client[0] if client else None
         return resolve_client_ip(fwd, peer)
 
+    async def _refuse_outdated_client(self, data: Dict[str, Any]) -> None:
+        """Make an outdated client reload: a ``reload`` frame, then close 4409 (#3658)."""
+        logger.info(
+            "WebSocket %s from a client speaking protocol %s (server speaks %s): reload",
+            sanitize_for_log(str(data.get("type"))),
+            sanitize_for_log(str(data.get(PROTOCOL_FIELD))),
+            PROTOCOL_VERSION,
+        )
+        await self.send_json(reload_frame())
+        await self.close(code=PROTOCOL_CLOSE_CODE)
+
     def _log_per_ip_refusal(self, client_ip: str, max_per_ip: int) -> None:
         """Log why the per-IP limit refused this socket (close code 4429)."""
         from ._client_ip import _trusted_proxy_count
@@ -2676,6 +2695,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             {
                 "type": "connect",
                 "session_id": self.session_id,
+                PROTOCOL_FIELD: PROTOCOL_VERSION,
                 # The client refuses to send a frame over this (0 = no limit).
                 "max_message_size": djust_config.get("max_message_size", 65536),
             }
@@ -2955,6 +2975,11 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             #   upload_resume, request_html. The time-travel and bug-capture
             #   share frames were removed in 2.0 (#4184): an old client that
             #   still sends one gets the unknown-message-type refusal below.
+            if msg_type in MOUNT_VERBS and not frame_protocol_ok(data):
+                # #3658: an outdated (cached) bundle. Old clients reload on
+                # the hot-reload frame; new ones do not reconnect after 4409.
+                await self._refuse_outdated_client(data)
+                return
             if msg_type in self.RUNTIME_OWNED_VERBS:
                 # Runtime-owned: route through the dispatch_message chokepoint
                 # rather than calling the bespoke handler directly, so future
@@ -3613,6 +3638,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         response: Dict[str, Any] = {
             "type": "mount_batch",
             "session_id": self.session_id,
+            PROTOCOL_FIELD: PROTOCOL_VERSION,
             "views": successes,
             "failed": failures,
         }

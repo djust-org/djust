@@ -118,7 +118,11 @@ def _extract_client_src(html_with_injected_script: str) -> str:
         raise AssertionError(
             f"no djust client <script> tag found in injected HTML: {html_with_injected_script!r}"
         )
-    return m.group(1)
+    src = m.group(1)
+    # #3658: every bundle URL carries the djust version (test_protocol_version_3658.py).
+    path, _, query = src.partition("?")
+    assert query.startswith("v="), src
+    return path
 
 
 @override_settings(DEBUG=False)

@@ -127,6 +127,31 @@ def _accept_communicators_without_origin():
 
 
 @pytest.fixture(scope="session", autouse=True)
+def _accept_frames_without_protocol():
+    """Let hand-built mount frames, SSE GETs and POSTs that name no protocol through.
+
+    djust refuses a client that does not send its wire-protocol version (an
+    outdated cached bundle, #3658) unless ``DJUST_ALLOW_MISSING_PROTOCOL`` is
+    True, and most transport tests build frames and requests without it. A
+    version that is present and different is refused regardless.
+    ``python/djust/tests/test_protocol_version_3658.py`` removes the setting to
+    run against the shipped default.
+    """
+    try:
+        from django.conf import settings
+
+        settings.DJUST_ALLOW_MISSING_PROTOCOL = True
+    except Exception:  # noqa: BLE001 — Django not configured: nothing to set
+        yield
+        return
+    yield
+    try:
+        del settings.DJUST_ALLOW_MISSING_PROTOCOL
+    except AttributeError:
+        pass
+
+
+@pytest.fixture(scope="session", autouse=True)
 def _import_asgi_application_under_the_real_settings():
     """Import ``ASGI_APPLICATION`` before any test can override ``ALLOWED_HOSTS`` (#4262).
 

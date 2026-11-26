@@ -71,6 +71,7 @@ from typing import (
 from asgiref.sync import sync_to_async
 
 from . import _per_turn
+from ._protocol import PROTOCOL_VERSION
 from ._params_form import run_handle_params
 from ._view_hooks import call_async_result, call_hook
 from ._held_rows import rows_written, writes_by
@@ -4286,6 +4287,8 @@ class ViewRuntime(RuntimeTurnPort):
             "session_id": self.session_id,
             "view": view_path,
             "version": version,
+            # #3658: the client reloads when this differs from its own.
+            "protocol": PROTOCOL_VERSION,
         }
         if getattr(view_instance, "_explicit_child_vdom_tracking", False):
             # Only committed render-issued locations enter the mount protocol.

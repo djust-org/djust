@@ -1711,8 +1711,32 @@ class RequestMixin:
         return JsonResponse(response)
 
     def post(self, request: "HttpRequest", *args: Any, **kwargs: Any) -> HttpResponse:
-        """Handle POST requests: the event's turn, then the answer's compression (#4108)."""
-        return _compress_fallback_answer(request, self._post_turn(request, *args, **kwargs))
+        """Handle POST requests: the event's turn, then the answer's compression (#4108).
+
+        A POST from an outdated client bundle (its ``X-Djust-Protocol`` header
+        is missing or names another protocol) is refused with 409 before
+        anything runs (#3658). Every answer names the server's protocol in
+        the same header.
+        """
+        from .._protocol import (
+            PROTOCOL_HEADER,
+            PROTOCOL_VERSION,
+            mismatch_response,
+            request_protocol_ok,
+        )
+
+        if not request_protocol_ok(request):
+            logger.info(
+                "HTTP POST to %s from a client speaking protocol %s (server speaks %s): 409",
+                type(self).__name__,
+                sanitize_for_log(request.headers.get(PROTOCOL_HEADER, "")),
+                PROTOCOL_VERSION,
+            )
+            return cast(HttpResponse, mismatch_response())
+        response = _compress_fallback_answer(request, self._post_turn(request, *args, **kwargs))
+        if not response.has_header(PROTOCOL_HEADER):
+            response[PROTOCOL_HEADER] = str(PROTOCOL_VERSION)
+        return response
 
     def _post_turn(self, request: "HttpRequest", *args: Any, **kwargs: Any) -> HttpResponse:
         """Handle POST requests - event handling, as one turn (ADR-044).
