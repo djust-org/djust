@@ -111,6 +111,10 @@ NAV = {
 }
 
 TOOLBAR = {
+    "empty-condition-between-separators": (
+        '{% toolbar id="t" %}a{% toolbar_separator %}{% if off %}<b>x</b>{% endif %}'
+        "{% toolbar_separator %}b{% endtoolbar %}"
+    ),
     "groups": (
         '{% toolbar id="t" %}<button>{{ label }}</button><button>2</button>'
         "{% toolbar_separator %}<a>{{ label }}</a>{% toolbar_separator %}"
@@ -275,6 +279,17 @@ class TestToolbar:
 
     def test_an_empty_toolbar_draws_no_group(self) -> None:
         assert "dj-toolbar__group" not in _django(TOOLBAR["empty"])
+
+    @pytest.mark.parametrize("render", [_django, _rust], ids=["django", "rust"])
+    def test_an_if_that_renders_nothing_draws_no_group(self, render) -> None:
+        """A run between separators holding only an ``{% if %}`` that rendered nothing: under the
+        Rust engine it is the engine's ``<!--dj-if-->`` pair, which is kept (VDOM patching reads
+        it) but not wrapped in an empty group."""
+        out = render(TOOLBAR["empty-condition-between-separators"], {"off": False})
+        assert out.count("dj-toolbar__group") == 2, out
+        assert not re.search(r'<div class="dj-toolbar__group">(?:\s|<!--.*?-->)*</div>', out), out
+        if render is _rust:
+            assert '<!--dj-if id="' in out and "<!--/dj-if-->" in out, out
 
 
 def test_regression_toolbar_wraps_a_button_with_a_variable_in_one_group() -> None:

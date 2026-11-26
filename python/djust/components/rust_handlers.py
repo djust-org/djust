@@ -2784,17 +2784,26 @@ class _ToolbarPartsParser(HTMLParser):
         return self.parts
 
 
+#: An HTML comment in a toolbar body: the Rust engine's ``{% if %}`` boundary markers, an author's.
+_HTML_COMMENT = _re_filters.compile(r"<!--.*?-->", _re_filters.DOTALL)
+
+
 def _toolbar_groups(content: str) -> str:
     """``content`` with each run of children between two separators (or a separator and an
     overflow menu, or an end of the body) wrapped in one ``dj-toolbar__group`` (#4331). A run that
-    is only whitespace draws no group. The separators and the overflow menu stay where they are,
-    outside every group. Only literal markup is added around slices of ``content``."""
+    is only whitespace and HTML comments draws no group: an ``{% if %}`` that rendered nothing
+    leaves the Rust engine's ``<!--dj-if ...-->`` pair there, which is kept (VDOM patching reads
+    it) but not wrapped, so no empty group is drawn where the Django engine draws none. The
+    separators and the overflow menu stay where they are, outside every group. Only literal
+    markup is added around slices of ``content``."""
     out: list[str] = []
     pos = 0
     for start, end in [*_ToolbarPartsParser(content).finish(), (len(content), len(content))]:
         run = content[pos:start]
-        if run.strip():
+        if _HTML_COMMENT.sub("", run).strip():
             out.append('<div class="dj-toolbar__group">' + run + "</div>")
+        else:
+            out.extend(_HTML_COMMENT.findall(run))
         out.append(content[start:end])
         pos = end
     return "".join(out)
