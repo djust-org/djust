@@ -1066,6 +1066,7 @@ To open or close from your own handler, set the state:
 | The `djust_components/table.html` override point and the filters `table_cell`, `table_href`, `table_has_href`, `table_width`, `table_width_attrs` | Read the row in your own template. `{% data_table %}` is drawn by the native handler on both engines; the row-click script is `/static/djust_components/data-table-row-click.js` (serve it from `/static/` or load it yourself). |
 | `window.djust.extractTypedParams` and `data-*` attributes as event arguments | `dj-value-*` attributes (`dj-value-item-id:int="4"`); the browser sends only what the handler's signature declares ([#4205](https://github.com/djust-org/djust/issues/4205)) |
 | `{% static 'djust_theming/css/base.css' %}`, a one-line `@import` of `scaffold.css` | `{% static 'djust_theming/css/scaffold.css' %}` ([#4207](https://github.com/djust-org/djust/issues/4207)) |
+| The `djust_components/badge.html`, `avatar.html`, `progress.html` and `pagination.html` override points | Style the `dj-badge`, `dj-avatar`, `dj-progress` and `dj-pagination` classes the tags draw. `{% badge %}`, `{% avatar %}`, `{% progress %}` and `{% pagination %}` are drawn by one native handler on both engines, so a project template of the same name no longer takes effect. |
 
 <!-- END GENERATED removed-table:templates -->
 

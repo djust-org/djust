@@ -56,10 +56,10 @@
       "new": "{depth * 1.25}rem"
     },
     {
-      "label": "ProgressHandler reads the tag's value without saying it is an int",
+      "label": "progress_value (the ProgressHandler's number) does not say it is an int",
       "file": "python/djust/components/rust_handlers.py",
-      "old": "value = int(_progress(value=_number(kw.get(\"value\", 0), \"progress\", \"value\"))[\"value\"])",
-      "new": "value = _progress(value=_number(kw.get(\"value\", 0), \"progress\", \"value\"))[\"value\"]"
+      "old": "return max(0, min(100, int(cast(\"str | int | float\", _number(value, \"progress\", \"value\")))))",
+      "new": "return max(0, min(100, cast(\"int\", _number(value, \"progress\", \"value\"))))"
     }
   ]
 }

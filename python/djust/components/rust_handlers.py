@@ -439,69 +439,102 @@ class AccordionItemHandler:
         )
 
 
-class ProgressHandler:
-    def render(self, args: list[str], context: dict[str, object]) -> str:
-        from djust.components.templatetags.djust_components import progress as _progress
+_CLASS_TOKEN = _re_filters.compile(r"[A-Za-z0-9_-]+")
 
-        kw = _parse_args(args, context)
-        # The Python tag's own clamp, so a ``value`` it refuses (``None``: TypeError, ``"abc"``:
-        # ValueError) is refused here and not drawn as 0% (#3667). ``int()`` says which key of the
-        # tag's context this is: the clamped number, not one of the raw ones beside it (#3847).
-        value = int(_progress(value=_number(kw.get("value", 0), "progress", "value"))["value"])
-        label = conditional_escape(kw.get("label", ""))
+
+def _modifier(value: object, default: str) -> str:
+    """``value`` as the suffix of a BEM modifier class (``dj-progress__fill--<value>``).
+
+    One class token, escaped. A value that is not a token (a hex colour ``#336699``, a name with
+    a space, markup) would leak into the class list as junk or as extra classes (#4331), so the
+    ``default`` is drawn and the value is ignored: a colour is chosen by the theme's modifier
+    classes, never by an arbitrary string."""
+    from djust.components.utils import _exact_str
+
+    text = _exact_str(value)
+    return text if _CLASS_TOKEN.fullmatch(text) else default
+
+
+def progress_value(value: object) -> int:
+    """The percentage ``{% progress %}`` draws: ``value`` clamped to 0..100 (#3667).
+
+    A ``value`` that is not a number is refused (``None``: TypeError, ``"abc"``: ValueError)
+    and not drawn as 0%; text that spells a number is that number (#3883)."""
+    return max(0, min(100, int(cast("str | int | float", _number(value, "progress", "value")))))
+
+
+class ProgressHandler:
+    """``{% progress %}``: the one implementation of the tag (#4331). The Rust engine calls
+    :meth:`render`; the Django engine's simple tag calls :func:`render_progress`."""
+
+    def render(self, args: list[str], context: dict[str, object]) -> str:
+        return self.render_kwargs(_parse_args(args, context), context)
+
+    def render_kwargs(self, kw: dict[str, object], context: dict[str, object]) -> str:
+        value = progress_value(kw.get("value", 0))
+        raw_label = kw.get("label", "")
+        label = conditional_escape(raw_label)
         size = attr_text(kw.get("size", "md"))
-        color = attr_text(kw.get("color", "primary"))
+        color = attr_text(_modifier(kw.get("color", "primary"), "primary"))
         show_label = kw.get("show_label", True)
-        label_row = ""
-        if label or show_label:
-            label_part = f'<span class="progress-label">{label}</span>' if label else ""
-            pct_part = f'<span class="progress-value">{value}%</span>' if show_label else ""
-            label_row = f'<div class="progress-label-row">{label_part}{pct_part}</div>'
-        track_size = {"sm": "progress-track-sm", "lg": "progress-track-lg"}.get(str(size), "")
-        color_class = "" if color == "primary" else color
+        header = ""
+        if raw_label or show_label:
+            label_part = f'<span class="dj-progress__label">{label}</span>' if raw_label else ""
+            pct_part = f'<span class="dj-progress__value">{value}%</span>' if show_label else ""
+            header = f'<div class="dj-progress__header">{label_part}{pct_part}</div>'
         # The fill's width is a class, not ``style="width:N%"``: a ``style-src`` without
         # ``'unsafe-inline'`` refuses the attribute and the bar drew empty (#3969). The track
-        # carries the role, the value and a name, as the Python tag's does.
-        # An attribute, so ``escape`` (always) and not ``conditional_escape`` (#3898). Named by
-        # the label only when there is one, as the Python tag's is.
-        name = escape(str(kw.get("label", "")))
-        name_attr = f' aria-label="{name}"' if name else ""
+        # carries the role, the value and a name (an attribute: ``escape`` always, #3898).
+        name_attr = f' aria-label="{attr_text(raw_label)}"' if raw_label else ""
         return _safe(
-            f'<div class="progress-wrapper">'
-            f"{label_row}"
-            f'<div class="progress-track {track_size}" role="progressbar" '
-            f'aria-valuenow="{value}" aria-valuemin="0" aria-valuemax="100"{name_attr}>'
-            f'<div class="progress-bar {color_class} dj-progress-w-{value}"></div>'
-            f"</div>"
-            f"</div>"
+            f'<div class="dj-progress dj-progress--{size}">{header}'
+            f'<div class="dj-progress__track" role="progressbar" aria-valuenow="{value}" '
+            f'aria-valuemin="0" aria-valuemax="100"{name_attr}>'
+            f'<div class="dj-progress__fill dj-progress__fill--{color} dj-progress-w-{value}">'
+            f"</div></div></div>"
         )
 
 
 class BadgeHandler:
+    """``{% badge %}``: the one implementation of the tag (#4331)."""
+
     def render(self, args: list[str], context: dict[str, object]) -> str:
-        kw = _parse_args(args, context)
+        return self.render_kwargs(_parse_args(args, context), context)
+
+    def render_kwargs(self, kw: dict[str, object], context: dict[str, object]) -> str:
         label = conditional_escape(kw.get("label", ""))
-        status = attr_text(kw.get("status", "default"))
-        pulse = kw.get("pulse", False)
-        pulse_cls = " badge-pulse" if pulse else ""
+        raw_status = kw.get("status", "default")
+        status = attr_text(raw_status)
+        pulse_cls = " dj-badge__dot--pulse" if kw.get("pulse", False) else ""
+        # Colour alone does not say what a badge means: a status other than the default is
+        # also written for a screen reader (the native markup dropped it, #4331).
+        sr = (
+            f'<span class="sr-only">Status: {conditional_escape(raw_status)}</span>'
+            if raw_status and raw_status != "default"
+            else ""
+        )
         return _safe(
-            f'<span class="badge badge-{status}{pulse_cls}">'
-            f'<span class="badge-dot"></span>{label}'
-            f"</span>"
+            f'<span class="dj-badge dj-badge--{status}">'
+            f'<span class="dj-badge__dot{pulse_cls}" aria-hidden="true"></span>{sr}'
+            f'<span class="dj-badge__label">{label}</span></span>'
         )
 
 
 class PaginationHandler:
+    """``{% pagination %}``: the one implementation of the tag (#4331)."""
+
     def render(self, args: list[str], context: dict[str, object]) -> str:
+        return self.render_kwargs(_parse_args(args, context), context)
+
+    def render_kwargs(self, kw: dict[str, object], context: dict[str, object]) -> str:
         from djust.components.templatetags.djust_components import pagination_pages
 
-        kw = _parse_args(args, context)
+        kw = dict(kw)
         for numeric in ("page", "total_pages"):
             if numeric in kw:
                 kw[numeric] = _number(kw[numeric], "pagination", numeric)
-        # The Python tag's own page list, first: whatever it raises for these numbers
-        # (``total_pages=None``: ``None + 1``) is raised here too (#3667), and the buttons
-        # drawn below are the ones it draws (#3669).
+        # The page list first: whatever it raises for these numbers (``total_pages=None``:
+        # ``None + 1``) is raised here too (#3667).
         shown = pagination_pages(kw.get("page", 1), kw.get("total_pages", 1))
         try:
             page = int(cast("str | int | float", _number(kw.get("page", 1))))
@@ -512,54 +545,64 @@ class PaginationHandler:
         next_event = attr_text(kw.get("next_event", "page_next"))
         prev_disabled = " disabled" if page <= 1 else ""
         next_disabled = " disabled" if page >= total_pages else ""
-        # One button per page number, wired like the Python tag's: ``next_event`` carrying the
-        # page number as ``dj-value-value`` (that is the event the Python template fires for a
-        # number, and the native markup had no numbered buttons at all, #3669).
         numbered = ""
         for p in shown:
             if p == "...":
-                numbered += '<span class="pagination-ellipsis" aria-hidden="true">&hellip;</span>'
+                numbered += (
+                    '<span class="dj-pagination__ellipsis" aria-hidden="true">&hellip;</span>'
+                )
                 continue
-            active = " active" if p == page else ""
+            active = " dj-pagination__btn--active" if p == page else ""
             current = ' aria-current="page"' if p == page else ""
             number = conditional_escape(p)
             a_number = attr_text(p)
             numbered += (
-                f'<button class="pagination-btn{active}"{current} '
+                f'<button class="dj-pagination__btn{active}"{current} aria-label="Page {a_number}" '
                 f'dj-click="{next_event}" dj-value-value="{a_number}">{number}</button>'
             )
         return _safe(
-            f'<div class="pagination">'
-            f'<button class="pagination-btn"{prev_disabled} dj-click="{prev_event}">&#8592;</button>'
+            f'<nav class="dj-pagination" aria-label="Pagination">'
+            f'<button class="dj-pagination__btn" aria-label="Previous page" '
+            f'dj-click="{prev_event}"{prev_disabled}>&larr;</button>'
             f"{numbered}"
-            f'<span class="pagination-info">Page {page} of {total_pages}</span>'
-            f'<button class="pagination-btn"{next_disabled} dj-click="{next_event}">&#8594;</button>'
-            f"</div>"
+            f'<button class="dj-pagination__btn" aria-label="Next page" '
+            f'dj-click="{next_event}"{next_disabled}>&rarr;</button></nav>'
         )
 
 
 class AvatarHandler:
+    """``{% avatar %}``: the one implementation of the tag (#4331)."""
+
     def render(self, args: list[str], context: dict[str, object]) -> str:
-        kw = _parse_args(args, context)
+        return self.render_kwargs(_parse_args(args, context), context)
+
+    def render_kwargs(self, kw: dict[str, object], context: dict[str, object]) -> str:
         src = kw.get("src", "")
-        raw_alt = kw.get("alt", "")
+        raw_alt = kw.get("alt", "") or ""
         alt = attr_text(raw_alt)
         # The initials are taken from the text, then escaped: slicing the ESCAPED text cut an
-        # entity in half (``O'Brien`` -> ``O&``), and a string arrives with its quotes now (#3883).
-        initials = conditional_escape(
-            kw.get("initials", "") or (str(raw_alt)[:2].upper() if raw_alt else "")
-        )
+        # entity in half (``O'Brien`` -> ``O&``, #3883).
+        raw_initials = kw.get("initials", "") or (str(raw_alt)[:2].upper() if raw_alt else "")
+        initials = conditional_escape(raw_initials)
         size = attr_text(kw.get("size", "md"))
         status = attr_text(kw.get("status", ""))
-        img_html = (
-            f'<img class="avatar-image" src="{data_url_attr(src, image=True)}" alt="{alt}">'
-            if src
-            else f'<span class="avatar-initials">{initials}</span>'
-        )
+        if src:
+            body = (
+                f'<img class="dj-avatar__img" src="{data_url_attr(src, image=True)}" alt="{alt}">'
+            )
+        else:
+            name = attr_text(raw_alt or raw_initials)
+            body = (
+                f'<span class="dj-avatar__initials" role="img" aria-label="{name}">'
+                f"{initials}</span>"
+            )
         status_html = (
-            f'<span class="avatar-status avatar-status-{status}"></span>' if status else ""
+            f'<span class="dj-avatar__status dj-avatar__status--{status}" aria-hidden="true">'
+            f"</span>"
+            if status
+            else ""
         )
-        return _safe(f'<div class="avatar avatar-{size}">{img_html}{status_html}</div>')
+        return _safe(f'<div class="dj-avatar dj-avatar--{size}">{body}{status_html}</div>')
 
 
 # Backward-compatible aliases — delegated to djust_components.utils
@@ -1987,6 +2030,32 @@ def render_data_table(**params: object) -> str:
         if isinstance(params.get(key), (list, tuple))
     }
     return DataTableHandler().render_kwargs(kw, {TYPED_ARGS_KEY: typed})
+
+
+def _render_simple(handler: Any, params: dict[str, object]) -> str:
+    """One Django-engine call of a single-implementation tag: ``params`` as Python values, handed
+    to the handler as the Rust engine's resolved operands are (``_python_operand``, #4331)."""
+    return cast(str, handler.render_kwargs({k: _python_operand(v) for k, v in params.items()}, {}))
+
+
+def render_badge(**params: object) -> str:
+    """The Django engine's ``{% badge %}``: the Rust engine's markup, one renderer (#4331)."""
+    return _render_simple(BadgeHandler(), params)
+
+
+def render_avatar(**params: object) -> str:
+    """The Django engine's ``{% avatar %}`` (#4331)."""
+    return _render_simple(AvatarHandler(), params)
+
+
+def render_progress(**params: object) -> str:
+    """The Django engine's ``{% progress %}`` (#4331)."""
+    return _render_simple(ProgressHandler(), params)
+
+
+def render_pagination(**params: object) -> str:
+    """The Django engine's ``{% pagination %}`` (#4331)."""
+    return _render_simple(PaginationHandler(), params)
 
 
 class PageHeaderActionsHandler:

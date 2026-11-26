@@ -708,7 +708,7 @@ def do_tooltip(parser: Any, token: Any) -> template.Node:
 # ---------------------------------------------------------------------------
 
 
-@register.inclusion_tag("djust_components/progress.html")
+@register.simple_tag
 def progress(
     value: Any = 0,
     label: Any = "",
@@ -725,14 +725,9 @@ def progress(
         color: primary, success, warning, danger
         show_label: whether to show percentage
     """
-    value = max(0, min(100, int(value)))
-    return {
-        "value": value,
-        "label": label,
-        "size": size,
-        "color": color,
-        "show_label": show_label,
-    }
+    from djust.components.rust_handlers import render_progress
+
+    return render_progress(value=value, label=label, size=size, color=color, show_label=show_label)
 
 
 # ---------------------------------------------------------------------------
@@ -740,8 +735,8 @@ def progress(
 # ---------------------------------------------------------------------------
 
 
-@register.inclusion_tag("djust_components/badge.html")
-def badge(label: Any = "", status: Any = "default", pulse: Any = False) -> "dict[str, Any]":
+@register.simple_tag
+def badge(label: Any = "", status: Any = "default", pulse: Any = False) -> str:
     """Render a status badge.
 
     Styled by ``djust_components/components.css``, which ``{% theme_head %}``
@@ -755,7 +750,9 @@ def badge(label: Any = "", status: Any = "default", pulse: Any = False) -> "dict
         status: online, offline, warning, error, default
         pulse: whether the dot should animate
     """
-    return {"label": label, "status": status, "pulse": pulse}
+    from djust.components.rust_handlers import render_badge
+
+    return render_badge(label=label, status=status, pulse=pulse)
 
 
 # ---------------------------------------------------------------------------
@@ -1074,21 +1071,19 @@ def pagination_pages(page: Any, total_pages: Any) -> "list[Any]":
     return pages
 
 
-@register.inclusion_tag("djust_components/pagination.html")
+@register.simple_tag
 def pagination(
     page: Any = 1,
     total_pages: Any = 1,
     prev_event: Any = "page_prev",
     next_event: Any = "page_next",
-) -> "dict[str, Any]":
+) -> str:
     """Render pagination controls."""
-    return {
-        "page": page,
-        "total_pages": total_pages,
-        "pages": pagination_pages(page, total_pages),
-        "prev_event": prev_event,
-        "next_event": next_event,
-    }
+    from djust.components.rust_handlers import render_pagination
+
+    return render_pagination(
+        page=page, total_pages=total_pages, prev_event=prev_event, next_event=next_event
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1096,10 +1091,10 @@ def pagination(
 # ---------------------------------------------------------------------------
 
 
-@register.inclusion_tag("djust_components/avatar.html")
+@register.simple_tag
 def avatar(
     src: Any = "", alt: Any = "", initials: Any = "", size: Any = "md", status: Any = ""
-) -> "dict[str, Any]":
+) -> str:
     """Render an avatar with optional status indicator.
 
     Args:
@@ -1109,17 +1104,9 @@ def avatar(
         size: xs, sm, md, lg, xl
         status: online, offline, busy, away, or empty
     """
-    return {
-        # The same sanitiser the native handler uses, so both engines agree: a
-        # script-capable scheme becomes "#", an inline data:image/ URI is kept
-        # (#3665). The helper returns HTML-escaped text marked safe, so the template does not
-        # escape it a second time; a marked-safe ``src`` is checked like any other (#3898).
-        "src": data_url_attr(src, image=True),
-        "alt": alt,
-        "initials": initials or (alt[:2].upper() if alt else ""),
-        "size": size,
-        "status": status,
-    }
+    from djust.components.rust_handlers import render_avatar
+
+    return render_avatar(src=src, alt=alt, initials=initials, size=size, status=status)
 
 
 # ---------------------------------------------------------------------------

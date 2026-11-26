@@ -1,0 +1,1 @@
+- **`djust_components/badge.html`, `avatar.html`, `progress.html` and `pagination.html` are removed (#4331)**: the tags are drawn by native handlers on both engines, so a project template of the same name no longer overrides them (migration entry 355).

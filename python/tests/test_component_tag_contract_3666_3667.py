@@ -89,7 +89,7 @@ print(json.dumps(out))
         assert emitted <= hidden, sorted(emitted - hidden)
 
     def test_an_inclusion_tag_needs_the_template_loader_in_both_engines(self, tmp_path):
-        """An inclusion tag (``toast_container``, ``progress``, ...) loads its template, so with no
+        """An inclusion tag (``toast_container``, ...) loads its template, so with no
         ``APP_DIRS`` and no ``DIRS`` the Python tag fails with ``TemplateDoesNotExist`` under
         Django's own engine, and, for a bridged one (``toast_container``), under
         ``DjustTemplateBackend`` too: the tag's contract, not the bridge's. A kept native twin
@@ -112,8 +112,10 @@ print(json.dumps(out))
         )
         assert proc.returncode == 0, proc.stderr[-1500:]
         result = json.loads(proc.stdout.strip().splitlines()[-1])
-        for tag in ("toast_container", "progress"):
-            assert result[tag + "|django"] == "TemplateDoesNotExist", result
+        assert result["toast_container|django"] == "TemplateDoesNotExist", result
+        # ``progress`` was an inclusion tag; since #4331 it is a simple tag over the one handler,
+        # so it needs no template file under either engine.
+        assert result["progress|django"] == "ok", result
         for tag in ("toast_container", "field_error", "avatar_group"):
             assert result[tag + "|djust"] == result[tag + "|django"], result
         # ``progress`` keeps its native twin, which draws its markup without a template file.
