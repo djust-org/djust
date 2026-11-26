@@ -43,6 +43,11 @@ function bufferServerUpdate(transport, data, received = data) {
     _tickBuffer.push(data);
 }
 
+/** True while this transport holds server frames not yet applied (#560, #3658). */
+function hasHeldServerUpdates(transport) {
+    return _tickBuffer.some(frame => _tickBufferOwners.get(frame) === transport);
+}
+
 function takeServerUpdates(transport, limit = Infinity) {
     const owned = [];
     for (let index = 0; index < _tickBuffer.length && owned.length < limit;) {

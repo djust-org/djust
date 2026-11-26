@@ -56,13 +56,21 @@ effect `kind` it does not know.
 **Other fields** say what the frame answers: `ref` and `event_name` for an
 event, `version` for a DOM part, `source` for where the turn came from
 (`event`, `tick`, `broadcast`, `async`, `push`, `notify`, `url_change`,
-`mount`, `refusal`, `push_state`, ...), and the snapshot and parameter-contract
+`mount`, `refusal`, `push_state`, `flush`, `deferred`, ...), and the snapshot and parameter-contract
 fields the client stores.
 
 **Deferred callbacks.** A `defer()` callback runs after the turn's frame is
 sent. Whatever it queues goes out in the same turn, in one effects-only frame
 with `source: "deferred"`. Over the HTTP fallback those effects are appended to
 the answer's own `effects`.
+
+**Order on the client.** While one of the page's own events is pending, the
+WebSocket client holds frames the server started on its own (`tick`,
+`broadcast`, `async`, `push`, `notify`) and applies them once the event's
+answer arrives. A frame with no `ref` (a `deferred` follow-up, a
+`flush_push_events()` frame with `source: "flush"`) is applied on arrival unless
+frames are already held; then it waits behind them, so frames always apply in
+the order they arrived.
 
 Frames that are not turn results keep their own types: `connect`,
 `sse_connect`, `mount`, `mount_batch`, `error`, `html_recovery`,
@@ -105,6 +113,20 @@ second mismatch comes within 30 seconds, the client does not reload again: it
 stops the live transport, dispatches `djust:error` with
 `code: "protocol_mismatch"`, and the server-rendered page stays usable. The
 bundle URLs carry `?v=<djust version>`, so the reload fetches the new bundle.
+
+**A cached page shell can make the reload loop.** A service worker or an HTTP
+cache that keeps serving the old page (and with it the old bundle) hands the
+reloaded tab the same outdated client, which is refused again. The server
+breaks that loop: it notes each refusal for 30 seconds in Django's default
+cache, keyed by the browser's session (its client IP when it has none), on
+all three wires. A second refusal of the same browser inside that window gets
+no `reload` frame: the WebSocket closes with `4409` alone, the SSE stream ends
+empty, and an HTTP POST gets the same `409` as before. The tab then stays on the
+server-rendered page without a live connection instead of reloading forever.
+The remedy is on the client: unregister the service worker (or have its next
+version skip caching the page shell and the djust bundle), or clear the site's
+data in the browser. With a `DummyCache` as the default cache the breaker never
+trips.
 
 `settings.DJUST_ALLOW_MISSING_PROTOCOL = True` accepts a request that names no
 version (a non-browser client, or a test that builds frames by hand). A version

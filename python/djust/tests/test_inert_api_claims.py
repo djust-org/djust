@@ -471,18 +471,33 @@ def test_the_client_does_not_reset_a_form_on_submit_itself() -> None:
     )
 
     # Since #4129 the reset lives in one helper, applyFormReset, called for every
-    # answer to an event (a noop included) on the socket, SSE and fallback paths.
+    # answer to an event (an ack included) on the socket, SSE and fallback paths.
     response = (CLIENT_SRC / "02-response-handler.js").read_text(encoding="utf-8")
     start = response.index("function applyFormReset(")
     helper = response[start : response.index("\n}\n", start)]
     assert "if (!data || !data.reset_form) return;" in helper and "form.reset()" in helper, (
         "the server-requested reset path moved; re-check dj-submit's schema.py description"
     )
+    # Since #3658 both transports apply every ``render`` frame through
+    # 02c-frame-dispatch.js: applyRenderFrame -> applyRenderDom, which hands an
+    # answer (an ack included) or a ``reset_form`` frame to handleServerResponse,
+    # and that calls applyFormReset.
+    assert (
+        "applyFormReset(data, triggerElement)"
+        in response.split("async function handleServerResponse(", 1)[1]
+    ), "handleServerResponse no longer calls applyFormReset; re-check dj-submit's description"
+    dispatch = (CLIENT_SRC / "02c-frame-dispatch.js").read_text(encoding="utf-8")
+    start = dispatch.index("async function applyRenderDom(")
+    apply_dom = dispatch[start : dispatch.index("\n}\n", start)]
+    assert "data.reset_form" in apply_dom and "await handleServerResponse(" in apply_dom, (
+        "applyRenderDom no longer hands a reset_form frame to handleServerResponse; "
+        "re-check dj-submit's schema.py description"
+    )
     for transport in ("03-websocket.js", "03b-sse.js"):
         source = (CLIENT_SRC / transport).read_text(encoding="utf-8")
-        assert "applyFormReset(" in source, (
-            "%s no longer resets through applyFormReset; re-check dj-submit's schema.py "
-            "description" % transport
+        assert "await applyRenderFrame(this, data)" in source, (
+            "%s no longer applies render frames through applyRenderFrame; re-check "
+            "dj-submit's schema.py description" % transport
         )
     # The description names the form the client actually resets (#4129 review).
     description = _dj_submit_description()

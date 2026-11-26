@@ -39,8 +39,10 @@ class TestFlushPushEvents:
         """With a consumer attached, flush_push_events drains the queue."""
         view = _View()
         flushed = []
+        calls = []
 
-        async def fake_flush(*_args, **_kwargs):
+        async def fake_flush(*args, **kwargs):
+            calls.append((args, kwargs))
             flushed.extend(view._drain_push_events())
 
         view._ws_consumer = SimpleNamespace(_send_effects=fake_flush)
@@ -50,6 +52,9 @@ class TestFlushPushEvents:
         assert len(view._pending_push_events) == 2
 
         await view.flush_push_events()
+        # One drain of this view's push events only, as a "flush" frame (#3658):
+        # a source the client does not hold while an event is pending.
+        assert calls == [(("flush", view), {"kinds": ("push_event",)})]
         # The callback was invoked and drained the events
         assert len(flushed) == 2
         assert flushed[0] == ("step", {"n": 1})
@@ -214,7 +219,7 @@ class TestFlushPushEventsOverSSE:
         assert session.sent == [
             {
                 "type": "render",
-                "source": "async",
+                "source": "flush",
                 "effects": [
                     {"kind": "push_event", "event": "step", "payload": {"n": 1}},
                     {"kind": "push_event", "event": "step", "payload": {"n": 2}},

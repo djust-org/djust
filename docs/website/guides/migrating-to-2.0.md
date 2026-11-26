@@ -1241,8 +1241,17 @@ old frame with `type` renamed to `kind`. The
   name a protocol version. A tab still running the 1.x bundle is told to reload
   (WebSocket close code `4409`, an SSE `reload` frame, or HTTP `409` with
   `code: "protocol_mismatch"`), fetches the new bundle and carries on. Unsaved
-  form input in such a tab is lost, as on any reload. The bundle URLs now carry
-  `?v=<djust version>`, so a cache keyed on the URL serves the new bundle.
+  form input in such a tab is lost, as on any reload. A tab running a 2.0
+  release-candidate bundle reloads too: those bundles send no protocol, or
+  protocol `1`. The bundle URLs now carry `?v=<djust version>`, so a cache keyed
+  on the URL serves the new bundle.
+- **A service worker that caches the page can make the tab reload in a loop.**
+  If it keeps serving the old page shell, the reloaded tab runs the old bundle
+  again. The server stops the loop: a second refusal of the same browser within
+  30 seconds gets no reload (the WebSocket closes with `4409`, the SSE stream
+  ends), and the page stays server-rendered without a live connection. Unregister
+  the service worker or stop it caching the page shell and the djust bundle,
+  and tell affected users to clear the site's data.
 - **Custom JavaScript that read raw frames must change.** Code that listened
   to the socket's messages, wrapped `handleMessage`, or read the HTTP answer
   for one of the old frame types or `_*` keys sees `{"type": "render"}` instead:
@@ -1595,4 +1604,4 @@ removed setting at startup, and `exposure_policy = "legacy"`,
 module that states it is imported. `djust_exposure_inventory` lists any view
 still on `[policy: legacy]`; run `--fix` on it.
 
-<!-- generated-doc prose-sha256: 7cea00ae80bc -->
+<!-- generated-doc prose-sha256: 4bfd4c596fb1 -->

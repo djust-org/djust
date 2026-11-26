@@ -102,7 +102,9 @@ def test_adapter_tag_comes_after_client_js():
     """
     srcs = _script_srcs(_inject())
     client_idx = next(
-        i for i, s in enumerate(srcs) if re.search(r"djust/client(-core)?(\.min)?\.js$", s)
+        i
+        for i, s in enumerate(srcs)
+        if re.search(r"djust/client(-core)?(\.min)?\.js(\?v=[^\"]*)?$", s)
     )
     ext_idx = next(i for i, s in enumerate(srcs) if s.endswith("dj-chart.js"))
     assert ext_idx > client_idx, f"adapter must load after client.js; got {srcs}"

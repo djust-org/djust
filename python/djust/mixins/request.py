@@ -1687,10 +1687,21 @@ class RequestMixin:
             PROTOCOL_HEADER,
             PROTOCOL_VERSION,
             mismatch_response,
+            note_refusal,
             request_protocol_ok,
+            session_key_of,
         )
 
         if not request_protocol_ok(request):
+            from .._client_ip import resolve_client_ip
+
+            # Noted for the reload breaker like the WS and SSE refusals.
+            note_refusal(
+                session_key_of(getattr(request, "session", None)),
+                resolve_client_ip(
+                    request.META.get("HTTP_X_FORWARDED_FOR"), request.META.get("REMOTE_ADDR")
+                ),
+            )
             logger.info(
                 "HTTP POST to %s from a client speaking protocol %s (server speaks %s): 409",
                 type(self).__name__,

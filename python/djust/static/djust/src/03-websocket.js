@@ -1338,9 +1338,17 @@ class LiveViewWebSocket {
      * events are pending, and apply it, effects included, once they settle.
      * The server's pushes then neither consume an event's loading state nor
      * overtake its answer. Returns true when the frame was held.
+     *
+     * Arrival order is kept for the rest too: a frame that answers no event
+     * (no `ref`: a `defer()` follow-up, an effects-only frame) is held behind
+     * frames this socket already holds, so a deferred `live_redirect` or
+     * `push_event` never lands before its own turn's held DOM part.
      */
     _holdServerFrame(data) {
-        if (!_SERVER_TURN_SOURCES.includes(data.source) || !hasPendingEventRequests(this)) return false;
+        const serverTurn = _SERVER_TURN_SOURCES.includes(data.source) && hasPendingEventRequests(this);
+        const behindHeld = !serverTurn && data.ref == null && _tickBuffer.length > 0 &&
+            hasHeldServerUpdates(this);
+        if (!serverTurn && !behindHeld) return false;
         // Marked so the version check treats the resulting gap as our own
         // deferral rather than a dropped patch (#2829). The marker is
         // client-side only and never goes back over the wire.

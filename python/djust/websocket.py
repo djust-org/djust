@@ -1082,13 +1082,17 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         dropped). ``views`` are drained root first (default: the page view).
         ``finish`` runs the ``defer()`` callbacks and sends their effects.
         """
-        from ._render_frame import adrain_effects, render_frame
+        from ._render_frame import adrain_effects, raise_collected, render_frame
 
         fields = {k: v for k, v in frame.items() if k not in ("type", "effects")}
+        errors: List[BaseException] = []
         effects = list(frame.get("effects") or []) + await adrain_effects(
-            *(views if views else (self.view_instance,))
+            *(views if views else (self.view_instance,)), errors=errors
         )
         await self.send_json(render_frame(effects=effects, **fields))
+        # A layout that failed under DEBUG is re-raised once the frame (its
+        # DOM part and the other effects) has gone out.
+        raise_collected(errors)
         if finish:
             await self._finish_turn_effects()
 
@@ -1104,13 +1108,16 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         view; ``kinds`` limits the drain (``flush_push_events()`` sends only
         ``push_event``). Returns whether a frame was sent.
         """
-        from ._render_frame import adrain_effects, render_frame
+        from ._render_frame import adrain_effects, raise_collected, render_frame
 
-        effects = await adrain_effects(*(views if views else (self.view_instance,)), kinds=kinds)
-        if not effects:
-            return False
-        await self.send_json(render_frame(source=source, effects=effects))
-        return True
+        errors: List[BaseException] = []
+        effects = await adrain_effects(
+            *(views if views else (self.view_instance,)), kinds=kinds, errors=errors
+        )
+        if effects:
+            await self.send_json(render_frame(source=source, effects=effects))
+        raise_collected(errors)
+        return bool(effects)
 
     async def _finish_turn_effects(self) -> None:
         """Run the ``defer()`` callbacks, then send what they queued (§2.4)."""
@@ -2515,14 +2522,26 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         return resolve_client_ip(fwd, peer)
 
     async def _refuse_outdated_client(self, data: Dict[str, Any]) -> None:
-        """Make an outdated client reload: a ``reload`` frame, then close 4409 (#3658)."""
+        """Make an outdated client reload: a ``reload`` frame, then close 4409 (#3658).
+
+        A second refusal of the same browser within ``RELOAD_BREAKER_SECONDS``
+        closes with 4409 alone: a cached page shell keeps serving the old
+        bundle, and another reload would loop (``_protocol.note_refusal``).
+        """
+        from ._protocol import anote_refusal, session_key_of
+
+        reload = await anote_refusal(
+            session_key_of(self.scope.get("session")), self._get_client_ip()
+        )
         logger.info(
-            "WebSocket %s from a client speaking protocol %s (server speaks %s): reload",
+            "WebSocket %s from a client speaking protocol %s (server speaks %s): %s",
             sanitize_for_log(str(data.get("type"))),
             sanitize_for_log(str(data.get(PROTOCOL_FIELD))),
             PROTOCOL_VERSION,
+            "reload" if reload else "closed, no reload (refused again within the breaker window)",
         )
-        await self.send_json(reload_frame())
+        if reload:
+            await self.send_json(reload_frame())
         await self.close(code=PROTOCOL_CLOSE_CODE)
 
     def _log_per_ip_refusal(self, client_ip: str, max_per_ip: int) -> None:
@@ -6199,12 +6218,16 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 # go through a slot's ``send_json``, so the frame of a view
                 # beside the page view is addressed here (#3692); a frame
                 # without it is applied to the page's container.
+                from ._render_frame import raise_collected
+
                 target = getattr(self, "target_id", None)
+                errors: List[BaseException] = []
                 await self._send_frame(
                     text_data=broadcast_render_text(
-                        patches, version, target, await self._broadcast_effects()
+                        patches, version, target, await self._broadcast_effects(errors)
                     )
                 )
+                raise_collected(errors)
                 await self._finish_turn_effects()
                 return
         if isinstance(patches, str):
@@ -6217,10 +6240,12 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             **rendered.send_fields,
         )
 
-    async def _broadcast_effects(self) -> List[Dict[str, Any]]:
+    async def _broadcast_effects(
+        self, errors: Optional[List[BaseException]] = None
+    ) -> List[Dict[str, Any]]:
         from ._render_frame import adrain_effects
 
-        return await adrain_effects(self.view_instance)
+        return await adrain_effects(self.view_instance, errors=errors)
 
     async def _apply_server_push(self, view: Any, event: Dict[str, Any]) -> None:
         """Apply one push's ``state`` and call its handler (the push's hook)."""

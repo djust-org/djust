@@ -73,7 +73,11 @@ def _effect(kind: str, payload: Dict[str, Any]) -> Effect:
     return {"kind": kind, **payload}
 
 
-def drain_effects(*views: Any, kinds: Optional[Iterable[str]] = None) -> List[Effect]:
+def drain_effects(
+    *views: Any,
+    kinds: Optional[Iterable[str]] = None,
+    errors: Optional[List[BaseException]] = None,
+) -> List[Effect]:
     """The queued effects of ``views`` (root first), drained, as wire objects.
 
     Sync. A queued layout is rendered here with the view's current context;
@@ -93,7 +97,9 @@ def drain_effects(*views: Any, kinds: Optional[Iterable[str]] = None) -> List[Ef
                     html = render_pending_layout(view, path)
                 except Exception as exc:  # noqa: BLE001 — a broken layout must not kill the turn
                     if _layout_failed(view, path, exc):
-                        raise
+                        if errors is None:
+                            raise
+                        errors.append(exc)
                     continue
                 effects.append({"kind": "layout", "path": path, "html": html})
             else:
@@ -101,12 +107,21 @@ def drain_effects(*views: Any, kinds: Optional[Iterable[str]] = None) -> List[Ef
     return effects
 
 
-async def adrain_effects(*views: Any, kinds: Optional[Iterable[str]] = None) -> List[Effect]:
+async def adrain_effects(
+    *views: Any,
+    kinds: Optional[Iterable[str]] = None,
+    errors: Optional[List[BaseException]] = None,
+) -> List[Effect]:
     """:func:`drain_effects` for async callers.
 
     Inline when no layout is queued; otherwise the layout's context and
     template render take one ``sync_to_async`` hop (#3178), on the session's
     pinned worker when ``worker_threads`` is set.
+
+    ``errors``: a list that collects a layout failure re-raised under
+    ``DEBUG`` instead of raising it here, so the caller can send the frame
+    (DOM part and the other effects) first and re-raise after
+    (:func:`raise_collected`).
     """
     kinds = tuple(kinds) if kinds is not None else None
     drained = [(view, _queued(view, kinds)) for view in views]
@@ -125,10 +140,18 @@ async def adrain_effects(*views: Any, kinds: Optional[Iterable[str]] = None) -> 
                 html = await sync_to_async(render_pending_layout)(view, path)
             except Exception as exc:  # noqa: BLE001 — a broken layout must not kill the wire
                 if _layout_failed(view, path, exc):
-                    raise
+                    if errors is None:
+                        raise
+                    errors.append(exc)
                 continue
             effects.append({"kind": "layout", "path": path, "html": html})
     return effects
+
+
+def raise_collected(errors: List[BaseException]) -> None:
+    """Re-raise the first failure an ``errors=`` drain collected (``DEBUG`` only)."""
+    if errors:
+        raise errors[0]
 
 
 def _check_dom_part(fields: Dict[str, Any]) -> None:
@@ -170,5 +193,6 @@ __all__ = [
     "adrain_effects",
     "dom_part",
     "drain_effects",
+    "raise_collected",
     "render_frame",
 ]

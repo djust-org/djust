@@ -74,11 +74,16 @@ _MOUNT_ANSWERS = ("mount", "error", "navigate", "redirect")
 _DOM_PART_NAMES = {"patches": "patch", "html": "html_update", "embedded": "embedded_update"}
 
 
+#: The sources of effects-only ``render`` frames that answer no turn.
+_NOT_A_NOOP_SOURCES = frozenset({"deferred", "async", "push", "flush", "mount"})
+
+
 def _frame_is(frame: Dict[str, Any], types: Optional[Tuple[str, ...]]) -> bool:
     """Whether ``frame`` is one of ``types`` (any frame when ``None``).
 
     A ``render`` frame (#3658) also answers to the 1.x name of its DOM part
-    (``patch``, ``html_update``, ``embedded_update``, or ``noop`` for none) and
+    (``patch``, ``html_update``, ``embedded_update``, or ``noop`` for a frame
+    with no DOM part that answers a turn) and
     to the ``kind`` of any effect it carries (``navigate``, ``push_event``...),
     so a caller can wait for "the patch" or "the navigation" by its old name.
     """
@@ -88,7 +93,17 @@ def _frame_is(frame: Dict[str, Any], types: Optional[Tuple[str, ...]]) -> bool:
         return False
     from ._render_frame import dom_part
 
-    if _DOM_PART_NAMES.get(dom_part(frame), "noop") in types:
+    part = dom_part(frame)
+    if part is not None and _DOM_PART_NAMES[part] in types:
+        return True
+    # A 1.x ``noop`` answered a turn: an effects-only frame a later step sent
+    # on its own (a deferred callback, a push, a flush, an async result, a
+    # mount's follow-up) is not one, unless it carries a ``ref``.
+    if (
+        part is None
+        and "noop" in types
+        and (frame.get("ref") is not None or frame.get("source") not in _NOT_A_NOOP_SOURCES)
+    ):
         return True
     return any(
         isinstance(effect, dict) and effect.get("kind") in types

@@ -397,6 +397,7 @@ def run_fallback(script=SCRIPT) -> List[Tuple[int, str]]:
 async def ws_event(comm: Any, name: str, params: Dict[str, Any]) -> Dict[str, Any]:
     """One event; its reply, or the error frame that refused it (an error
     frame carries no ``ref``)."""
+    from ._frames import frame_matches
     from ._ws_frames import receive_until
 
     harness._REF[0] += 1
@@ -406,7 +407,7 @@ async def ws_event(comm: Any, name: str, params: Dict[str, Any]) -> Dict[str, An
         comm,
         lambda fs: any(
             f.get("type") == "error"
-            or (f.get("type") in harness.REPLY_TYPES and f.get("ref") == ref)
+            or (frame_matches(f, harness.REPLY_TYPES) and f.get("ref") == ref)
             for f in fs
         ),
         what="the reply to %r" % name,

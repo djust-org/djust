@@ -151,6 +151,37 @@ class TestBuilder:
         view.put_flash("info", "x")
         assert [e["kind"] for e in drain_effects(view)] == ["flash"]
 
+    def test_a_debug_layout_failure_is_collected_when_asked(self, monkeypatch):
+        def broken(view, path):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(layout_module, "render_pending_layout", broken)
+        view = Effects()
+        view.set_layout("x.html")
+        view.put_flash("info", "x")
+        errors: List[BaseException] = []
+        with override_settings(DEBUG=True):
+            assert [e["kind"] for e in drain_effects(view, errors=errors)] == ["flash"]
+            assert [str(e) for e in errors] == ["boom"]
+            view.set_layout("x.html")
+            with pytest.raises(RuntimeError):
+                drain_effects(view)
+
+    def test_noop_names_an_answer_not_a_later_effects_only_frame(self):
+        """A test waiting for an event's ``noop`` must not take a deferred,
+        push, flush, async or mount follow-up frame for it (review of #4334)."""
+        from djust._testing_live import _frame_is
+
+        effects = [{"kind": "push_event", "event": "e", "payload": {}}]
+        assert _frame_is(render_frame(source="event", ref=3), ("noop",))
+        assert _frame_is(render_frame(source="event", event_name="ping"), ("noop",))
+        for source in ("deferred", "push", "flush", "async", "mount"):
+            frame = render_frame(source=source, effects=effects)
+            assert not _frame_is(frame, ("noop",)), source
+            assert _frame_is(frame, ("push_event",)), source
+        assert _frame_is(render_frame(source="async", ref=4), ("noop",))
+        assert not _frame_is(render_frame(html="<i></i>", ref=5), ("noop",))
+
     @pytest.mark.parametrize("target", [None, "slot-3"])
     @pytest.mark.parametrize("effects", [[], EVERYTHING])
     def test_broadcast_splice_parses_to_the_built_frame(self, target, effects):
@@ -273,7 +304,7 @@ class TestFlushPushEvents:
         await view.flush_push_events()
         assert sent == [
             render_frame(
-                source="async",
+                source="flush",
                 effects=[{"kind": "push_event", "event": "step", "payload": {"n": 1}}],
             )
         ]
@@ -334,6 +365,37 @@ class TestRuntime:
         assert answer["ref"] == 3
         assert deferred["source"] == "deferred" and "ref" not in deferred
         assert [e["kind"] for e in deferred["effects"]] == ["push_event", "navigation"]
+
+    async def test_a_debug_layout_failure_sends_the_frame_then_raises(self, monkeypatch):
+        """Under DEBUG a broken layout is re-raised only after the frame, DOM
+        part and other effects included, has gone out (review of #4334)."""
+
+        def broken(view, path):
+            raise RuntimeError("layout exploded")
+
+        runtime, transport = await _runtime()
+        monkeypatch.setattr(layout_module, "render_pending_layout", broken)
+        view = runtime.view_instance
+        view.set_layout("layouts/full.html")
+        view.put_flash("info", "kept")
+        with override_settings(DEBUG=True):
+            with pytest.raises(RuntimeError, match="layout exploded"):
+                await runtime._send_render({"html": "<i>dom</i>", "ref": 4}, finish=False)
+            assert transport.sent == [
+                render_frame(
+                    html="<i>dom</i>",
+                    ref=4,
+                    effects=[
+                        {"kind": "flash", "action": "put", "level": "info", "message": "kept"}
+                    ],
+                )
+            ]
+            transport.sent.clear()
+            view.set_layout("layouts/full.html")
+            view.push_event("still")
+            with pytest.raises(RuntimeError, match="layout exploded"):
+                await runtime._send_effects("push", view)
+            assert [e["kind"] for e in transport.sent[0]["effects"]] == ["push_event"]
 
     async def test_a_refused_event_is_one_frame_with_its_ref(self):
         from djust.turns import Refusal, Turn

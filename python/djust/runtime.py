@@ -8114,14 +8114,18 @@ class ViewRuntime(RuntimeTurnPort):
         dropped). ``views`` are drained root first (default: the root view).
         ``finish`` runs the ``defer()`` callbacks and sends their effects.
         """
-        from ._render_frame import adrain_effects, render_frame
+        from ._render_frame import adrain_effects, raise_collected, render_frame
 
         fields = {k: v for k, v in frame.items() if k != "type"}
         fields.pop("effects", None)
+        errors: List[BaseException] = []
         effects = list(frame.get("effects") or []) + await adrain_effects(
-            *self._effect_views(views)
+            *self._effect_views(views), errors=errors
         )
         await self.transport.send(render_frame(effects=effects, **fields))
+        # A layout that failed under DEBUG is re-raised once the frame (its
+        # DOM part and the other effects) has gone out.
+        raise_collected(errors)
         if finish:
             await self._finish_turn_effects()
 
@@ -8137,13 +8141,14 @@ class ViewRuntime(RuntimeTurnPort):
         (``flush_push_events()`` sends only ``push_event``). Returns whether
         a frame was sent.
         """
-        from ._render_frame import adrain_effects, render_frame
+        from ._render_frame import adrain_effects, raise_collected, render_frame
 
-        effects = await adrain_effects(*self._effect_views(views), kinds=kinds)
-        if not effects:
-            return False
-        await self.transport.send(render_frame(source=source, effects=effects))
-        return True
+        errors: List[BaseException] = []
+        effects = await adrain_effects(*self._effect_views(views), kinds=kinds, errors=errors)
+        if effects:
+            await self.transport.send(render_frame(source=source, effects=effects))
+        raise_collected(errors)
+        return bool(effects)
 
     async def _send_navigate(self, to: str) -> None:
         """A refused mount: one ``render`` frame whose one effect navigates to ``to``."""

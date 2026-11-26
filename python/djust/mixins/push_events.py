@@ -170,6 +170,11 @@ class PushEventMixin(CommandsMixin):
         No-op if neither is available (e.g. in tests, or on the HTTP
         fallback, where the queued events ride the POST response instead).
 
+        The events go out in one effects-only ``render`` frame with
+        ``source: "flush"`` (#3658). The client applies it on arrival, even
+        while one of its own events is pending; it waits only behind server
+        frames the client already holds, so arrival order is kept.
+
         Usage::
 
             @event_handler
@@ -188,7 +193,9 @@ class PushEventMixin(CommandsMixin):
         consumer = getattr(self, "_ws_consumer", None)
         send_effects = getattr(consumer, "_send_effects", None)
         if send_effects is not None:
-            await send_effects("async", self, kinds=("push_event",))
+            # ``source="flush"``: outside the sources the client holds while
+            # an event is pending (#560), so the events arrive NOW (#3658).
+            await send_effects("flush", self, kinds=("push_event",))
             return
         if consumer is not None:
             return
@@ -203,7 +210,7 @@ class PushEventMixin(CommandsMixin):
 
         effects = drain_effects(self, kinds=("push_event",))
         if effects:
-            await runtime.transport.send(render_frame(source="async", effects=effects))
+            await runtime.transport.send(render_frame(source="flush", effects=effects))
 
     def clear_push_events(self) -> List[Tuple[str, Dict[str, Any]]]:
         """Drop the push events queued so far in this turn, and return them.

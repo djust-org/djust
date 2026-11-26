@@ -2622,9 +2622,17 @@ class LiveViewWebSocket {
      * events are pending, and apply it, effects included, once they settle.
      * The server's pushes then neither consume an event's loading state nor
      * overtake its answer. Returns true when the frame was held.
+     *
+     * Arrival order is kept for the rest too: a frame that answers no event
+     * (no `ref`: a `defer()` follow-up, an effects-only frame) is held behind
+     * frames this socket already holds, so a deferred `live_redirect` or
+     * `push_event` never lands before its own turn's held DOM part.
      */
     _holdServerFrame(data) {
-        if (!_SERVER_TURN_SOURCES.includes(data.source) || !hasPendingEventRequests(this)) return false;
+        const serverTurn = _SERVER_TURN_SOURCES.includes(data.source) && hasPendingEventRequests(this);
+        const behindHeld = !serverTurn && data.ref == null && _tickBuffer.length > 0 &&
+            hasHeldServerUpdates(this);
+        if (!serverTurn && !behindHeld) return false;
         // Marked so the version check treats the resulting gap as our own
         // deferral rather than a dropped patch (#2829). The marker is
         // client-side only and never goes back over the wire.
@@ -3790,6 +3798,11 @@ function bufferServerUpdate(transport, data, received = data) {
     if (order !== undefined) transport._parameterContractFrames.set(data, order);
     _tickBufferOwners.set(data, transport);
     _tickBuffer.push(data);
+}
+
+/** True while this transport holds server frames not yet applied (#560, #3658). */
+function hasHeldServerUpdates(transport) {
+    return _tickBuffer.some(frame => _tickBufferOwners.get(frame) === transport);
 }
 
 function takeServerUpdates(transport, limit = Infinity) {
@@ -20328,6 +20341,10 @@ window.djust.bindModelElements = bindModelElements;
         }, 100);
     }
 
+    // The frames that carry the client's protocol (#3658). This chunk has its
+    // own scope, so it cannot read the core bundle's _PROTOCOL_VERBS.
+    const _BRIDGE_PROTOCOL_VERBS = ['mount', 'mount_batch', 'live_redirect_mount'];
+
     function initReconnectionBridge() {
         if (!_swAvailable()) return;
         const connectionId = _genConnectionId();
@@ -20354,6 +20371,13 @@ window.djust.bindModelElements = bindModelElements;
                 const OPEN = (typeof WebSocket !== 'undefined') ? WebSocket.OPEN : 1;
                 const state = ws.ws && ws.ws.readyState;
                 if (state !== OPEN) {
+                    // The buffered payload is replayed raw (ws.ws.send), past
+                    // sendMessage, so a mount verb names the protocol here, as
+                    // sendMessage would; without it the server answers the
+                    // replay with a protocol reload (4409, #3658).
+                    if (data && _BRIDGE_PROTOCOL_VERBS.indexOf(data.type) !== -1) {
+                        data = Object.assign({}, data, { protocol: globalThis.djust.PROTOCOL });
+                    }
                     let payload;
                     try {
                         payload = JSON.stringify(data);

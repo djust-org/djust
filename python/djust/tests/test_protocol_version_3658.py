@@ -35,8 +35,10 @@ from djust._protocol import (
     PROTOCOL_CLOSE_CODE,
     PROTOCOL_HEADER,
     PROTOCOL_VERSION,
+    anote_refusal,
     client_protocol_ok,
     mismatch_envelope,
+    note_refusal,
     parse_protocol,
     reload_frame,
 )
@@ -72,6 +74,16 @@ class Counter(LiveView):
         self.count += 1
 
 
+@pytest.fixture(autouse=True)
+def _breaker():
+    """Each test starts with no refusal noted (the reload breaker's cache)."""
+    from django.core.cache import cache
+
+    cache.clear()
+    yield
+    cache.clear()
+
+
 @pytest.fixture
 def strict(settings):
     """The shipped default: a client that names no protocol is refused."""
@@ -86,6 +98,29 @@ def strict(settings):
 
 
 class TestProtocolModule:
+    def test_the_breaker_lets_one_reload_through_per_browser(self):
+        assert note_refusal("abc", "10.0.0.1") is True
+        assert note_refusal("abc", "10.0.0.2") is False  # same session
+        assert note_refusal("xyz", "10.0.0.1") is True  # another session
+        assert note_refusal(None, "10.0.0.9") is True
+        assert note_refusal(None, "10.0.0.9") is False  # no session: by IP
+        assert note_refusal(None, None) is True
+        assert note_refusal(None, None) is True  # nothing to key on: never trips
+
+    async def test_the_async_breaker_shares_the_window(self):
+        assert note_refusal("abc", None) is True
+        assert await anote_refusal("abc", None) is False
+
+    def test_a_broken_cache_never_stops_the_reload(self, monkeypatch):
+        from django.core.cache import cache
+
+        def boom(*args, **kwargs):
+            raise ConnectionError("down")
+
+        monkeypatch.setattr(cache, "add", boom)
+        assert note_refusal("abc", None) is True
+        assert note_refusal("abc", None) is True
+
     def test_parse_accepts_ints_and_decimal_strings(self):
         assert parse_protocol(3) == 3
         assert parse_protocol(" 2 ") == 2
@@ -135,7 +170,8 @@ class TestProtocolModule:
 
 
 class _Socket:
-    def __init__(self, monkeypatch):
+    def __init__(self, monkeypatch, session_key=None):
+        self.session_key = session_key
         monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
         self.settings = override_settings(
             LIVEVIEW_ALLOWED_MODULES=["djust", MOD],
@@ -146,7 +182,8 @@ class _Socket:
 
     async def __aenter__(self):
         self.settings.enable()
-        request = await sync_to_async(make_request)()
+        request = await sync_to_async(make_request)(self.session_key)
+        self.session_key = request.session.session_key
         self.socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
         self.socket.scope.update(session=request.session, user=request.user, tenant=None)
         assert (await self.socket.connect())[0]
@@ -192,6 +229,19 @@ class TestWebSocket:
         assert frames[-1] == {"type": "websocket.close", "code": PROTOCOL_CLOSE_CODE}
         assert len(frames) == 2
 
+    async def test_a_second_refusal_within_the_window_closes_without_reload(
+        self, monkeypatch, strict
+    ):
+        """A cached page shell serving the old bundle again must not loop."""
+        async with _Socket(monkeypatch) as first:
+            await first.socket.send_json_to(LEGACY_MOUNT)
+            frames = await receive_until(first.socket, _closed, what="the first close")
+        assert frames[0] == reload_frame()
+        async with _Socket(monkeypatch, first.session_key) as again:
+            await again.socket.send_json_to(LEGACY_MOUNT)
+            frames = await receive_until(again.socket, _closed, what="the second close")
+        assert frames == [{"type": "websocket.close", "code": PROTOCOL_CLOSE_CODE}]
+
     async def test_a_matching_client_mounts_and_the_mount_names_the_protocol(
         self, monkeypatch, strict
     ):
@@ -225,6 +275,12 @@ def _stream_get(sid, **query):
     return request
 
 
+def _saved_session():
+    session = SessionStore()
+    session.create()
+    return session
+
+
 async def _first_event(response):
     async for chunk in response.streaming_content:
         text = chunk.decode() if isinstance(chunk, bytes) else chunk
@@ -254,6 +310,19 @@ class TestSSE:
         assert response["Content-Type"].startswith("text/event-stream")
         assert response.content.decode() == f"data: {json.dumps(reload_frame())}\n\n"
         assert sid not in _sse_sessions
+
+    async def test_a_second_refusal_within_the_window_ends_the_stream_empty(self, strict):
+        session = await sync_to_async(_saved_session)()
+        bodies = []
+        for _ in range(2):
+            sid = str(uuid.uuid4())
+            request = _stream_get(sid)
+            request.session = session
+            with patch("djust.runtime.ViewRuntime.dispatch_mount") as mount:
+                response = await DjustSSEStreamView().get(request, session_id=sid)
+            mount.assert_not_called()
+            bodies.append(response.content.decode())
+        assert bodies == [f"data: {json.dumps(reload_frame())}\n\n", ""]
 
     async def test_a_matching_stream_get_mounts_and_sse_connect_names_the_protocol(self, strict):
         sid = str(uuid.uuid4())
@@ -332,6 +401,13 @@ class TestHTTP:
         assert response.status_code == 409
         assert json.loads(response.content) == mismatch_envelope()
         assert response[PROTOCOL_HEADER] == str(PROTOCOL_VERSION)
+
+    def test_an_outdated_post_is_noted_for_the_breaker(self, strict):
+        """The 409 itself never changes; the refusal counts for the other wires."""
+        request = _http_post()
+        responses = [Counter().post(request) for _ in range(2)]
+        assert [r.status_code for r in responses] == [409, 409]
+        assert note_refusal(request.session.session_key, None) is False
 
     def test_a_matching_post_answers_and_names_the_protocol(self, strict):
         view = Counter()
