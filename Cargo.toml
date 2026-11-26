@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/djust_base",
     "crates/djust_core",
     "crates/djust_templates",
     "crates/djust_vdom",
