@@ -6385,9 +6385,11 @@ class PageHeaderNode(template.Node):
         kw = _plain_kwargs(self.kwargs, context)
         # Render child nodelist — this may include page_header_actions which
         # stashes its content in the context.
-        context[_page_header_actions_key] = ""
-        breadcrumb_content = self.nodelist.render(context)
-        actions_html = context.get(_page_header_actions_key, "")
+        # The key lives only for this body (a pushed scope): a standalone
+        # ``{% page_header_actions %}`` after the header must not see it.
+        with context.push(**{_page_header_actions_key: ""}):
+            breadcrumb_content = self.nodelist.render(context)
+            actions_html = context.get(_page_header_actions_key, "")
         return mark_safe(render_page_header(kw, breadcrumb_content, actions_html))
 
 

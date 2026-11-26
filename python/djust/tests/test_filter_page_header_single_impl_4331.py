@@ -128,3 +128,15 @@ def test_a_positional_argument_is_refused_by_the_django_tags() -> None:
     ):
         with pytest.raises(TemplateSyntaxError):
             _django(src)
+
+
+def test_a_standalone_actions_tag_after_a_page_header_still_draws() -> None:
+    """The header's actions slot is scoped to its own body (a leaked key made a later standalone
+    ``page_header_actions`` stash its content and draw nothing under Django)."""
+    src = (
+        '{% page_header title="T" %}{% page_header_actions %}A{% endpage_header_actions %}'
+        "{% endpage_header %}{% page_header_actions %}B{{ label }}{% endpage_header_actions %}"
+    )
+    out = _django(src, CONTEXTS["typical"])
+    assert out == _rust(src, CONTEXTS["typical"])
+    assert out.endswith('<div class="dj-page-header__actions">BStatus</div>')
