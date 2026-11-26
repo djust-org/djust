@@ -34,7 +34,9 @@ from ..change_detection import (
     ChangedKeys,
     SnapshotEntry,
     deep_fingerprint,
+    entry_retained,
     fingerprints_by_content,
+    native_digest,
     retained_fingerprint,
     warn_fingerprint_truncated,
 )
@@ -563,6 +565,23 @@ def _snapshot_walks_for_sync(
     return walks
 
 
+def _plain_by_snapshot(walks: Optional[Dict[int, SnapshotEntry]], key: str, value: Any) -> bool:
+    """Did the post-event snapshot prove *value* is plain data (#4325)?
+
+    ``entry[0] is value`` says the snapshot walked this very object, and
+    ``entry[2]`` that the walk found only exact ``dict`` / ``list`` / ``tuple``
+    nodes and exact builtin scalars. Plain data holds no ``Model``, ``QuerySet``,
+    form or ``SafeString`` at any depth, so the whole-list scans for them have
+    nothing to find. ``walks`` is None unless no application code ran from the
+    snapshot to the sync (``_snapshot_walks_for_sync``): that window is what
+    keeps an in-place write from slipping in after the walk.
+    """
+    if walks is None or not _per_turn.on("plain_model_scans"):
+        return False
+    entry = walks.get(id(value))
+    return entry is not None and entry[0] is value and bool(entry[2])
+
+
 #: A list shorter than this is sent whole: the delta saves nothing there.
 _ITEM_DELTA_MIN_LEN = 16
 
@@ -573,7 +592,8 @@ def _list_item_delta(
     """The rows of *value* to send to Rust instead of the whole list, or None (#4325).
 
     *post* and *pre* are the post- and pre-event snapshot's walks of this very
-    list (``SnapshotEntry``: the object, its fingerprint tree, plain or not);
+    list (``SnapshotEntry``: the object, its fingerprint tree or native digest,
+    plain or not, and with a native digest its per-row digests, #4325);
     *previous* is what the last sync kept of the key's fingerprint. The delta
     is sound only when all of these hold, and None sends the list whole:
 
@@ -593,6 +613,47 @@ def _list_item_delta(
         or not (post[2] and pre[2])
     ):
         return None
+    if post[3] is not None or pre[3] is not None:
+        indices = _native_changed_rows(value, post, pre, previous)
+    else:
+        indices = _tree_changed_rows(value, post, pre, previous)
+    if not indices or 4 * len(indices) > len(value):
+        return None
+    rows: List[Any] = []
+    for i in indices:
+        converted = convert_for_render(value[i], "%s.%d" % (key, i))
+        if converted is None or converted[0]:
+            return None
+        rows.append(converted[1])
+    return indices, rows
+
+
+def _native_changed_rows(
+    value: Any, post: SnapshotEntry, pre: SnapshotEntry, previous: Any
+) -> Optional[List[int]]:
+    """The changed rows by the snapshots' native per-row digests (#4325), or None.
+
+    Both walks must be native (a value's digest kind is a function of the
+    value, so a mixed pair means the list stopped or started being plain data:
+    sent whole), and the pre-event digest must be what the last sync kept.
+    """
+    from .._rust import digest_rows_changed
+
+    post_rows, pre_rows = post[4], pre[4]
+    if post[3] is None or pre[3] is None or post_rows is None or pre_rows is None:
+        return None
+    if len(post_rows) != 16 * len(value) or len(value) < _ITEM_DELTA_MIN_LEN:
+        return None
+    if previous != pre[3]:
+        return None
+    changed: Optional[List[int]] = digest_rows_changed(pre_rows, post_rows)
+    return changed
+
+
+def _tree_changed_rows(
+    value: Any, post: SnapshotEntry, pre: SnapshotEntry, previous: Any
+) -> Optional[List[int]]:
+    """The changed rows by comparing the snapshots' row trees, or None."""
     post_tree, pre_tree = post[1], pre[1]
     if (
         type(post_tree) is not tuple
@@ -608,16 +669,7 @@ def _list_item_delta(
         return None
     if len(value) < _ITEM_DELTA_MIN_LEN or previous != retained_fingerprint(pre_tree):
         return None
-    indices = [i for i, (a, b) in enumerate(zip(pre_rows, post_rows)) if a != b]
-    if not indices or 4 * len(indices) > len(value):
-        return None
-    rows: List[Any] = []
-    for i in indices:
-        converted = convert_for_render(value[i], "%s.%d" % (key, i))
-        if converted is None or converted[0]:
-            return None
-        rows.append(converted[1])
-    return indices, rows
+    return [i for i, (a, b) in enumerate(zip(pre_rows, post_rows)) if a != b]
 
 
 #: ``_request_scoped_fingerprint``'s answer for a value it does not fingerprint.
@@ -650,6 +702,12 @@ def _request_scoped_fingerprint(key: str, value: Any) -> Tuple[bool, Any, Any]:
 
     ONE statement of the rule for the Rust sync and the scoped component
     render's check, so the two cannot disagree (#1646).
+
+    These fingerprints stay tree digests, not native ones (#4325): they are
+    compared only with what this same function kept last turn
+    (``_trusted_request_scoped_fingerprints``), never with ``prev_fps``, so
+    the kind is consistent; and a processor's value is small, so one fused
+    walk is cheaper than a native digest plus a conversion walk.
     """
     kind = type(value)
     if kind in _EXACT_PLAIN_SCALARS:
@@ -1438,8 +1496,11 @@ class RustBridgeMixin:
             # handle overlay (flag ``state_models_as_handles``). An explicit context
             # still holds them here, before the normalize loop below. Empty with the
             # flag off.
+            def _proved_plain(key: str, value: Any) -> bool:
+                return _plain_by_snapshot(snapshot_walks, key, value)
+
             _overlay_raw: Dict[str, Any] = (
-                _state_model_values(full_context)
+                _state_model_values(full_context, _proved_plain)
                 if type(full_context) is ExplicitRenderContext
                 else {}
             )
@@ -1507,6 +1568,7 @@ class RustBridgeMixin:
                 if _is_qs or (
                     isinstance(_val, (list, tuple))
                     and _val
+                    and not _proved_plain(_key, _val)
                     and any(isinstance(_r, _DjModel) for _r in _val)
                 ):
                     if _walk_paths is None:
@@ -1554,6 +1616,7 @@ class RustBridgeMixin:
                     for _key, _val in full_context.items()
                     if _key not in _explicit_jit_keys
                     and (type(_val) is dict or type(_val) is list)
+                    and not _proved_plain(_key, _val)
                     and not any(isinstance(_r, _DjModel) for _r in _val)
                     and _holds_db_value(_val)
                 ]
@@ -1589,6 +1652,8 @@ class RustBridgeMixin:
                             _raw_models_for_sidecar[_key] = _evaluated
 
             for _key, _val in list(full_context.items()):
+                if _proved_plain(_key, _val):
+                    continue  # nothing to normalize in plain data
                 _normalized = _normalize_db_values(_val)
                 if _normalized is not _val:
                     if type(full_context) is ExplicitRenderContext:
@@ -1727,7 +1792,19 @@ class RustBridgeMixin:
                         # nothing ran since (#3999): its tree is this value's
                         # fingerprint. Converting it for Rust, when it is sent,
                         # is a walk that builds no fingerprint.
-                        fp = retained_fingerprint(entry[1])
+                        fp = entry_retained(entry)
+                        new_fps[key] = fp
+                        if convert:
+                            converted_walk = convert_for_render(value, key)
+                            if converted_walk is not None:
+                                converted_by_fp[key] = converted_walk
+                        return fp
+                    native = native_digest(value)
+                    if native is not None:
+                        # Plain data: its retained fingerprint is the native
+                        # digest (#4325, ``change_detection.content_digest``),
+                        # and converting it is a walk that builds no tree.
+                        fp = native[0]
                         new_fps[key] = fp
                         if convert:
                             converted_walk = convert_for_render(value, key)
@@ -1984,6 +2061,9 @@ class RustBridgeMixin:
             set_item_store = getattr(self._rust_view, "set_loop_item_store_enabled", None)
             if set_item_store is not None:
                 set_item_store(_per_turn.on("loop_item_render"))
+            set_item_nested = getattr(self._rust_view, "set_loop_item_store_nested", None)
+            if set_item_nested is not None:
+                set_item_nested(_per_turn.on("loop_item_nested"))
             if (
                 snapshot_walks is not None
                 and prev_refs

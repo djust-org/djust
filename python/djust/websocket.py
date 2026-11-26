@@ -21,6 +21,7 @@ from typing import (
     ContextManager,
     Deque,
     Dict,
+    Hashable,
     List,
     NamedTuple,
     Optional,
@@ -49,6 +50,7 @@ from .change_detection import (
     changed_keys_after,
     deep_fingerprint,
     fingerprints_by_content,
+    native_digest,
     warn_fingerprint_truncated,
 )
 from .serialization import DjangoJSONEncoder, fast_json_loads
@@ -566,11 +568,21 @@ def _snapshot_assigns(view_instance: Any) -> Dict[str, Any]:
             # ``_dirty_fingerprint`` and ``@computed`` walk (#2682 review). A
             # class-level component's slot (a ``BoundComponent``, #2900) is
             # walked as its State: the wrapper's id() never changes.
-            if keep is not None and type(v) in (dict, list, tuple):
+            # Plain data takes the native digest (#4325): one Rust walk, no
+            # tree, and a list's per-row digests for the item delta. The pre
+            # and post snapshots take the same kind for the same value
+            # (``change_detection.native_digest`` is a function of the value).
+            native = native_digest(v, rows=type(v) is list)
+            content_fp: Hashable
+            if native is not None:
+                content_fp, truncated = native[0], False
+                if keep is not None:
+                    keep[vid] = (v, None, True, native[0], native[1])
+            elif keep is not None and type(v) in (dict, list, tuple):
                 plain: List[bool] = []
                 content_fp, truncated = deep_fingerprint(v, plain=plain)
                 if not truncated:
-                    keep[vid] = (v, content_fp, plain[0])
+                    keep[vid] = (v, content_fp, plain[0], None, None)
             else:
                 content_fp, truncated = deep_fingerprint(v)
             size = len(v) if isinstance(v, CONTAINER_TYPES) else None

@@ -467,6 +467,28 @@ def fast_json_dumps(obj: Any) -> str:
     """
     ...
 
+def plain_digest(
+    value: Any, budget: int, rows: bool = False
+) -> Optional[Tuple[bytes, int, Optional[bytes]]]:
+    """Native 16-byte content digest of plain data (#4325).
+
+    ``(digest, nodes_used, row_digests)`` for an exact ``dict`` / ``list`` /
+    ``tuple`` of exact ``str`` / ``int`` / ``float`` / ``bool`` / ``bytes`` /
+    ``None`` within the depth cap and *budget* nodes; ``row_digests`` is 16
+    bytes per item of a root list when *rows* is true. ``None`` for anything
+    else. Keyed per process: never persist or compare across processes. Use
+    ``djust.change_detection.native_digest``, which applies the switches.
+    """
+    ...
+
+def digest_rows_changed(a: bytes, b: bytes) -> Optional[List[int]]:
+    """Indices whose 16-byte row digests differ, or ``None`` on a length mismatch."""
+    ...
+
+def _set_plain_digest_sabotage(mode: int) -> None:
+    """Test-only: 1 hashes ``bool`` as ``int`` in ``plain_digest``; 0 restores."""
+    ...
+
 def extract_template_variables(template: str) -> Dict[str, List[str]]:
     """
     Extract all variable references from a template.
@@ -1206,6 +1228,8 @@ class RustLiveView:
     def loop_item_store_hits(self) -> int: ...
     def loop_item_store_misses(self) -> int: ...
     def _set_loop_item_store_sabotage(self, mode: int) -> None: ...
+    def set_loop_item_store_nested(self, enabled: bool) -> None: ...
+    def loop_item_store_nested(self) -> bool: ...
     def retain_state_keys(self, keys: List[str]) -> List[str]:
         """
         Drop every state key absent from ``keys`` and return the removed keys.
@@ -1449,6 +1473,9 @@ __all__ = [
     "template_compiled_at_generation",
     "render_markdown",
     "diff_html",
+    # Change detection (#4325)
+    "plain_digest",
+    "digest_rows_changed",
     "MAX_VDOM_DEPTH",
     "WALK_FLOOR_COVERS_FORMS",
     "collapse_inter_tag_whitespace",

@@ -1,0 +1,1 @@
+- A turn no longer scans a context list for a Model or QuerySet when the post-event snapshot already proved that very list is plain data (`plain_model_scans` per-turn switch). Saves about 0.5 ms per turn on a 1,000-row list (#4325).

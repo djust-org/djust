@@ -122,6 +122,25 @@ TEMPLATES: Dict[str, str] = {
         '/{{ r.n if r.on else "z"|add:"!" }}{% if r.on %}!{% endif %}</li>'
         "{% endfor %}</ol></div>"
     ),
+    # #4325 WP4: nested loops the store keeps. Three levels, an inner
+    # `{% empty %}`, the parent loop's counters, an if around the inner loop,
+    # and an inner loop whose items are block-level (the content cache's
+    # parse placeholders, which must never be stored with the outer item).
+    "nested_deep": (
+        "<div dj-root>{% for r in items %}<section>{% if r.on %}<ol>{% for t in r.tags %}"
+        "<li>{{ forloop.parentloop.counter0 }}{% for ch in t %}{% if ch == '<' %}lt"
+        "{% else %}{{ ch }}{% endif %}{% endfor %}</li>{% empty %}<li>{{ r.a }}</li>"
+        "{% endfor %}</ol>{% endif %}{{ r.n }}</section>{% endfor %}</div>"
+    ),
+    "nested_blocks": (
+        "<div dj-root>{% for r in items %}<article>{% for t in r.tags %}<div>{{ t }}</div>"
+        "{% endfor %}<p>{{ r.a }}</p></article>{% endfor %}</div>"
+    ),
+    # Refused: the inner loop reads outer context.
+    "nested_outer": (
+        "<div dj-root>{% for r in items %}<ul>{% for t in r.tags %}<li>{{ prefix }}{{ t }}"
+        "</li>{% endfor %}</ul>{% endfor %}</div>"
+    ),
     "dict": (
         "<div dj-root><ul>{% for k, v in d.items %}<li>{% if v %}{{ k }}={{ v }}"
         "{% endif %}</li>{% endfor %}</ul><ul>{% for r in items %}<li>{% if r.on %}"
@@ -192,6 +211,7 @@ class _Pair:
         state: Dict[str, Any],
         content_cache: bool,
         sabotage: int = 0,
+        nested: bool = True,
     ) -> None:
         self.fast = RustLiveView(template, dirs)
         self.control = RustLiveView(template, dirs)
@@ -201,6 +221,7 @@ class _Pair:
         self.oracle.set_loop_render_cache_enabled(False)
         self.control.set_loop_item_store_enabled(False)
         self.oracle.set_loop_item_store_enabled(False)
+        self.fast.set_loop_item_store_nested(nested)
         if sabotage:
             self.fast._set_loop_item_store_sabotage(sabotage)
         self.views = (self.fast, self.control, self.oracle)
@@ -295,12 +316,18 @@ def _edit(rng: random.Random, state: Dict[str, Any]) -> tuple:
 
 
 def _run(
-    seed: int, name: str, tmp: Path, sabotage: int = 0, steps: int = 30, switch: bool = True
+    seed: int,
+    name: str,
+    tmp: Path,
+    sabotage: int = 0,
+    steps: int = 30,
+    switch: bool = True,
+    nested: bool = True,
 ) -> _Pair:
     rng = random.Random("%s-%d" % (name, seed))
     (tmp / "row_4325.html").write_text(INCLUDED)
     state = _state(rng, rng.randint(1, 12))
-    pair = _Pair(TEMPLATES[name], [str(tmp)], state, rng.random() < 0.5, sabotage)
+    pair = _Pair(TEMPLATES[name], [str(tmp)], state, rng.random() < 0.5, sabotage, nested)
     marks: List[str] = []
     for step in range(steps):
         updates, keys, delta = _edit(rng, state)
@@ -319,6 +346,8 @@ def _run(
             pair.update_template(TEMPLATES[other])
         elif roll < 0.18:
             pair.fast.set_loop_item_store_enabled(rng.random() < 0.5)
+        elif roll < 0.19 and switch:
+            pair.fast.set_loop_item_store_nested(rng.random() < 0.5)
         elif roll < 0.20:
             (tmp / "row_4325.html").write_text(INCLUDED.replace("-", "~" * (step % 3 + 1)))
         if not pair.step(updates, keys, marks, delta):
@@ -336,27 +365,42 @@ def test_random_edits_match_the_full_render(tmp_path: Path, name: str, seed: int
     assert pair.mismatch is None, "seed %d, template %s: %s differ" % (seed, name, pair.mismatch)
 
 
+NESTED = ("nested", "nested_unread", "nested_deep", "nested_blocks")
+
+
 def test_the_store_serves_items_in_the_fuzz(tmp_path: Path) -> None:
     hits = {
         name: sum(_run(s, name, tmp_path, switch=False).hits for s in range(4))
         for name in TEMPLATES
     }
-    for name in ("if_forloop", "filters", "two_loops", "unpack", "dict", "inline_if"):
+    for name in ("if_forloop", "filters", "two_loops", "unpack", "dict", "inline_if") + NESTED:
         assert hits[name] > 0, hits
     # Refused bodies: cycle and ifchanged carry state across items, include
-    # reads the context, and a nested loop is refused outright (its content
-    # cache's placeholders must not be stored).
-    for name in ("cycle", "ifchanged", "include", "nested", "nested_unread", "regroup"):
+    # reads the context, and so does the inner loop of nested_outer.
+    for name in ("cycle", "ifchanged", "include", "nested_outer"):
         assert hits[name] == 0, hits
 
 
-@pytest.mark.parametrize("mode", [1, 2])
+def test_switched_off_nested_bodies_are_rendered(tmp_path: Path) -> None:
+    """``loop_item_nested`` off (#4325 WP4): a body with a nested loop is
+    refused, as before it, and the fuzz still matches."""
+    for name in NESTED:
+        for seed in range(2):
+            pair = _run(seed, name, tmp_path, switch=False, nested=False)
+            assert pair.mismatch is None, (name, seed, pair.mismatch)
+            assert pair.hits == 0, (name, seed)
+
+
+@pytest.mark.parametrize("mode", [1, 2, 3])
 def test_a_broken_store_fails_the_fuzz(tmp_path: Path, mode: int) -> None:
     """Sabotage 1 serves a stored item whatever its value; 2 ignores length
-    and environment. The fuzz must see both."""
+    and environment; 3 hashes a row's inner lists by kind only, so a nested
+    loop over a changed inner list is served stale (#4325 WP4). The fuzz
+    must see all three, and 3 on the nested templates."""
+    names = NESTED if mode == 3 else TEMPLATES
     found = [
         name
-        for name in TEMPLATES
+        for name in names
         for seed in range(4)
         if _run(seed, name, tmp_path, sabotage=mode).mismatch is not None
     ]

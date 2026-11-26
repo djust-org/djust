@@ -39,6 +39,17 @@ setting, and there is no supported way to do it.
                             index hashes the same and nothing else the body
                             reads changed (``LoopItemStore``, #4325). Off:
                             every item renders.
+``plain_model_scans``       The Rust sync does not scan a context list for a
+                            ``Model`` / ``QuerySet`` (``_holds_db_value``,
+                            ``_normalize_db_values``, the explicit JIT
+                            checks) when the post-event snapshot proved the
+                            very object plain data (#4325). Off: every list
+                            is scanned.
+``loop_item_nested``        That store also keeps items whose body holds a
+                            nested ``{% for %}`` reading only the loops'
+                            variables; a loop nested in an item being stored
+                            renders without the content cache (#4325). Off:
+                            such a body renders every item.
 ``unchanged_save_skip``     The automatic state (#4107) is not written to the
                             session when its encoding equals what the store
                             already holds (or, with nothing stored, what
@@ -59,9 +70,16 @@ setting, and there is no supported way to do it.
                             fingerprints, the request-scoped ones) is a 16-byte
                             digest of each fingerprint, not the fingerprint
                             tree (#3998). Off: the trees themselves.
+``native_fingerprints``    A plain-data container's fingerprint is a 16-byte
+                            digest computed in one Rust walk
+                            (``djust._rust.plain_digest``), with per-row
+                            digests for a list's item delta, in place of the
+                            Python tree and its BLAKE2b digest (#4325). Off
+                            (or with ``digest_fingerprints`` off): the tree.
 ==========================  ==================================================
 
-The last two change what a socket holds between turns, not what a turn does;
+``compact_fingerprints`` and ``digest_fingerprints`` change what a socket holds
+between turns, not what a turn does;
 they are here because the same oracle proves them (no frame may differ).
 """
 
@@ -79,9 +97,12 @@ ALL: FrozenSet[str] = frozenset(
         "snapshot_fingerprints",
         "list_item_deltas",
         "loop_item_render",
+        "plain_model_scans",
+        "loop_item_nested",
         "unchanged_save_skip",
         "compact_fingerprints",
         "digest_fingerprints",
+        "native_fingerprints",
         "deferred_save",
     }
 )

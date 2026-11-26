@@ -165,8 +165,12 @@ def _validate(field: str, value: str) -> str:
     return ""
 
 
-def _install_views(rows: int) -> Dict[Tuple[str, str], type]:
-    """Define the views in an importable module (djust mounts by dotted path)."""
+def _install_views(rows: int, table_body: str = "flat") -> Dict[Tuple[str, str], type]:
+    """Define the views in an importable module (djust mounts by dotted path).
+
+    ``table_body="nested"`` gives each table row a ``tags`` list rendered by a
+    nested ``{% for %}`` (#4325), so the row body exercises the per-item
+    store's nested-loop path; the ``table`` cell keeps its name and event."""
     import types
 
     from django.urls import include, path
@@ -207,13 +211,20 @@ def _install_views(rows: int) -> Dict[Tuple[str, str], type]:
                 self.values[field] = value
                 self.errors[field] = _validate(field, value)
 
+    nested_cell = (
+        "<td>{% for t in row.tags %}<i>{{ t }}</i>{% endfor %}</td>"
+        if table_body == "nested"
+        else ""
+    )
+
     class TableBody(LiveView):
         template = (
             "<div dj-root><h1>{{ title }}</h1><table>"
             '{% for row in items %}<tr id="row-{{ row.id }}"><td>{{ row.sku }}</td>'
             "<td>{{ row.name }}</td><td>{{ row.price }}</td><td>{{ row.qty }}</td>"
-            "<td>{% if row.active %}on{% else %}off{% endif %}</td></tr>"
-            "{% endfor %}</table></div>"
+            "<td>{% if row.active %}on{% else %}off{% endif %}</td>"
+            + nested_cell
+            + "</tr>{% endfor %}</table></div>"
         )
         title = state("")
         items = state(default_factory=list)
@@ -228,6 +239,7 @@ def _install_views(rows: int) -> Dict[Tuple[str, str], type]:
                     "price": round(i * 3.75, 2),
                     "qty": i % 7,
                     "active": i % 3 != 0,
+                    **({"tags": ["alpha", "t%d" % (i % 5)]} if nested_cell else {}),
                 }
                 for i in range(rows)
             ]
@@ -738,6 +750,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="save modes the RTT > 0 sweep runs (default: save, the shipped default)",
     )
     parser.add_argument("--rows", type=int, default=1000, help="table rows (default 1000)")
+    parser.add_argument(
+        "--table-body",
+        choices=("flat", "nested"),
+        default="flat",
+        help="nested: each table row also renders a nested {%% for %%} over its tags (#4325)",
+    )
     parser.add_argument("--no-memory", dest="memory", action="store_false")
     parser.add_argument(
         "--pages", type=int, default=5, help="pages open at once in the memory pass (default 5)"
@@ -768,7 +786,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 
 def _measure_and_report(args: argparse.Namespace) -> int:
-    _install_views(args.rows)
+    _install_views(args.rows, args.table_body)
     info = machine()
     print(
         "djust %(djust)s  python %(python)s  django %(django)s  %(cpu)s x%(cpus)s" % info,

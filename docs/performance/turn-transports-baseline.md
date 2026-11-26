@@ -345,6 +345,33 @@ off: turn p50 14.8-15.5 ms vs 19.6 ms (`nosave`), 16.0-16.2 ms vs 20.8-21.2 ms
 (`save`). The two-cell microbenchmark above: `render_with_diff` p50 3.6-3.8 ms
 vs 8.1-8.4 ms. The pre-event walk is what remains of the large items.
 
+**The render tail and the walks (train 2.0-ay).** Four further cuts, measured
+2026-11-26 on a different, slower machine (a shared 4-vCPU Xeon @ 2.30 GHz
+container, where the tip before them read 16.8-17.0 ms `nosave`; compare the
+deltas, not the absolute figures, with the rows above):
+
+* a native digest of plain data replaces the Python fingerprint walk and its
+  marshal + BLAKE2b digest (`native_fingerprints`);
+* the snapshot's plain-data proof skips the whole-list model scans
+  (`plain_model_scans`);
+* the text-region fast paths rewrite the previous VDOM's text nodes in place
+  instead of cloning the whole tree, and the per-item store hashes each item
+  in one walk and appends its stored HTML without copying it (no switch: the
+  output is identical);
+* the per-item store also keeps rows whose body holds a nested `{% for %}`
+  reading only the loops' variables (`loop_item_nested`).
+
+Same benchmark (`--shapes table --transports ws --modes nosave,save --rtt 0
+--rounds 80 --no-memory`), one changed cell in a 1,000-row list, turn p50:
+**7.2-8.8 ms `nosave`, 8.8-10.4 ms `save`** over four runs (load average
+1.8-3). That is under the 10 ms target for `nosave` on this machine, with
+little margin for `save`. On `RustLiveView` alone the one-cell render takes
+1.6-1.7 ms instead of 3.4-4.3 ms (the parse phase 0.9-1.1 ms to 0.05 ms).
+About 1 ms of each turn is the session reload that re-checks authentication
+on every event; it is kept on purpose. A table whose rows hold a nested loop
+(`--table-body nested`, measured before the native digest) drops from about 30 ms to about 17 ms with
+`loop_item_nested`.
+
 ## Reproduce
 
 ```sh
