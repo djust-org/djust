@@ -14,8 +14,9 @@ import pytest
 from django.test import override_settings
 
 from djust import LiveView
-from djust.decorators import state
 from djust.components.interactive import DropdownMenu
+from djust.decorators import state
+from djust.tests._frames import frame_matches
 
 CALLS: list = []
 
@@ -158,7 +159,7 @@ async def test_two_menus_dispatch_to_their_own_callbacks_over_websocket():
             for _ in range(8):
                 frame = await socket.receive_json_from()
                 frames.append(frame)
-                if frame.get("type") in kinds:
+                if frame_matches(frame, kinds):
                     return frames
             return frames
 

@@ -50,6 +50,7 @@ from django.utils.functional import SimpleLazyObject
 from djust import LiveView, event_handler, sse
 from djust.presence import PresenceManager, PresenceMixin
 from djust.sse import DjustSSEMessageView, DjustSSEStreamView, _sse_sessions
+from djust.tests._frames import frame_matches
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
 
@@ -314,7 +315,7 @@ async def _ws_until(communicator, *types, timeout=15.0):
         assert remaining > 0, "no frame of type %r; got %r" % (types, frames)
         frame = await communicator.receive_json_from(timeout=remaining)
         frames.append(frame)
-        if frame.get("type") in types:
+        if frame_matches(frame, types):
             return frames
 
 

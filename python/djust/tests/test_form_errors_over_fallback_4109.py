@@ -23,6 +23,7 @@ from asgiref.sync import sync_to_async
 from django.test import Client, override_settings
 
 from djust.tests import http_fallback_matrix as matrix
+from djust.tests._frames import frame_matches
 
 pytestmark = [pytest.mark.django_db(transaction=True)]
 
@@ -86,7 +87,7 @@ async def _socket(log: matrix.RenderLog) -> list[str]:
     async def until(types: tuple[str, ...]) -> dict:
         for _ in range(20):
             frame = json.loads(await comm.receive_from(timeout=30))
-            if frame.get("type") in types:
+            if frame_matches(frame, types):
                 return frame
         raise AssertionError("no frame of %r" % (types,))
 

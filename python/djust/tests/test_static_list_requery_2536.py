@@ -21,6 +21,7 @@ from django.test import override_settings
 
 from djust import LiveView
 from djust.decorators import event_handler, state
+from djust.tests._frames import frame_matches, legacy_type
 
 pytestmark = [pytest.mark.django_db(transaction=True)]
 
@@ -139,7 +140,7 @@ async def _recv_until(comm: Any, wanted: str, *, ref: Any = None) -> Dict[str, A
     last: Dict[str, Any] = {}
     for _ in range(8):
         last = await comm.receive_json_from()
-        if (last.get("type") == wanted or last.get("type") in _TERMINAL) and (
+        if (legacy_type(last) == wanted or frame_matches(last, _TERMINAL)) and (
             ref is None or last.get("ref") == ref
         ):
             return last

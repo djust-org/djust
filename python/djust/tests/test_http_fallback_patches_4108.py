@@ -25,6 +25,7 @@ from django.urls import path
 from djust import LiveView
 from djust.decorators import cache, event_handler, rate_limit, state
 from djust.tests import http_fallback_matrix as matrix
+from djust.tests._frames import is_ack, payloads_of
 from djust.tests.http_fallback_matrix import PAGE, answer_kind, meta_digest, post_event
 
 pytestmark = [
@@ -828,7 +829,7 @@ def test_a_pending_message_survives_a_request_that_answers_without_a_render(rend
 
     monkeypatch.setattr(Notices, "leave", event_handler(add_and_leave))
     first = _send(client, "/p/notices/", "leave", None)
-    assert first["_navigation"][0]["action"] == "live_redirect"
+    assert payloads_of(first, "navigation")[0]["action"] == "live_redirect"
     assert _pending(client) == ["for the next page"]
 
     # Now a request that echoes a digest, pre-renders (iterating the pending
@@ -839,7 +840,7 @@ def test_a_pending_message_survives_a_request_that_answers_without_a_render(rend
     before = len(renders.htmls)
     second = _send(client, "/p/notices/", "leave", digest)
     assert len(renders.htmls) - before == 1  # the pre-handler render ran
-    assert second["_navigation"][0]["action"] == "live_redirect"
+    assert payloads_of(second, "navigation")[0]["action"] == "live_redirect"
     assert _pending(client) == ["for the next page"]
 
 
@@ -847,7 +848,7 @@ def test_a_skipped_render_after_the_pre_render_answers_as_before(renders):
     client, digest = _open("/p/notices/")
     answer, count = _counted(renders, client, "/p/notices/", "quiet", digest)
     assert count == 1  # only the pre-handler render
-    assert answer["patches"] == [] and "version" not in answer and "render_digest" not in answer
+    assert is_ack(answer) and "version" not in answer and "render_digest" not in answer
     # The state moved without a render: the client's page is stale, and the
     # digest it still holds says so.
     assert _is_whole_page_of(_send(client, "/p/notices/", "increment", digest), ">2</b>")

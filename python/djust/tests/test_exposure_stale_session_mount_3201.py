@@ -21,6 +21,7 @@ from django.contrib.sessions.backends.db import SessionStore
 from django.test import override_settings
 
 from djust._exposure_sessions import server_state_adapter
+from djust.tests._frames import legacy_type
 from djust.tests.test_exposure_runtime import RuntimeView, make_request
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
@@ -37,6 +38,7 @@ def staged(monkeypatch):
 
 async def _connect(session, user=None):
     from channels.testing import WebsocketCommunicator
+
     from djust.websocket import LiveViewConsumer
 
     comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
@@ -73,7 +75,7 @@ async def _persisted_then_deleted_session_key():
             assert frame["type"] == "mount", frame
             await comm.send_json_to({"type": "event", "event": "increment", "params": {}})
             reply = await comm.receive_json_from()
-            assert reply["type"] in {"patch", "html_update"}, reply
+            assert legacy_type(reply) in {"patch", "html_update"}, reply
         finally:
             await comm.disconnect()
     await sync_to_async(SessionStore(key).delete)()
@@ -95,7 +97,7 @@ async def test_mount_with_a_vanished_session_mounts_fresh_and_works(staged):
             # authorize, persist, and acknowledge.
             await comm.send_json_to({"type": "event", "event": "increment", "params": {}})
             reply = await comm.receive_json_from()
-            assert reply["type"] in {"patch", "html_update"}, reply
+            assert legacy_type(reply) in {"patch", "html_update"}, reply
         finally:
             await comm.disconnect()
     # The vanished key was not resurrected with new data.
@@ -121,7 +123,7 @@ async def test_flushed_cache_session_mounts_fresh(staged):
             assert frame["type"] == "mount", frame
             await comm.send_json_to({"type": "event", "event": "increment", "params": {}})
             reply = await comm.receive_json_from()
-            assert reply["type"] in {"patch", "html_update"}, reply
+            assert legacy_type(reply) in {"patch", "html_update"}, reply
         finally:
             await comm.disconnect()
 
@@ -141,7 +143,7 @@ async def test_vanished_session_state_lands_in_a_new_session_only(staged):
             assert frame["type"] == "mount", frame
             await comm.send_json_to({"type": "event", "event": "increment", "params": {}})
             reply = await comm.receive_json_from()
-            assert reply["type"] in {"patch", "html_update"}, reply
+            assert legacy_type(reply) in {"patch", "html_update"}, reply
         finally:
             await comm.disconnect()
     created = await sync_to_async(keys)() - before
@@ -203,7 +205,7 @@ async def test_an_existing_session_keeps_its_identity(staged):
             assert frame["type"] == "mount", frame
             await comm.send_json_to({"type": "event", "event": "increment", "params": {}})
             reply = await comm.receive_json_from()
-            assert reply["type"] in {"patch", "html_update"}, reply
+            assert legacy_type(reply) in {"patch", "html_update"}, reply
         finally:
             await comm.disconnect()
     # No replacement session was created, and the state went to the live one.
@@ -330,6 +332,6 @@ async def test_vanished_cached_db_session_mounts_fresh(staged):
             assert frame["type"] == "mount", frame
             await comm.send_json_to({"type": "event", "event": "increment", "params": {}})
             reply = await comm.receive_json_from()
-            assert reply["type"] in {"patch", "html_update"}, reply
+            assert legacy_type(reply) in {"patch", "html_update"}, reply
         finally:
             await comm.disconnect()

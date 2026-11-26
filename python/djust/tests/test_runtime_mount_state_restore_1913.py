@@ -27,9 +27,9 @@ import pytest
 from asgiref.sync import sync_to_async
 from django.test import override_settings
 
-from djust import LiveView
+from djust import LiveView, state
 from djust.runtime import ViewRuntime
-from djust import state
+from djust.tests._frames import effects_of
 
 pytestmark = pytest.mark.django_db
 
@@ -94,7 +94,7 @@ class MockTransport:
 
     @property
     def navigate_frames(self) -> List[Dict[str, Any]]:
-        return [m for m in self.sent if m.get("type") == "navigate"]
+        return [m for m in effects_of(self.sent, "navigate")]
 
 
 # --------------------------------------------------------------------------- #

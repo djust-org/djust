@@ -33,6 +33,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
+from djust._protocol import PROTOCOL_HEADER, PROTOCOL_VERSION
+
 ROOT = Path(__file__).resolve().parents[3]
 #: A hang guard, never an expectation: only a broken run waits this long.
 HANG_GUARD_S = 120
@@ -437,7 +439,8 @@ class Browser:
     def __init__(self, cluster: Cluster, headers: Optional[Dict[str, str]] = None) -> None:
         self.cluster = cluster
         self.cookies: Dict[str, str] = {}
-        self.headers = dict(headers or {})
+        # client.js names its wire protocol on every POST and the SSE GET (#3658).
+        self.headers = {PROTOCOL_HEADER: str(PROTOCOL_VERSION), **dict(headers or {})}
         # The tab id each page load carried (#4106), by path: what client.js
         # reads from the page and sends back on its mount and its POSTs.
         self.tabs: Dict[str, str] = {}
@@ -590,6 +593,7 @@ class Socket:
             "url": parts.path,
             "has_prerendered": True,
             "tab": self.browser.tab(parts.path),
+            "protocol": PROTOCOL_VERSION,
         }
         if reconnect_from is not None:
             frame["reconnect"] = True
@@ -662,7 +666,14 @@ class SSEStream:
         if browser.cookies:
             headers["Cookie"] = browser._cookie_header()
         headers["Accept"] = "text/event-stream"
-        query = urlencode({"view": view, "_djust_url": url, "_djust_tab": browser.tab(url)})
+        query = urlencode(
+            {
+                "view": view,
+                "_djust_url": url,
+                "_djust_tab": browser.tab(url),
+                "protocol": PROTOCOL_VERSION,
+            }
+        )
         self.conn = http.client.HTTPConnection("127.0.0.1", port, timeout=HANG_GUARD_S)
         self.conn.request("GET", "/djust/sse/%s/?%s" % (self.session_id, query), headers=headers)
         self.response = self.conn.getresponse()
@@ -717,5 +728,16 @@ def probe_from(frames: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
 
 
 def kinds(frames: List[Dict[str, Any]]) -> List[str]:
-    """The ``type`` of each frame, without ``connect`` and push frames."""
-    return [f.get("type") for f in frames if f.get("type") not in ("connect", "push_event")]
+    """The ``type`` of each frame, without ``connect`` and effects-only frames.
+
+    A ``render`` frame (#3658) is named by its DOM part's 1.x name (``patch``,
+    ``html_update``, ``embedded_update``, ``noop``); one with no DOM part and
+    no ``ref`` only carries effects (the old push frames) and is left out.
+    """
+    from djust.tests._frames import is_ack, legacy_type
+
+    return [
+        legacy_type(f)
+        for f in frames
+        if f.get("type") != "connect" and not (is_ack(f) and "ref" not in f)
+    ]

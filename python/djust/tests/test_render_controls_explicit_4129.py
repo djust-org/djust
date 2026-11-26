@@ -26,6 +26,7 @@ from django.test import RequestFactory
 from djust import LiveView, _automatic_state
 from djust.decorators import event_handler, state
 from djust.tests import _per_turn_harness as harness
+from djust.tests._frames import frame_matches, legacy_type
 
 MODULE = __name__
 
@@ -145,7 +146,7 @@ async def _sse(events: List[str]) -> List[dict]:
                 answer = await DjustSSEMessageView().post(posted, session_id=sid)
                 assert answer.status_code in (200, 202, 204), answer.content
                 _drain(session, sent)
-                replies = [f for f in sent[before:] if f.get("type") in harness.REPLY_TYPES]
+                replies = [f for f in sent[before:] if frame_matches(f, harness.REPLY_TYPES)]
                 assert replies, sent[before:]
                 frames.append(replies[-1])
         finally:
@@ -168,15 +169,15 @@ def _check_reset(frames: List[dict]) -> None:
     and none reaches the turn after."""
     save, quiet, after = frames
     assert save.get("reset_form") is True, save
-    assert quiet.get("type") == "noop" or not (quiet.get("patches") or quiet.get("html")), quiet
+    assert legacy_type(quiet) == "noop" or not (quiet.get("patches") or quiet.get("html")), quiet
     assert quiet.get("reset_form") is True, quiet
     assert "reset_form" not in after, after
 
 
 def _check_skip_then_render(frames: List[dict]) -> None:
     quiet, loud = frames
-    assert quiet["type"] == "noop", quiet
-    assert loud["type"] in ("patch", "html_update"), loud
+    assert legacy_type(quiet) == "noop", quiet
+    assert legacy_type(loud) in ("patch", "html_update"), loud
     shown = json.dumps(loud.get("patches") or loud.get("html"))
     assert "3" in shown, loud  # bump, bump_quietly, bump: the browser must show 3
 
@@ -206,11 +207,11 @@ async def test_websocket_skip_render_then_a_render_patches_from_the_shown_page()
     _check_skip_then_render([quiet, loud])
     if "version" in first and "version" in loud:
         assert loud["version"] == first["version"] + 1, (first, loud)
-    assert "SetText" in json.dumps(loud.get("patches")) or loud["type"] == "html_update"
+    assert "SetText" in json.dumps(loud.get("patches")) or legacy_type(loud) == "html_update"
 
 
 @pytest.mark.django_db
 def test_fallback_skip_render_then_a_render_patches_from_the_shown_page():
     _first, quiet, loud = _fallback(["bump", "bump_quietly", "bump"])
-    assert quiet.get("type") == "noop" or not (quiet.get("patches") or quiet.get("html")), quiet
+    assert legacy_type(quiet) == "noop" or not (quiet.get("patches") or quiet.get("html")), quiet
     assert "3" in json.dumps(loud.get("patches") or loud.get("html")), loud

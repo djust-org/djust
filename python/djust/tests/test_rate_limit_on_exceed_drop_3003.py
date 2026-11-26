@@ -13,13 +13,13 @@ import sys
 import pytest
 from django.test import override_settings
 
-from djust import LiveView
+from djust import LiveView, state
 from djust.config import config
 from djust.decorators import event_handler, rate_limit
 from djust.rate_limit import reset_handler_buckets
-from djust.tests._ws_frames import receive_until
-from djust import state
 from djust.testing import with_live_session
+from djust.tests._frames import frame_matches, legacy_type
+from djust.tests._ws_frames import receive_until
 
 #: Handler runs, by name: a dropped event must not reach the handler.
 RAN: list = []
@@ -93,7 +93,7 @@ async def _send(comm, event):
     await comm.send_json_to({"type": "event", "event": event, "params": {}})
     frames = await receive_until(
         comm,
-        lambda got: any(f.get("type") in _ANSWERS for f in got),
+        lambda got: any(frame_matches(f, _ANSWERS) for f in got),
         what="the answer to %r" % event,
         allow_close=True,
     )
@@ -104,7 +104,7 @@ async def _send(comm, event):
 
 
 def _types(frames):
-    return [f.get("type") for f in frames]
+    return [legacy_type(f) for f in frames]
 
 
 @pytest.mark.django_db

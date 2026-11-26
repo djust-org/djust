@@ -24,17 +24,18 @@ from html.parser import HTMLParser
 from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
-from django import forms
 from asgiref.sync import sync_to_async
+from django import forms
 from django.conf import settings
 from django.test import Client
 from django.urls import path
-
-from djust.admin_ext import DjustAdminSite, DjustModelAdmin
-from djust.tests.test_admin_page_render import _Socket, _session_cookie
-from djust.tests.test_framework_classes_explicit_4185 import _post, _sse_request, _tab
 from djust_rentals.models import Property
+
 from djust._parameter_metadata import expand_parameter_manifest
+from djust.admin_ext import DjustAdminSite, DjustModelAdmin
+from djust.tests._frames import effects_of, frame_matches, payloads_of
+from djust.tests.test_admin_page_render import _session_cookie, _Socket
+from djust.tests.test_framework_classes_explicit_4185 import _post, _sse_request, _tab
 
 pytestmark = pytest.mark.admin
 
@@ -357,12 +358,16 @@ class _Run:
         return page.content.decode()
 
     def _seen(self, frame: dict) -> bool:
-        """Record a navigation frame; True when ``frame`` answers the event."""
-        if frame.get("type") == "navigation":
-            if frame.get("action") == "live_redirect":
-                self.navigation.append(frame["path"])
-            return False
-        return frame.get("type") in _ANSWERS
+        """Record a frame's navigation; True when ``frame`` answers the event.
+
+        Since #3658 the navigation rides in a ``render`` frame's ``effects``:
+        the event's own answer (it names the event) or an effects-only frame
+        (a deferred callback's), which answers nothing.
+        """
+        for nav in effects_of(frame, "navigation"):
+            if nav.get("action") == "live_redirect":
+                self.navigation.append(nav["path"])
+        return not _effects_only(frame) and frame_matches(frame, _ANSWERS)
 
     async def play(self, events: list) -> List[dict]:
         if self.transport == "websocket":
@@ -386,7 +391,7 @@ class _Run:
                 answer = await sync_to_async(_post)(self.browser, self.url, name, params, self._tab)
                 self.navigation.extend(
                     n["path"]
-                    for n in answer.get("_navigation", [])
+                    for n in payloads_of(answer, "navigation")
                     if n["action"] == "live_redirect"
                 )
                 self.answers.append(answer)
@@ -462,10 +467,14 @@ class _Run:
                 if answer is None:
                     raise AssertionError("no %s frame" % (types,))
                 return answer
-            if frame.get("type") == "navigation":
-                self._seen(frame)
-            elif answer is None and frame.get("type") in types:
+            self._seen(frame)
+            if answer is None and frame_matches(frame, types) and not _effects_only(frame):
                 answer = frame
+
+
+def _effects_only(frame: dict) -> bool:
+    """A ``render`` frame that answers no event (#3658): a deferred callback's effects."""
+    return frame.get("type") == "render" and "event_name" not in frame and "ref" not in frame
 
 
 def _refusals(answers: List[dict]) -> List[dict]:
@@ -590,7 +599,7 @@ async def test_each_button_goes_where_it_says(site_urls, django_user_model, butt
     assert await _saved(row.pk) == ("Typed name", "condo", True)
     navigation = [
         frame["path"]
-        for frame in answers[-1].get("_navigation", [])
+        for frame in payloads_of(answers[-1], "navigation")
         if frame.get("action") == "live_redirect"
     ]
     if goes_to is None:
@@ -808,7 +817,7 @@ async def test_a_delete_permission_that_reads_the_row(
         if not refused:
             run.navigation.extend(
                 n["path"]
-                for n in json.loads(response.content).get("_navigation", [])
+                for n in payloads_of(json.loads(response.content), "navigation")
                 if n["action"] == "live_redirect"
             )
     else:

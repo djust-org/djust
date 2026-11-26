@@ -12,6 +12,7 @@ import pytest
 
 from djust import LiveView
 from djust.decorators import event_handler
+from djust.tests._frames import legacy_type
 from djust.tests.test_skip_render_force_parity_2834 import _mounted_consumer
 from djust.tests.test_transport_behavioral_parity import _mounted_event_runtime
 
@@ -19,11 +20,11 @@ _HERE = "djust.tests.test_public_apis_4129"
 
 
 def _updates(sent):
-    return [f for f in sent if f.get("type") in ("patch", "html_update")]
+    return [f for f in sent if legacy_type(f) in ("patch", "html_update")]
 
 
 def _noops(sent):
-    return [f for f in sent if f.get("type") == "noop"]
+    return [f for f in sent if legacy_type(f) == "noop"]
 
 
 class _Base(LiveView):
@@ -102,7 +103,7 @@ class TestRenderControls:
 
     async def test_request_full_render_renders_a_turn_that_changed_no_state(self):
         _view, sent = await _run(RenderControlView(), "db_only")
-        assert [f["type"] for f in _updates(sent)] == ["html_update"], sent
+        assert [legacy_type(f) for f in _updates(sent)] == ["html_update"], sent
 
     async def test_without_the_request_the_same_turn_is_skipped(self):
         """Control for the test above: the render comes from the request."""
@@ -124,7 +125,7 @@ class TestRenderControls:
         await runtime.dispatch_event(
             {"type": "event", "event": "request_then_cancel", "params": {}}
         )
-        assert [f["type"] for f in _updates(transport.sent)] == ["html_update"], transport.sent
+        assert [legacy_type(f) for f in _updates(transport.sent)] == ["html_update"], transport.sent
 
     async def test_a_cancel_in_a_later_turn_does_not_reach_back(self):
         """The request of an earlier turn is settled when that turn ends: a
@@ -137,7 +138,7 @@ class TestRenderControls:
         transport.sent.clear()
         view._force_full_html = True  # framework-required, between turns
         await runtime.dispatch_event({"type": "event", "event": "cancel_only", "params": {}})
-        assert [f["type"] for f in _updates(transport.sent)] == ["html_update"], transport.sent
+        assert [legacy_type(f) for f in _updates(transport.sent)] == ["html_update"], transport.sent
 
     async def test_reset_submitted_form_reaches_the_client(self):
         view, sent = await _run(RenderControlView(), "reset")

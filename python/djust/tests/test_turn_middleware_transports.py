@@ -12,8 +12,8 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import json
-import uuid
 import sys
+import uuid
 from typing import Any, Dict, List
 
 import pytest
@@ -24,6 +24,7 @@ from django.urls import path
 
 from djust import LiveView, turns
 from djust.decorators import background, event_handler
+from djust.tests._frames import effects_of, legacy_type
 from djust.turns import Refuse
 
 pytest.importorskip("channels")
@@ -241,7 +242,7 @@ async def _ws(view="TurnView", *, mount_extra=None, expect_mount=True):
     await comm.send_json_to(frame)
     first = await _frames(comm, 0.6)
     if expect_mount:
-        assert any(f.get("type") in ("mount", "html_update", "patch") for f in first), first
+        assert any(legacy_type(f) in ("mount", "html_update", "patch") for f in first), first
     return comm, first
 
 
@@ -278,7 +279,7 @@ async def test_ws_every_client_and_server_turn_runs_the_chain():
         await comm.send_input({"type": "client_push_event", "event": "hi", "payload": {}})
         pushed = await _frames(comm)
         assert any(f.get("type") == "presence_event" for f in pushed)
-        assert any(f.get("type") == "push_event" for f in pushed)
+        assert effects_of(pushed, "push_event")
 
         await comm.send_json_to({"type": "request_html"})
         await _frames(comm)
@@ -380,7 +381,7 @@ async def test_ws_mount_refused_with_login_navigates_and_closes():
     frames += await _frames(comm)
     await _close(comm)
     assert "mount" not in SEEN
-    assert {"type": "navigate", "to": "/login/"} in frames
+    assert {"kind": "navigate", "to": "/login/"} in effects_of(frames)
     assert {"__close__": 4403} in frames
 
 
@@ -393,8 +394,11 @@ async def test_ws_flash_refusal_keeps_the_socket():
     finally:
         await _close(comm)
     assert "event" not in SEEN
-    assert {"type": "flash", "action": "put", "level": "warning", "message": "Slow down"} in frames
-    assert any(f.get("type") == "noop" and f.get("ref") == 4 for f in frames)
+    # The refusal is one render ack for ref 4 carrying the flash (#3658).
+    [refusal] = [f for f in frames if legacy_type(f) == "noop" and f.get("ref") == 4]
+    assert effects_of(refusal, "flash") == [
+        {"kind": "flash", "action": "put", "level": "warning", "message": "Slow down"}
+    ]
     assert not any("__close__" in f for f in frames)
 
 
@@ -412,7 +416,7 @@ async def test_ws_refused_push_applies_nothing_and_sends_nothing():
     assert "server_push" not in SEEN
     assert frames == []
     assert SEEN["event"][0] == "caller-for-event"
-    assert any(f.get("type") in ("patch", "html_update") for f in later)
+    assert any(legacy_type(f) in ("patch", "html_update") for f in later)
 
 
 async def test_ws_permission_denied_from_middleware_is_a_deny():

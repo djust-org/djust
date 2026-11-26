@@ -359,7 +359,8 @@ async def test_recovery_after_an_elided_frame_holds_the_full_manifest():
     sent: List[Dict[str, Any]] = []
     for version in (1, 2):
         frame = {
-            "type": "patch",
+            "type": "render",
+            "patches": [],
             "version": version,
             "parameter_contracts": manifest,
             "parameter_contract_view": "x.V",

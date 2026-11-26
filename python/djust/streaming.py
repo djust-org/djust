@@ -359,31 +359,26 @@ class StreamingMixin:
         # at send time so WS keeps its counter order (#4256).
         rendered_html = html
 
+        from ._render_frame import drain_effects, render_frame
+
         if patches is not None:
             patch_list = json.loads(patches) if patches else []
-            await send(
-                {
-                    "type": "patch",
-                    "patches": patch_list,
-                    "version": next_version(rendered_html, _version),
-                    **snapshot,
-                }
-            )
+            dom: Dict[str, Any] = {"patches": patch_list}
         else:
             html = await sync_to_async(self._strip_comments_and_whitespace)(html)
             html = await sync_to_async(self._extract_liveview_content)(html)
-            await send(
-                {
-                    "type": "html_update",
-                    "html": html,
-                    "version": next_version(rendered_html, _version),
-                    **snapshot,
-                }
+            dom = {"html": html}
+        # One frame (#3658): the render and the push events queued so far
+        # (only those, as before: the turn end sends the rest).
+        await send(
+            render_frame(
+                effects=drain_effects(self, kinds=("push_event",)),
+                source="push_state",
+                **dom,
+                version=next_version(rendered_html, _version),
+                **snapshot,
             )
-        if consumer is not None:
-            await consumer._flush_push_events()
-        else:
-            await self.flush_push_events()
+        )
 
     def _normalize_stream_html(self, html: str) -> str:
         """Normalize a re-rendered stream fragment like the LiveView template (#2999).

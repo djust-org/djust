@@ -137,7 +137,9 @@ async def _save_on(admin: Admin, url: str, typed: dict, button: str | None) -> l
 
 def _navigation(answer: dict) -> list:
     return [
-        n["path"] for n in answer["answer"].get("_navigation", []) if n["action"] == "live_redirect"
+        n["path"]
+        for n in answer["answer"].get("effects", [])
+        if n["kind"] == "navigation" and n["action"] == "live_redirect"
     ]
 
 

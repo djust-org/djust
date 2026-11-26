@@ -40,6 +40,8 @@ import sys
 
 import pytest
 
+from djust.tests._frames import effects_of, frame_matches
+
 pytest.importorskip("channels")
 
 from django.core.exceptions import PermissionDenied  # noqa: E402
@@ -424,7 +426,7 @@ class TestWebSocketMountSequence:
         await communicator.send_json_to({"type": "mount", "view": _LOGIN_PATH, "url": "/secret/"})
 
         nav = await communicator.receive_json_from()
-        assert nav.get("type") == "navigate", f"expected navigate redirect, got {nav!r}"
+        assert frame_matches(nav, "navigate"), f"expected navigate redirect, got {nav!r}"
         out = await communicator.receive_output()
         assert out["type"] == "websocket.close" and out.get("code") == 4403, (
             f"socket not closed 4403 after auth redirect: {out!r}"
@@ -456,7 +458,7 @@ class TestWebSocketMountSequence:
                 {"type": "mount", "view": _LOGIN_PATH, "url": "/secret/"}
             )
             nav = await communicator.receive_json_from()
-            assert nav.get("type") == "navigate", f"{attempt}: {nav!r}"
+            assert frame_matches(nav, "navigate"), f"{attempt}: {nav!r}"
             out = await communicator.receive_output()
             assert out["type"] == "websocket.close" and out.get("code") == 4403, (
                 f"{attempt}: socket not closed 4403 after auth redirect: {out!r}"
@@ -564,7 +566,6 @@ class _MockTransport:
 class TestRuntimeMountSequence:
     async def test_authed_normal_mount_succeeds(self):
         from djust.runtime import ViewRuntime
-
         from djust.tests._live_session import amount_on_runtime
 
         transport = _MockTransport()
@@ -586,7 +587,7 @@ class TestRuntimeMountSequence:
         await runtime.dispatch_mount(
             {"type": "mount", "view": _LOGIN_PATH, "params": {}, "url": "/secret/"}
         )
-        types = [m.get("type") for m in transport.sent]
+        types = [e["kind"] for e in effects_of(transport.sent)]
         assert "navigate" in types, f"runtime did not redirect anon: {transport.sent!r}"
         assert runtime.view_instance is None, "denied mount left a usable view_instance"
 
@@ -645,10 +646,10 @@ class TestSSEMountSequence:
     async def test_authed_normal_mount_succeeds(self):
         import uuid
 
-        from djust.sse import SSESession
-
         from asgiref.sync import sync_to_async
         from django.contrib.auth import get_user_model
+
+        from djust.sse import SSESession
 
         user = await sync_to_async(get_user_model().objects.create_user)(
             "seq1853-sse", password="x"
@@ -678,7 +679,7 @@ class TestSSEMountSequence:
         msgs = []
         while not session.queue.empty():
             msgs.append(session.queue.get_nowait())
-        assert any(m and m.get("type") == "navigate" for m in msgs), (
+        assert any(m and frame_matches(m, "navigate") for m in msgs), (
             f"expected a navigate redirect over SSE, got {msgs!r}"
         )
 

@@ -17,6 +17,7 @@ from django.template import Context, Template, TemplateSyntaxError
 from djust import LiveView, event_handler
 from djust._exposure import ExposureError
 from djust.decorators import state
+from djust.tests._frames import legacy_type
 from djust.tests.test_exposure_child_events import mount
 from djust.tests.test_exposure_child_mount import make_request
 
@@ -100,7 +101,7 @@ async def test_transient_child_renders_handles_events_and_writes_no_state():
         {"type": "event", "event": "increment", "params": {"view_id": "ns"}}
     )
     assert not transport.errors, transport.errors
-    updates = [f for f in transport.sent if f.get("type") == "embedded_update"]
+    updates = [f for f in transport.sent if legacy_type(f) == "embedded_update"]
     assert len(updates) == 1 and updates[0]["view_id"] == "ns"
     assert "Transient=2" in updates[0]["html"]
 
@@ -132,7 +133,7 @@ async def test_transient_child_event_is_refused_when_identity_changes():
     )
     assert child.count == 1
     assert transport.errors and transport.errors[-1]["code"] == "permission_denied"
-    assert not any(f.get("type") == "embedded_update" for f in transport.sent)
+    assert not any(legacy_type(f) == "embedded_update" for f in transport.sent)
 
 
 @pytest.mark.asyncio

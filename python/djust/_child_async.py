@@ -117,17 +117,19 @@ async def _execute_body(
                 ):
                     return
                 _check_owner(runtime, root, child, generation)
+                # One frame: the child's HTML with the root's effects, then
+                # the child's (#3658).
                 await runtime._send_render_frame(
                     {
-                        "type": "embedded_update",
                         "view_id": child._view_id,
                         "html": html,
                         "event_name": event_name,
                         "source": "async",
-                    }
+                    },
+                    root,
+                    child,
                 )
-                await runtime._flush_all_pending()
-                runtime._flush_push_events(child)
+                await runtime._flush_all_pending("async", root, child)
 
             await runtime._run_async_result_turn(root, name, complete)
     except Exception:  # noqa: BLE001 — no provider/callback exception values on the wire/log

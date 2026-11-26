@@ -35,6 +35,7 @@ import pytest
 
 from djust import LiveView
 from djust.decorators import event_handler, state
+from djust.tests._frames import legacy_type
 
 from .test_stream_only_handlers_3639 import drive as _drive_over_a_real_socket
 
@@ -173,14 +174,14 @@ async def drive(view, events):
 
 
 def kinds(frame):
-    return [p["type"] for p in frame.get("patches") or []]
+    return [legacy_type(p) for p in frame.get("patches") or []]
 
 
 @pytest.mark.asyncio
 class TestAssignedRowsReachThePage:
     async def test_a_row_assigned_next_to_another_change_is_appended(self):
         (frame,) = await drive("Temp", ["add"])
-        assert frame["type"] == "patch", frame
+        assert legacy_type(frame) == "patch", frame
         inserts = [p for p in frame["patches"] if p["type"] == "InsertChild"]
         assert len(inserts) == 1 and inserts[0]["index"] == len(ROWS), frame
         assert "RemoveChild" not in kinds(frame), frame
@@ -199,14 +200,14 @@ class TestAssignedRowsReachThePage:
     async def test_a_row_assigned_as_the_only_change_is_appended_not_swapped_in(self):
         """Before: the first row was rewritten to the new one and the rest removed."""
         (frame,) = await drive("Temp", ["add_only"])
-        assert frame["type"] == "patch", frame
+        assert legacy_type(frame) == "patch", frame
         assert kinds(frame) == ["InsertChild"], frame
         assert frame["patches"][0]["index"] == len(ROWS), frame
 
     async def test_a_template_that_reads_only_the_rows_gets_the_row(self):
         """The issue's second example: ``patches: []`` before."""
         (frame,) = await drive("TempNoK", ["add"])
-        assert frame["type"] == "patch", frame
+        assert legacy_type(frame) == "patch", frame
         assert kinds(frame) == ["InsertChild"], frame
 
     async def test_two_assigned_rows_are_both_appended_in_order(self):
@@ -251,7 +252,7 @@ class TestTheResetIsStillNotAChange:
 
     async def test_an_event_that_changes_nothing_is_a_noop(self):
         (frame,) = await drive("Temp", ["idle"])
-        assert frame["type"] == "noop", frame
+        assert legacy_type(frame) == "noop", frame
 
     async def test_assigning_the_default_back_changes_nothing_on_the_page(self):
         (frame,) = await drive("Temp", ["clear_rows"])
@@ -279,13 +280,13 @@ class TestWhatTheGateLeavesAlone:
 class TestStreamsOnAViewWithTemporaryAssigns:
     async def test_a_stream_insert_alone_is_appended_after_the_stored_rows(self):
         (frame,) = await drive("TempStream", ["ins"])
-        assert frame["type"] == "patch", frame
+        assert legacy_type(frame) == "patch", frame
         assert kinds(frame) == ["InsertChild"], frame
         assert frame["patches"][0]["index"] == len(ROWS), frame
 
     async def test_an_idle_event_after_it_is_still_a_noop(self):
         _ins, idle = await drive("TempStream", ["ins", "idle"])
-        assert idle["type"] == "noop", idle
+        assert legacy_type(idle) == "noop", idle
 
 
 class TempBanner(Temp):
@@ -372,7 +373,7 @@ class TestOnlyAContainerFedByATemporaryKeyAccumulates:
 class TestAContainerThatMovesKeepsItsRows:
     async def test_a_block_appearing_before_the_list_does_not_wipe_the_stored_rows(self):
         (frame,) = await drive("TempBanner", ["banner_and_add"])
-        assert frame["type"] == "patch", frame
+        assert legacy_type(frame) == "patch", frame
         # Before: three RemoveChild for the stored rows and nothing re-added.
         removed_rows = [
             p for p in frame["patches"] if p["type"] == "RemoveChild" and p["path"] != []

@@ -10,11 +10,11 @@ Legacy sessions keep their previous frame shape.
 
 import pytest
 
-from djust import LiveView
-from djust.decorators import event_handler
-from djust.tests.test_ws_send_version_1788 import _receive_until
-from djust import state
+from djust import LiveView, state
 from djust._parameter_metadata import expand_parameter_manifest
+from djust.decorators import event_handler
+from djust.tests._frames import legacy_type
+from djust.tests.test_ws_send_version_1788 import _receive_until
 
 _BODY = ["Count: {{ count }}"]
 
@@ -155,7 +155,7 @@ async def test_push_state_frame_carries_the_contract_snapshot():
                 {"type": "event", "event": "work", "params": {}, "ref": 1}
             )
             pushed = await communicator.receive_json_from()
-            assert pushed["type"] in ("patch", "html_update"), pushed
+            assert legacy_type(pushed) in ("patch", "html_update"), pushed
             assert "Step: 1" in str(pushed) or pushed.get("patches"), pushed
             # Unchanged since the mount: sent as its digest (#4307).
             assert pushed["parameter_contracts"] == mount["parameter_contracts"]["digest"]

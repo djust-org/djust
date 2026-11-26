@@ -953,7 +953,7 @@ class SSESession:
                         self.view_instance = None
                         self.shutdown()
                     else:
-                        await self.runtime._flush_all_pending()
+                        await self.runtime._flush_all_pending("mount")
                 finally:
                     if untrack_after_mount:
                         # Same-room navigation: the new page joined the room as

@@ -34,6 +34,7 @@ from django.test import override_settings
 from djust import LiveView, event_handler
 from djust.decorators import state
 from djust.runtime import ViewRuntime
+from djust.tests._frames import legacy_type
 from djust.tests.test_exposure_runtime import make_request
 from djust.tests.test_runtime_state_save_tt_1894 import MockTransport
 from djust.wizard import WizardMixin
@@ -156,7 +157,7 @@ async def event(runtime, transport, name, **params):
     transport.sent.clear()
     await runtime.dispatch_event({"type": "event", "event": name, "params": params})
     assert not transport.errors, transport.errors
-    return [frame.get("type") for frame in transport.sent], json.dumps(transport.sent)
+    return [legacy_type(frame) for frame in transport.sent], json.dumps(transport.sent)
 
 
 def _render_types(types):
@@ -359,7 +360,7 @@ async def test_django_and_rust_render_the_same_change_identically(children):
 
     runtime, transport = await mount(ExplicitParent)
     await event(runtime, transport, "bump", view_id="menu")
-    frame = next(f for f in transport.sent if f.get("type") == "embedded_update")
+    frame = next(f for f in transport.sent if legacy_type(f) == "embedded_update")
     child = runtime.view_instance._get_child_view("menu")
     context = {k: child.get_context_data()[k] for k in ("doubled", "label")}
     rust = render_template(child.template, context)

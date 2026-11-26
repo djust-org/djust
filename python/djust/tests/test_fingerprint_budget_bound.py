@@ -2,12 +2,13 @@
 
 import pytest
 
+from djust import state
 from djust.change_detection import deep_fingerprint
 from djust.decorators import event_handler
 from djust.live_view import LiveView
 from djust.state_pass import fingerprint_and_convert
+from djust.tests._frames import legacy_type
 from djust.websocket import _snapshot_assigns
-from djust import state
 
 
 def test_wide_container_fingerprint_is_bounded_and_fused_matches():
@@ -78,6 +79,7 @@ class LargeTailView(LiveView):
 @pytest.mark.asyncio
 async def test_tail_mutation_reaches_browser_on_real_event():
     from django.test import override_settings
+
     from .test_in_place_mutation_2664 import _mounted, _receive_until
 
     with override_settings(LIVEVIEW_ALLOWED_MODULES=[__name__], DJUST_CONFIG={}):
@@ -87,7 +89,7 @@ async def test_tail_mutation_reaches_browser_on_real_event():
                 {"type": "event", "event": "change_tail", "params": {}, "ref": 1}
             )
             frame = await _receive_until(socket, {"patch", "html_update", "noop"})
-            assert frame["type"] in ("patch", "html_update")
+            assert legacy_type(frame) in ("patch", "html_update")
             assert "after" in str(frame)
         finally:
             await socket.disconnect()

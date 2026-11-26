@@ -17,6 +17,7 @@ from channels.testing import WebsocketCommunicator
 from django.test import override_settings
 
 from djust import LiveView, event_handler, state
+from djust.tests._frames import legacy_type
 from djust.websocket import LiveViewConsumer
 
 from ._ws_frames import drain_extra, has_frame, has_type, receive_until
@@ -131,7 +132,7 @@ class _Socket:
     async def queue_kid_bump(self, ref=1):
         await self.send("bump", ref, view_id="kid", _activity="panel")
         frames = await receive_until(self.socket, has_frame(ref=ref))
-        assert [f["type"] for f in frames if f.get("ref") == ref] == ["noop"]
+        assert [legacy_type(f) for f in frames if f.get("ref") == ref] == ["noop"]
         assert BUMPS == [], "the event must be queued on the child, not run"
 
     async def root_answers(self, ref=99):
@@ -141,7 +142,7 @@ class _Socket:
 
 
 def _kid_updates(frames):
-    return [f for f in frames if f.get("type") == "embedded_update" and f.get("view_id") == "kid"]
+    return [f for f in frames if legacy_type(f) == "embedded_update" and f.get("view_id") == "kid"]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -202,7 +203,7 @@ async def test_released_event_for_a_gone_child_is_dropped_without_closing(monkey
         await _notify()
         # The root's drain runs drop_kid; the kid's queued bump then finds no kid.
         frames = await receive_until(
-            ws.socket, lambda fs: any(f.get("type") != "noop" for f in fs) or _closed(fs)
+            ws.socket, lambda fs: any(legacy_type(f) != "noop" for f in fs) or _closed(fs)
         )
         frames += await drain_extra(ws.socket)
         assert not _closed(frames)

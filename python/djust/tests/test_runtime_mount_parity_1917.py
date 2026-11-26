@@ -39,17 +39,16 @@ mount cases (Finding D) left with the actor system in 2.0.
 
 from __future__ import annotations
 
-
 import pytest
 from asgiref.sync import sync_to_async
 from django.test import override_settings
 
-from djust import LiveView
+from djust import LiveView, state
 from djust.runtime import ViewRuntime, WSConsumerTransport
+from djust.testing import with_live_session
+from djust.tests._frames import effects_of
 
 from ._ws_frames import drain_extra, has_type, receive_until
-from djust import state
-from djust.testing import with_live_session
 
 _ALLOWED = "djust.tests.test_runtime_mount_parity_1917"
 _ALLOWLIST = override_settings(LIVEVIEW_ALLOWED_MODULES=[_ALLOWED])
@@ -296,7 +295,7 @@ class TestRuntimeAuthBlockFinalize:
             await _runtime_mount(consumer, f"{_ALLOWED}.LoginRequiredView")
 
             frames = await _drain(communicator, "navigate")
-            navs = [f for f in frames if f.get("type") == "navigate"]
+            navs = [f for f in effects_of(frames, "navigate")]
             assert navs and navs[0].get("to") == "/login/", (
                 f"a login-required view must emit a navigate frame; got {frames!r}"
             )
@@ -329,7 +328,7 @@ class TestRuntimeAuthBlockFinalize:
             await _runtime_mount(consumer, f"{_ALLOWED}.LoginRequiredView")
 
             frames = await _drain(communicator, "navigate")
-            navs = [f for f in frames if f.get("type") == "navigate"]
+            navs = [f for f in effects_of(frames, "navigate")]
             assert navs, f"the navigate frame must still be emitted in a batch; got {frames!r}"
             assert closed["flag"] is False, (
                 "#291: finalize_mount_auth must NOT close the shared socket when "

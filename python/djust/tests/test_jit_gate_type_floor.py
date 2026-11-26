@@ -28,12 +28,12 @@ from asgiref.sync import sync_to_async
 from django.db import connection, models
 from django.utils.functional import SimpleLazyObject
 
-from djust import LiveView
+from djust import LiveView, state
 from djust.config import get_config
 from djust.decorators import event_handler
 from djust.optimization import codegen as _codegen
 from djust.serialization import normalize_django_value
-from djust import state
+from djust.tests._frames import legacy_type
 
 LEAK = "LEAK-TYPE-FLOOR"
 MODULE = "djust.tests.test_jit_gate_type_floor"
@@ -268,7 +268,7 @@ async def _wire(view_cls):
         for _ in range(6):
             f = await comm.receive_json_from()
             frames.append(f)
-            if f.get("type") in ("patch", "html_update"):
+            if legacy_type(f) in ("patch", "html_update"):
                 break
         await comm.disconnect()
     return repr(frames)

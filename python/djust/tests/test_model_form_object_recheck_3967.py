@@ -16,9 +16,9 @@ session (the consumer's own security chain), ``LiveViewTestClient`` (its mirror 
 the HTTP POST fallback (a fresh view per request, which can never reuse anything).
 """
 
-from typing import Any
 import json
 import uuid
+from typing import Any
 
 import pytest
 from asgiref.sync import sync_to_async
@@ -32,6 +32,7 @@ from djust import LiveView
 from djust.decorators import event_handler
 from djust.forms import ModelFormMixin
 from djust.testing import LiveViewTestClient
+from djust.tests._frames import legacy_type
 
 EVENTS: list = []
 REVOKED: set = set()
@@ -209,6 +210,7 @@ def _kinds(*kinds):
 
 async def _open(view_class, user, url, params=None):
     from channels.testing import WebsocketCommunicator
+
     from djust.testing import live_session
     from djust.websocket import LiveViewConsumer
 
@@ -236,7 +238,7 @@ async def _send(socket, message):
     for _ in range(6):
         frame = await socket.receive_json_from()
         frames.append(frame)
-        if frame.get("type") in {"patch", "html_update", "error", "noop", "navigate"}:
+        if legacy_type(frame) in {"patch", "html_update", "error", "noop", "navigate"}:
             break
     return frames
 
@@ -867,6 +869,7 @@ async def _restore(view_class, url_path, user, session, selected, typed_for):
     of the same session path with ``selected`` chosen in the mount params. Returns the open socket
     (the caller disconnects it) and the mount frame."""
     from channels.testing import WebsocketCommunicator
+
     from djust.websocket import LiveViewConsumer
 
     def http(method, body=None):

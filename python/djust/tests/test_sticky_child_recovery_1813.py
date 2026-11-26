@@ -35,14 +35,14 @@ client-side prerender-morph trigger (a), which is exercised separately in
 
 from __future__ import annotations
 
-from typing import Any
 import inspect
+from typing import Any
 
 import pytest
 
 from djust import LiveView
 from djust.decorators import event_handler, state
-
+from djust.tests._frames import legacy_type
 
 # ---------------------------------------------------------------------------
 # Test views — module-level so they resolve by dotted path via import_string().
@@ -108,7 +108,7 @@ async def _receive_until(communicator, wanted_type, *, tries=6, timeout=30):
     last = None
     for _ in range(tries):
         last = await communicator.receive_json_from(timeout=timeout)
-        if last.get("type") == wanted_type:
+        if legacy_type(last) == wanted_type:
             return last
     return last
 
@@ -117,6 +117,7 @@ async def _connect_and_mount(view_path: str, url: str):
     """Connect a WebsocketCommunicator and mount ``view_path``. Returns
     (communicator, mount_response)."""
     from channels.testing import WebsocketCommunicator
+
     from djust.testing import with_live_session
     from djust.websocket import LiveViewConsumer
 
@@ -172,7 +173,7 @@ async def test_request_html_recovery_preserves_sticky_child_drift():
             }
         )
         ev = await _receive_until(communicator, "embedded_update")
-        assert ev.get("type") == "embedded_update", f"expected embedded_update; got {ev!r}"
+        assert legacy_type(ev) == "embedded_update", f"expected embedded_update; got {ev!r}"
         assert ">b<" in ev.get("html", "") and ">a<" not in ev.get("html", ""), (
             f"embedded_update HTML should show only b after dismiss(a); got {ev!r}"
         )

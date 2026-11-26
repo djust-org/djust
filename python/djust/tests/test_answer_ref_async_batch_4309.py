@@ -23,6 +23,7 @@ from channels.testing import WebsocketCommunicator
 from django.test import override_settings
 
 from djust import LiveView, event_handler, state
+from djust.tests._frames import legacy_type
 from djust.websocket import LiveViewConsumer
 
 from ._ws_frames import drain_extra, has_frame, receive_until
@@ -156,9 +157,9 @@ def _assert_answer(frames, ref, target):
     assert len(answers) == 1, frames
     (answer,) = answers
     if target == "kid":
-        assert answer["type"] == "embedded_update" and answer["view_id"] == "kid", answer
+        assert legacy_type(answer) == "embedded_update" and answer["view_id"] == "kid", answer
     else:
-        assert answer["type"] in {"noop", "patch", "html_update"}, answer
+        assert legacy_type(answer) in {"noop", "patch", "html_update"}, answer
     assert answer.get("async_pending") is True, answer
     assert isinstance(answer.get("async_batch"), str) and answer["async_batch"], answer
     unbatched = [f for f in frames if f.get("async_pending") and not f.get("async_batch")]
@@ -189,7 +190,7 @@ async def test_released_answer_carries_its_ref_and_batch(monkeypatch, drain, tar
         await ws.send(handler, 7, **_target_params(target, activity=True))
         queued = await receive_until(ws.socket, has_frame(ref=7))
         # The queueing noop settles the request; nothing runs yet.
-        assert [f["type"] for f in queued if f.get("ref") == 7] == ["noop"]
+        assert [legacy_type(f) for f in queued if f.get("ref") == 7] == ["noop"]
         assert not any(f.get("async_pending") for f in queued)
         assert WORK == []
 

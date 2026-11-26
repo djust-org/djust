@@ -27,6 +27,7 @@ from django.test import override_settings
 from djust import LiveView, state
 from djust._background_render import UNCHANGED, snapshot_delivers_nothing
 from djust.decorators import background, event_handler
+from djust.tests._frames import legacy_type
 from djust.websocket import LiveViewConsumer
 
 from ._ws_frames import drain_extra, receive_until
@@ -238,7 +239,7 @@ def _sets(frame, text):
 async def test_a_result_that_changes_state_still_patches():
     ((frames, renders),) = await _run(["start_bump"])
     (result,) = _results(frames)
-    assert result["type"] == "patch", frames
+    assert legacy_type(result) == "patch", frames
     assert _sets(result, "1"), result
     assert result["event_name"] == "start_bump"
     assert renders == 1
@@ -296,7 +297,7 @@ async def test_background_decorator_changed_and_unchanged():
 async def test_in_place_list_mutation_in_the_callback_is_detected():
     ((frames, renders),) = await _run(["start_append"])
     (result,) = _results(frames)
-    assert result["type"] == "patch", frames
+    assert legacy_type(result) == "patch", frames
     assert result["patches"], result
     assert "appended" in str(result["patches"]), result
     assert renders == 1
@@ -399,7 +400,7 @@ async def test_consumer_error_arm_without_a_handler_still_sends_its_frame():
         consumer, view = await _consumer_with_view("NoHandlerView")
         await consumer._run_async_work("fail", view._fail, (), {}, event_name=None)
         (frame,) = _async_frames(consumer)
-        assert frame["type"] in ("patch", "html_update"), frame
+        assert legacy_type(frame) in ("patch", "html_update"), frame
 
 
 @pytest.mark.django_db(transaction=True)

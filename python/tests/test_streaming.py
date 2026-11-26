@@ -585,8 +585,14 @@ def test_push_state_over_sse_sends_patch_with_rust_version_then_push_events(monk
     asyncio.run(view.push_state())
 
     assert session.pushed == [
-        {"type": "patch", "patches": [{"op": "x"}], "version": 7},
-        {"type": "push_event", "event": "step", "payload": {"n": 1}},
+        # One render frame; the push events ride in it (#3658).
+        {
+            "type": "render",
+            "source": "push_state",
+            "patches": [{"op": "x"}],
+            "version": 7,
+            "effects": [{"kind": "push_event", "event": "step", "payload": {"n": 1}}],
+        },
     ]
     assert view._outbound == []
 
@@ -600,7 +606,15 @@ def test_push_state_over_sse_sends_html_update_without_patches(monkeypatch):
 
     asyncio.run(view.push_state())
 
-    assert session.pushed == [{"type": "html_update", "html": "<div>x</div>", "version": 3}]
+    assert session.pushed == [
+        {
+            "type": "render",
+            "source": "push_state",
+            "html": "<div>x</div>",
+            "version": 3,
+            "effects": [],
+        }
+    ]
 
 
 def test_push_state_skips_a_view_the_sse_session_no_longer_serves(monkeypatch):
@@ -630,7 +644,15 @@ def test_push_state_websocket_wins_over_sse_and_stamps_consumer_counter(monkeypa
 
     asyncio.run(view.push_state())
 
-    assert consumer.sent_messages == [{"type": "patch", "patches": [{"op": "x"}], "version": 42}]
+    assert consumer.sent_messages == [
+        {
+            "type": "render",
+            "source": "push_state",
+            "patches": [{"op": "x"}],
+            "version": 42,
+            "effects": [],
+        }
+    ]
     assert session.pushed == []
 
 
@@ -650,6 +672,12 @@ def test_push_state_websocket_html_update_stamps_consumer_counter(monkeypatch):
     asyncio.run(view.push_state())
 
     assert consumer.sent_messages == [
-        {"type": "html_update", "html": "<div>x</div>", "version": 42}
+        {
+            "type": "render",
+            "source": "push_state",
+            "html": "<div>x</div>",
+            "version": 42,
+            "effects": [],
+        }
     ]
     assert session.pushed == []

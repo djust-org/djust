@@ -30,7 +30,9 @@ import djust.websocket as ws_module
 from djust import LiveView, event_handler
 from djust import state as djust_state
 from djust._outbound_buffer import OutboundBuffer, outbound_buffer_limit
-from djust.config import DEFAULT_MAX_OUTBOUND_BUFFER_BYTES, config as djust_config
+from djust.config import DEFAULT_MAX_OUTBOUND_BUFFER_BYTES
+from djust.config import config as djust_config
+from djust.tests._frames import legacy_type
 from djust.tests._ws_frames import WAIT_S
 from djust.websocket import WS_CLOSE_SLOW_CONSUMER, LiveViewConsumer
 
@@ -517,5 +519,5 @@ async def test_overflow_closes_1013_and_the_client_can_reconnect_and_remount():
         again = await _mount(app)
         await again.send_json_to({"type": "event", "event": "bump", "params": {}})
         frame = await again.receive_json_from()
-        assert frame["type"] in ("patch", "html_update")
+        assert legacy_type(frame) in ("patch", "html_update")
         await again.disconnect()

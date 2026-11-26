@@ -24,9 +24,9 @@ import inspect
 import pytest
 from asgiref.sync import sync_to_async
 
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
-from djust import state
+from djust.tests._frames import legacy_type
 
 
 class _WSForceFullView(LiveView):
@@ -54,7 +54,7 @@ async def _receive_until(communicator, wanted_type, *, tries=5, timeout=30):
     last = None
     for _ in range(tries):
         last = await communicator.receive_json_from(timeout=timeout)
-        if last.get("type") == wanted_type:
+        if legacy_type(last) == wanted_type:
             return last
     return last
 
@@ -115,7 +115,7 @@ async def test_html_update_fallback_arms_recovery_so_request_html_succeeds():
             {"type": "event", "event": "bump_full", "params": {}, "ref": 1}
         )
         event_resp = await _receive_until(communicator, "html_update")
-        assert event_resp.get("type") == "html_update", (
+        assert legacy_type(event_resp) == "html_update", (
             f"event with _force_full_html must fall back to html_update; got {event_resp!r}"
         )
         assert not event_resp.get("patches"), "html_update fallback must carry no patches"

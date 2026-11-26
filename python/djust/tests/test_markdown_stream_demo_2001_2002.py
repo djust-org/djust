@@ -36,9 +36,9 @@ from pathlib import Path
 import pytest
 from asgiref.sync import sync_to_async
 
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
-from djust import state
+from djust.tests._frames import legacy_type
 
 _MODULE = __name__
 
@@ -209,7 +209,8 @@ async def _drain_quiet(communicator):
     frames = await receive_until(
         communicator,
         lambda frames: any(
-            f.get("type") in ("patch", "html_update") and f.get("source") == "async" for f in frames
+            legacy_type(f) in ("patch", "html_update") and f.get("source") == "async"
+            for f in frames
         ),
         what="the end-of-callback render",
     )
@@ -251,7 +252,7 @@ async def test_fixed_pattern_sends_multiple_stream_ops():
         assert len(content_ops) > 1, (
             "the fixed demo must send MORE THAN ONE content stream op across a "
             f"multi-token run (#2002); got {len(content_ops)}. Frame types seen: "
-            f"{[f.get('type') for f in frames]}"
+            f"{[legacy_type(f) for f in frames]}"
         )
         # Each content stream op targets the dj-stream article.
         for sf in content_ops:
@@ -286,7 +287,7 @@ async def test_plain_mutation_does_not_stream_gate_off():
         )
         # The final output still reaches the client — but via a single render
         # frame (patch/html_update), not incremental stream ops.
-        render_frames = [f for f in frames if f.get("type") in ("patch", "html_update")]
+        render_frames = [f for f in frames if legacy_type(f) in ("patch", "html_update")]
         assert render_frames, "the mutate-only handler must still send at least one render"
         await communicator.disconnect()
 

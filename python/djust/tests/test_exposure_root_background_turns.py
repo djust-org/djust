@@ -17,12 +17,12 @@ import threading
 
 import pytest
 from asgiref.sync import sync_to_async
+from django.test import override_settings
 
 from djust import LiveView, event_handler
 from djust.decorators import state
-from django.test import override_settings
-
 from djust.runtime import ViewRuntime
+from djust.tests._frames import legacy_type
 from djust.tests.test_exposure_runtime import make_request
 from djust.tests.test_runtime_state_save_tt_1894 import MockTransport
 
@@ -135,7 +135,7 @@ async def test_revoked_session_drops_the_background_result():
 
     assert HANDLED == [], "handle_async_result ran without current authorization"
     late = transport.sent[sent_before:]
-    assert not [f for f in late if f.get("type") in {"patch", "html_update"}], late
+    assert not [f for f in late if legacy_type(f) in {"patch", "html_update"}], late
     assert [f.get("code") for f in late if f.get("type") == "error"] == ["permission_denied"]
     assert transport.closed_with == 4403
 
@@ -160,7 +160,7 @@ async def test_failed_background_save_withholds_the_success_frame(monkeypatch, c
 
     assert HANDLED, "the result handler must have run before the save"
     late = transport.sent[sent_before:]
-    assert not [f for f in late if f.get("type") in {"patch", "html_update"}], late
+    assert not [f for f in late if legacy_type(f) in {"patch", "html_update"}], late
     assert [f.get("code") for f in late if f.get("type") == "error"] == ["state_error"]
     assert "STORE_SENTINEL" not in json.dumps(transport.sent)
     assert "STORE_SENTINEL" not in caplog.text
@@ -184,7 +184,7 @@ async def test_failed_foreground_save_withholds_the_success_frame(monkeypatch, c
 
     late = transport.sent[sent_before:]
     assert runtime.view_instance.count == 6, "the handler must have run"
-    assert not [f for f in late if f.get("type") in {"patch", "html_update", "noop"}], late
+    assert not [f for f in late if legacy_type(f) in {"patch", "html_update", "noop"}], late
     assert [f.get("code") for f in late if f.get("type") == "error"] == ["state_error"]
     # The withheld success frame would have refreshed the signed snapshot; the
     # error revokes the client's token instead.
@@ -219,7 +219,7 @@ async def test_url_change_is_persisted_for_reconnect():
     PARAMS_SEEN.clear()
     await runtime.dispatch_url_change({"type": "url_change", "params": {"page": "7"}, "uri": "/"})
     assert PARAMS_SEEN == [{"page": "7"}]
-    assert [f["type"] for f in transport.sent[-1:]] != ["error"], transport.sent
+    assert [legacy_type(f) for f in transport.sent[-1:]] != ["error"], transport.sent
 
     fresh = await sync_to_async(make_request)(request.session.session_key)
     restored, _ = await mount(fresh, UrlView)
@@ -237,7 +237,7 @@ async def test_url_change_requires_current_authorization():
 
     assert PARAMS_SEEN == [], "handle_params ran without current authorization"
     late = transport.sent[sent_before:]
-    assert not [f for f in late if f.get("type") in {"patch", "html_update"}], late
+    assert not [f for f in late if legacy_type(f) in {"patch", "html_update"}], late
     assert [f.get("code") for f in late if f.get("type") == "error"] == ["permission_denied"]
     assert transport.closed_with == 4403
 
@@ -263,7 +263,7 @@ async def test_background_result_refreshes_the_client_snapshot():
     GATE.set()
     await _drain(view)
 
-    frames = [f for f in _async_frames(transport) if f.get("type") in {"patch", "html_update"}]
+    frames = [f for f in _async_frames(transport) if legacy_type(f) in {"patch", "html_update"}]
     assert frames, transport.sent
     token = frames[-1].get("state_snapshot_signed")
     assert isinstance(token, str) and token, frames[-1]

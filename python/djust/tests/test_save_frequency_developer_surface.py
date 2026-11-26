@@ -25,6 +25,7 @@ from djust import LiveView, _automatic_state, _save_policy, runtime
 from djust.decorators import background, event_handler
 from djust.tests import _per_turn_harness as harness
 from djust.tests import _save_frequency as sf
+from djust.tests._frames import legacy_type
 
 MODULE = __name__
 INTERVAL = 30
@@ -369,7 +370,7 @@ async def test_over_the_limit_a_later_immediate_turn_is_served_too(runtimes):
             told = await drain_extra(comm)
             assert [f.get("code") for f in told].count("state_too_large") == 1
             frames = await harness.event_frames(comm, "inc_and_keep")
-            assert frames[-1]["type"] in ("patch", "html_update"), frames
+            assert legacy_type(frames[-1]) in ("patch", "html_update"), frames
             assert [f.get("code") for f in frames].count("state_too_large") == 1
             assert rt.view_instance.count == 3 and rt.state_unsaved
             assert (await _values(key))["count"] == 1
@@ -418,7 +419,7 @@ async def test_a_requested_save_over_the_limit_is_told_every_time_and_keeps_the_
                 frames = await receive_until(comm, has_frame(ref=ref), what="the reply")
                 codes = [f.get("code") for f in frames]
                 assert codes.count("state_too_large") == 1, frames
-                assert frames[-1]["type"] in ("patch", "html_update"), frames
+                assert legacy_type(frames[-1]) in ("patch", "html_update"), frames
                 order = await sync_to_async(lambda: SessionStore(key).get("order"))()
                 assert order == "placed"
             assert rt.state_unsaved

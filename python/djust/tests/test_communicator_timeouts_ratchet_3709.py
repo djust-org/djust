@@ -930,7 +930,7 @@ async def test_a(socket):
 async def _receive_until(communicator, wanted, *, tries=8, timeout=3):
     for _ in range(tries):
         frame = await communicator.receive_json_from(timeout=timeout)
-        if frame.get("type") == wanted:
+        if legacy_type(frame) == wanted:
             return frame
 """,
     "a call to a forwarding helper with a short timeout": """
@@ -946,7 +946,7 @@ async def _frames_until(communicator, *types, timeout=15.0):
     deadline = loop.time() + timeout
     while True:
         frame = await communicator.receive_json_from(timeout=deadline - loop.time())
-        if frame.get("type") in types:
+        if frame_matches(frame, types):
             return frame
 
 async def test_a(socket):

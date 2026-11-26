@@ -103,7 +103,7 @@ async def _make_consumer(view):
     consumer.sent_frames.clear()
     view.writes.clear()
 
-    async def _noop():
+    async def _noop(*args, **kwargs):
         return None
 
     # ``_run_async_work`` flushes pending queues after a successful re-render;

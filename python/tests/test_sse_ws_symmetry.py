@@ -19,6 +19,7 @@ verbs at the runtime level.
 
 import django
 from django.conf import settings
+from djust.tests._frames import legacy_type
 
 if not settings.configured:
     settings.configure(
@@ -47,7 +48,6 @@ from typing import Any, Dict, List, Optional
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 
 # ------------------------------------------------------------------ #
 # Shared MockTransport (matches test_runtime.py)
@@ -180,8 +180,8 @@ class TestUrlChangeSymmetry:
 
         # ---- Symmetry assertions ----
         # Both endpoints produced exactly the same outbound type sequence.
-        ws_types = [m["type"] for m in ws_transport.sent]
-        sse_types = [m["type"] for m in sse_transport.sent]
+        ws_types = [legacy_type(m) for m in ws_transport.sent]
+        sse_types = [legacy_type(m) for m in sse_transport.sent]
         assert ws_types == sse_types, (ws_types, sse_types)
         # Equal error frames are not successful transport parity.
         assert ws_types == ["html_update"]
@@ -237,8 +237,8 @@ class TestRuntimeSequenceSymmetry:
         await drive(sse_transport, sse_runtime, sse_view)
 
         # Identical outbound type sequence
-        ws_types = [m["type"] for m in ws_transport.sent]
-        sse_types = [m["type"] for m in sse_transport.sent]
+        ws_types = [legacy_type(m) for m in ws_transport.sent]
+        sse_types = [legacy_type(m) for m in sse_transport.sent]
         assert ws_types == sse_types
         # Equal error frames are not successful transport parity.
         assert "error" not in ws_types, ws_transport.sent

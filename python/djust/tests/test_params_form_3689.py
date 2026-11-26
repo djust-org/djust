@@ -36,9 +36,10 @@ from django.urls import path
 
 from djust import LiveView
 from djust.decorators import event_handler, state
+from djust.testing import with_live_session
+from djust.tests._frames import legacy_type
 
 from ._ws_frames import drain_extra, receive_until
-from djust.testing import with_live_session
 
 pytestmark = pytest.mark.django_db
 
@@ -742,7 +743,7 @@ async def _url_change(communicator, params, uri):
     await communicator.send_json_to({"type": "url_change", "params": params, "uri": uri})
     frames = await receive_until(
         communicator,
-        lambda fs: any(f.get("type") in ("patch", "html_update", "error") for f in fs),
+        lambda fs: any(legacy_type(f) in ("patch", "html_update", "error") for f in fs),
     )
     return frames[-1]
 
@@ -769,19 +770,19 @@ class TestTheSocket:
         CALLS.clear()
 
         frame = await _url_change(communicator, {"page": "3"}, "/list/?page=3")
-        assert frame["type"] in ("patch", "html_update"), frame
+        assert legacy_type(frame) in ("patch", "html_update"), frame
         assert "3" in _text(frame)
         assert CALLS == [({"category": "all", "page": 3}, "/list/?page=3")]
 
         frame = await _url_change(communicator, {"page": "abc"}, "/list/?page=abc")
-        assert frame["type"] in ("patch", "html_update"), frame
+        assert legacy_type(frame) in ("patch", "html_update"), frame
         assert "Enter a whole number." in _text(frame), frame
 
         assert "ERRS:1" in _text(frame), frame
 
         # Back to a valid URL: the error leaves the page.
         frame = await _url_change(communicator, {"page": "2"}, "/list/?page=2")
-        assert frame["type"] in ("patch", "html_update"), frame
+        assert legacy_type(frame) in ("patch", "html_update"), frame
         assert "ERRS:0" in _text(frame), frame
         await communicator.disconnect()
 

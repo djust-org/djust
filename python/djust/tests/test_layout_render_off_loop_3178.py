@@ -86,13 +86,19 @@ async def test_layout_render_runs_off_the_loop_thread(make, render_threads):
     view.set_layout("layouts/app.html")
     owner, frames = make(view)
 
-    await owner._flush_pending_layout()
+    await owner._flush_all_pending("deferred")
 
     assert frames() == [
         {
-            "type": "layout",
-            "path": "layouts/app.html",
-            "html": "<body>layouts/app.html:layout</body>",
+            "type": "render",
+            "source": "deferred",
+            "effects": [
+                {
+                    "kind": "layout",
+                    "path": "layouts/app.html",
+                    "html": "<body>layouts/app.html:layout</body>",
+                }
+            ],
         }
     ]
     assert len(view.context_threads) == 1 and len(render_threads) == 1
@@ -121,7 +127,7 @@ async def test_layout_render_uses_the_sessions_pinned_worker(make, render_thread
         view = _LayoutView()
         view.set_layout("layouts/app.html")
         owner, _frames = make(view)
-        await owner._flush_pending_layout()
+        await owner._flush_all_pending("deferred")
     finally:
         binding.release()
     assert view.context_threads == [pinned]

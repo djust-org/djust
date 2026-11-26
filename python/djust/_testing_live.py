@@ -69,6 +69,33 @@ _TAB_META = re.compile(r'<meta name="djust-tab" content="([^"]+)">')
 _DJ_VIEW = re.compile(r'\sdj-view="([^"]+)"')
 #: The frames that answer a mount.
 _MOUNT_ANSWERS = ("mount", "error", "navigate", "redirect")
+
+#: The 1.x frame names a ``render`` frame's DOM part stands for (#3658).
+_DOM_PART_NAMES = {"patches": "patch", "html": "html_update", "embedded": "embedded_update"}
+
+
+def _frame_is(frame: Dict[str, Any], types: Optional[Tuple[str, ...]]) -> bool:
+    """Whether ``frame`` is one of ``types`` (any frame when ``None``).
+
+    A ``render`` frame (#3658) also answers to the 1.x name of its DOM part
+    (``patch``, ``html_update``, ``embedded_update``, or ``noop`` for none) and
+    to the ``kind`` of any effect it carries (``navigate``, ``push_event``...),
+    so a caller can wait for "the patch" or "the navigation" by its old name.
+    """
+    if types is None or frame.get("type") in types:
+        return True
+    if frame.get("type") != "render":
+        return False
+    from ._render_frame import dom_part
+
+    if _DOM_PART_NAMES.get(dom_part(frame), "noop") in types:
+        return True
+    return any(
+        isinstance(effect, dict) and effect.get("kind") in types
+        for effect in frame.get("effects") or ()
+    )
+
+
 _DEFAULT_TIMEOUT = 10.0
 
 
@@ -855,7 +882,7 @@ class _Transport:
             if remaining <= 0 and not self._unread:
                 raise asyncio.TimeoutError("no frame of %r within %ss" % (types, wait))
             frame = await self._next(max(remaining, 0))
-            if types is None or frame.get("type") in types:
+            if _frame_is(frame, types):
                 return frame
 
     async def receive_nothing(
@@ -881,7 +908,7 @@ class _Transport:
                     return
                 except AssertionError:
                     return  # the connection ended: nothing more can arrive
-                if types is None or frame.get("type") in types:
+                if _frame_is(frame, types):
                     raise AssertionError(
                         "expected no %s frame within %ss, got %r"
                         % (" / ".join(types) if types else "", within, frame)

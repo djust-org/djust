@@ -25,9 +25,9 @@ from __future__ import annotations
 import pytest
 from asgiref.sync import sync_to_async
 
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import action, event_handler
-from djust import state
+from djust.tests._frames import frame_matches, legacy_type
 
 
 class _KanbanView(LiveView):
@@ -80,7 +80,7 @@ async def _receive_until(communicator, wanted_types, *, tries=6, timeout=30):
     last = None
     for _ in range(tries):
         last = await communicator.receive_json_from(timeout=timeout)
-        if last.get("type") in wanted_types:
+        if frame_matches(last, wanted_types):
             return last
     return last
 
@@ -117,9 +117,9 @@ async def _mounted_communicator():
 
 
 def _frame_updates_dom(frame) -> bool:
-    if frame.get("type") == "patch":
+    if legacy_type(frame) == "patch":
         return bool(frame.get("patches"))
-    if frame.get("type") == "html_update":
+    if legacy_type(frame) == "html_update":
         return "Write tests" in (frame.get("html") or "")
     return False
 
@@ -208,9 +208,9 @@ async def _mounted(view_name, url):
 
 
 def _dom_changed(frame, marker) -> bool:
-    if frame.get("type") == "patch":
+    if legacy_type(frame) == "patch":
         return bool(frame.get("patches"))
-    if frame.get("type") == "html_update":
+    if legacy_type(frame) == "html_update":
         return marker in (frame.get("html") or "")
     return False
 

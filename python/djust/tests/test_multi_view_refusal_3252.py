@@ -27,10 +27,11 @@ from django.test import RequestFactory, override_settings
 from django.urls import path
 from django.utils.functional import SimpleLazyObject
 
-from djust.testing import live_session
 from djust import LiveView, event_handler, sse
 from djust.hooks import on_mount
 from djust.sse import DjustSSEMessageView, DjustSSEStreamView, _sse_sessions
+from djust.testing import live_session
+from djust.tests._frames import frame_matches, legacy_type
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
 
@@ -138,7 +139,7 @@ async def _frames(communicator, *types, timeout=10.0):
     seen = []
     while True:
         seen.append(await communicator.receive_json_from(timeout=deadline - loop.time()))
-        if seen[-1].get("type") in types:
+        if frame_matches(seen[-1], types):
             return seen
 
 
@@ -177,7 +178,7 @@ async def test_a_refused_lazy_view_answers_in_its_own_container_and_navigates_no
         assert ("to" in refusal) is names_a_target, refusal
         assert refusal["code"] == "permission_denied"
         # Nothing else: no page navigation, and no error frame for the page.
-        assert [f["type"] for f in frames] == ["view_refused"], frames
+        assert [legacy_type(f) for f in frames] == ["view_refused"], frames
         # The page view and the sibling are live; the refused address is not.
         assert (await _click(communicator))["type"] != "error"
         assert (await _click(communicator, "w1"))["type"] != "error"
@@ -205,7 +206,7 @@ async def test_a_signed_in_user_without_the_permission_is_refused_in_the_contain
         await _frames(communicator, "mount")
         await _mount(communicator, NeedsPermission, "p")
         frames = await _frames(communicator, "view_refused", "navigate", "error", "mount")
-        assert [f["type"] for f in frames] == ["view_refused"], frames
+        assert [legacy_type(f) for f in frames] == ["view_refused"], frames
         assert frames[-1]["reason"] == "permission_denied" and "to" not in frames[-1]
         assert (await _click(communicator))["type"] != "error"
     finally:
@@ -220,7 +221,7 @@ async def test_a_refused_view_is_reported_once_and_left_unmounted():
         for _ in range(2):
             await _mount(communicator, NeedsLogin, "refused")
             frames = await _frames(communicator, "view_refused")
-            assert [f["type"] for f in frames] == ["view_refused"]
+            assert [legacy_type(f) for f in frames] == ["view_refused"]
     finally:
         await communicator.disconnect()
 
@@ -230,7 +231,7 @@ async def test_the_page_views_own_refusal_is_still_the_pages():
     try:
         await _mount(communicator, NeedsLogin)
         frames = await _frames(communicator, "navigate", "view_refused", "error")
-        assert frames[-1]["type"] == "navigate", frames
+        assert frame_matches(frames[-1], "navigate"), frames
         assert not any(f["type"] == "view_refused" for f in frames)
     finally:
         await communicator.disconnect()
@@ -313,7 +314,7 @@ async def test_a_refusal_is_sent_once_per_view_whatever_ends_it():
         await facade.send_refusal("redirect", "/elsewhere/")
         await facade.close(4403)  # the close of an already refused view adds nothing
         frames = await _frames(communicator, "view_refused")
-        assert [f["type"] for f in frames] == ["view_refused"]
+        assert [legacy_type(f) for f in frames] == ["view_refused"]
         assert frames[-1]["reason"] == "redirect"
         assert await communicator.receive_nothing(timeout=0.3)
         assert CONSUMERS[-1]._slot_map() == {}
@@ -359,7 +360,7 @@ async def _sse_frame(stream, *types, timeout=10.0):
         chunk = await asyncio.wait_for(stream.__anext__(), timeout=deadline - loop.time())
         if chunk.startswith("data:"):
             frame = json.loads(chunk[len("data:") :])
-            if frame.get("type") in types:
+            if frame_matches(frame, types):
                 return frame
 
 
@@ -412,7 +413,7 @@ async def test_over_sse_a_refused_view_answers_in_its_own_container(cls, reason,
 async def test_over_sse_the_page_views_own_refusal_is_still_a_navigation():
     session, key, stream, first = await _sse_open(NeedsLogin)
     try:
-        assert first["type"] == "navigate", first
+        assert frame_matches(first, "navigate"), first
     finally:
         await stream.aclose()
 

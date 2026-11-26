@@ -25,6 +25,7 @@ import pytest
 from djust import LiveView
 from djust.decorators import event_handler
 from djust.mixins.rust_bridge import RENDER_REQUESTED
+from djust.tests._frames import legacy_type
 from djust.tests.test_transport_behavioral_parity import (
     _EventSpineMixin,
     _mounted_event_runtime,
@@ -77,11 +78,11 @@ class _InPlaceView(_EventSpineMixin, LiveView):
 
 
 def _updates(transport):
-    return [f for f in transport.sent if f.get("type") in ("patch", "html_update")]
+    return [f for f in transport.sent if legacy_type(f) in ("patch", "html_update")]
 
 
 def _noops(transport):
-    return [f for f in transport.sent if f.get("type") == "noop"]
+    return [f for f in transport.sent if legacy_type(f) == "noop"]
 
 
 class TestSetChangedKeys1981:

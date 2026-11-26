@@ -14,10 +14,9 @@ import pytest
 from django.contrib.sessions.middleware import SessionMiddleware
 from django.template.exceptions import TemplateDoesNotExist
 from django.test import RequestFactory
-
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
-from djust import state
+from djust.tests._frames import payloads_of
 
 DEFERRED: list = []
 
@@ -116,7 +115,7 @@ def _reset_deferred():
 class TestPushEvents:
     def test_push_events_ride_the_answer_in_frame_shape(self):
         view, data = _post("ping_hooks")
-        assert data["_push_events"] == [
+        assert payloads_of(data, "push_event") == [
             {"event": "chart:update", "payload": {"points": [1, 2, 3]}},
             {"event": "toast", "payload": {"text": "hi"}},
         ]
@@ -124,14 +123,14 @@ class TestPushEvents:
 
     def test_push_commands_arrive_as_a_djust_exec_push_event(self):
         _, data = _post("run_js")
-        [event] = data["_push_events"]
+        [event] = payloads_of(data, "push_event")
         assert event["event"] == "djust:exec"
         assert event["payload"]["ops"]
 
     def test_flush_and_push_state_leave_events_for_the_answer(self):
         """#4256: the fallback has no live channel; queued events ride the POST answer."""
         view, data = _post("flush_mid_handler")
-        assert data["_push_events"] == [
+        assert payloads_of(data, "push_event") == [
             {"event": "step", "payload": {"n": 1}},
             {"event": "step", "payload": {"n": 2}},
         ]
@@ -139,7 +138,7 @@ class TestPushEvents:
 
     def test_no_key_without_push_events(self):
         _, data = _post("noop")
-        assert "_push_events" not in data
+        assert not payloads_of(data, "push_event")
 
 
 @pytest.mark.django_db
@@ -151,10 +150,12 @@ class TestLayout:
             layout, "render_pending_layout", lambda view, path: "<main>%s</main>" % path
         )
         view, data = _post("swap_layout")
-        assert data["_layout"] == {
-            "path": "layouts/fullscreen.html",
-            "html": "<main>layouts/fullscreen.html</main>",
-        }
+        assert payloads_of(data, "layout") == [
+            {
+                "path": "layouts/fullscreen.html",
+                "html": "<main>layouts/fullscreen.html</main>",
+            }
+        ]
         assert view._pending_layout is None
 
     def test_a_missing_layout_template_is_skipped_not_fatal(self, monkeypatch):
@@ -165,12 +166,12 @@ class TestLayout:
 
         monkeypatch.setattr(layout, "render_pending_layout", missing)
         _, data = _post("swap_layout")
-        assert "_layout" not in data
+        assert not payloads_of(data, "layout")
         assert data.get("type") != "error", data
 
     def test_no_key_without_set_layout(self):
         _, data = _post("noop")
-        assert "_layout" not in data
+        assert not payloads_of(data, "layout")
 
 
 @pytest.mark.django_db

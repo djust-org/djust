@@ -25,6 +25,8 @@ import pytest
 from asgiref.sync import sync_to_async
 from django.conf import settings
 
+from djust.tests._frames import legacy_type
+
 if not settings.configured:
     settings.configure(
         DATABASES={"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}},
@@ -270,7 +272,7 @@ class TestRuntimeFrame:
         await runtime.dispatch_event(
             {"type": "event", "event": "probe_set", "params": {"value": "billing"}, "ref": 1}
         )
-        types = [f.get("type") for f in transport.sent]
+        types = [legacy_type(f) for f in transport.sent]
         assert "noop" not in types, transport.sent
         assert any(t in ("patch", "html_update") for t in types), transport.sent
         assert view.probe.active == "billing"
@@ -290,7 +292,7 @@ async def _receive_until(communicator, wanted_type, *, tries=8, timeout=30):
     last = None
     for _ in range(tries):
         last = await communicator.receive_json_from(timeout=timeout)
-        if last.get("type") == wanted_type:
+        if legacy_type(last) == wanted_type:
             return last
     return last
 
@@ -339,7 +341,7 @@ class TestWebSocketFrame:
                 )
                 updated = await communicator.receive_json_from()
                 assert updated.get("type") != "error", updated
-                assert updated.get("type") in ("patch", "html_update", "html_recovery"), (
+                assert legacy_type(updated) in ("patch", "html_update", "html_recovery"), (
                     f"a state change must re-render, not noop: {updated!r}"
                 )
                 blob = str(updated)
@@ -366,7 +368,7 @@ class TestWebSocketFrame:
                     }
                 )
                 updated = await communicator.receive_json_from()
-                assert updated.get("type") in ("patch", "html_update"), updated
+                assert legacy_type(updated) in ("patch", "html_update"), updated
                 assert "True" in str(updated), updated
             finally:
                 await communicator.disconnect()

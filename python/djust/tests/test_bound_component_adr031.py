@@ -21,6 +21,8 @@ import django
 import pytest
 from django.conf import settings
 
+from djust.tests._frames import legacy_type
+
 if not settings.configured:
     settings.configure(
         DATABASES={"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}},
@@ -346,7 +348,7 @@ class TestBoundComponentEvents:
         assert view.nav.active == "b"
         assert view.nav.count == 1
         assert view.aux.active == "x", "the sibling component is untouched"
-        frame = next(f for f in transport.sent if f.get("type") == "html_update")
+        frame = next(f for f in transport.sent if legacy_type(f) == "html_update")
         assert frame["event_name"] == "set_active"
         assert ">b</p>" in frame["html"], frame["html"]
 
@@ -361,7 +363,7 @@ class TestBoundComponentEvents:
                 {"type": "event", "event": name, "params": {"component_id": "nav"}}
             )
         assert len(transport.errors) == 2, transport.sent
-        assert [f.get("type") for f in transport.sent] == ["error", "error"]
+        assert [legacy_type(f) for f in transport.sent] == ["error", "error"]
         assert view.nav.active == "a"
 
     @pytest.mark.asyncio

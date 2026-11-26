@@ -13,9 +13,8 @@ otherwise observe handler/phase timings and infer server state.
 
 import pytest
 from django.test import override_settings
-
+from djust.tests._frames import legacy_type
 from djust.websocket import LiveViewConsumer, _should_expose_timing
-
 
 # ---------------------------------------------------------------------------
 # Unit tests for the helper
@@ -140,7 +139,7 @@ class TestPatchResponseTimingGating:
             "performance must not be in production patch responses (CWE-215, #654)"
         )
         # Sanity: the patches themselves still flowed.
-        assert response["type"] == "patch"
+        assert legacy_type(response) == "patch"
         assert response["patches"]
 
     @override_settings(DEBUG=True)

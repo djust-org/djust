@@ -71,7 +71,7 @@ class TestRuntimeDispatchMountSourceShape:
         ``dispatch_mount`` → this FAILS (and push_event() called from mount()
         never reaches the client on the runtime/SSE/post-flip-WS path).
         """
-        assert "_flush_push_events()" in self._source(), (
+        assert '_send_effects("mount", kinds=("push_event",))' in self._source(), (
             "dispatch_mount must drain _pending_push_events. Without this, "
             "push_event() called from mount() never reaches the client "
             "(see #1283)."
@@ -87,7 +87,7 @@ class TestRuntimeDispatchMountSourceShape:
         src = self._source()
         last_send = src.rfind("self.transport.send(mount_msg)")
         assert last_send != -1, "could not find transport.send(mount_msg) in dispatch_mount source"
-        flush_after = src.find("_flush_push_events()", last_send)
+        flush_after = src.find('_send_effects("mount"', last_send)
         dispatch_after = src.find("_dispatch_async_work(", last_send)
         assert flush_after > last_send, (
             "_flush_push_events() must come AFTER the final transport.send("
@@ -146,7 +146,7 @@ class TestHandleMountSourceShape:
         """The drains must NOT also run inline in the shim (double-drain) — they are
         the runtime's responsibility post-flip."""
         src = self._source()
-        assert "_dispatch_async_work" not in src and "_flush_push_events" not in src, (
+        assert "_dispatch_async_work" not in src and "_send_effects(" not in src, (
             "_mount_page is a thin shim post-#1919 — the mount-time drains belong "
             "to runtime.dispatch_mount, not the shim. Re-adding them here would "
             "double-drain. Found a drain call in the shim source."

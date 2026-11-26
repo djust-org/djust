@@ -23,10 +23,10 @@ import types
 import pytest
 from django.test import override_settings
 from django.urls import include, path
-
 from djust import LiveView, state
 from djust.decorators import background, event_handler
 from djust.sse import sse_urlpatterns
+from djust.tests._frames import effects_of, legacy_type
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -123,19 +123,17 @@ def _render_frames(frames):
     """Render frames carrying the intermediate state, as their frame type."""
     out = []
     for frame in frames:
-        if isinstance(frame, dict) and frame.get("type") in ("patch", "html_update"):
+        if isinstance(frame, dict) and legacy_type(frame) in ("patch", "html_update"):
             if "working-4256" in repr(frame.get("patches") or frame.get("html")):
-                out.append(frame["type"])
+                out.append(legacy_type(frame))
     return out
 
 
 def _steps(frames):
     return [
-        (frame.get("payload") or {}).get("n")
-        for frame in frames
-        if isinstance(frame, dict)
-        and frame.get("type") == "push_event"
-        and frame.get("event") == "step4256"
+        (effect.get("payload") or {}).get("n")
+        for effect in effects_of([f for f in frames if isinstance(f, dict)], "push_event")
+        if effect.get("event") == "step4256"
     ]
 
 

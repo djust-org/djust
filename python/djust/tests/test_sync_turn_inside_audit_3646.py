@@ -37,6 +37,7 @@ from djust import LiveView
 from djust.config import config as djust_config
 from djust.decorators import event_handler, state
 from djust.sync_turn import _active_step
+from djust.tests._frames import frame_matches
 
 pytestmark = [pytest.mark.django_db(transaction=True)]
 
@@ -406,7 +407,7 @@ async def _ws_session(view_name: str, url: str, actions=(), settle: float = 0.4)
     async def until(*types):
         for _ in range(12):
             frame = await communicator.receive_json_from(timeout=10)
-            if frame.get("type") in types:
+            if frame_matches(frame, types):
                 return frame
         raise AssertionError("no %s frame" % (types,))
 

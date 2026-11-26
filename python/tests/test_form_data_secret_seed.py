@@ -19,11 +19,11 @@ from django import forms
 from django.contrib.auth import get_user_model
 from django.contrib.auth.forms import UserChangeForm
 from django.test import RequestFactory, override_settings
-
 from djust import serialization
 from djust.forms import FormMixin
 from djust.live_view import LiveView
 from djust.testing import LiveViewTestClient, rendered_state, with_live_session
+from djust.tests._frames import legacy_type
 
 pytestmark = [pytest.mark.django_db, pytest.mark.pr_tier]
 
@@ -266,7 +266,6 @@ class TestOverTheWebSocket:
 
         async def session():
             from channels.testing import WebsocketCommunicator
-
             from djust.websocket import LiveViewConsumer
 
             comm = with_live_session(WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/"))
@@ -283,7 +282,7 @@ class TestOverTheWebSocket:
                     while True:
                         frame = await comm.receive_json_from(timeout=10)
                         frames.append(frame)
-                        if frame.get("type") in {"patch", "html_update", "error", "noop"}:
+                        if legacy_type(frame) in {"patch", "html_update", "error", "noop"}:
                             break
             finally:
                 await comm.disconnect()

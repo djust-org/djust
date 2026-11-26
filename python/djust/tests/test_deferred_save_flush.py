@@ -29,6 +29,7 @@ from djust import LiveView, _automatic_state, _per_turn, _save_policy, runtime, 
 from djust.decorators import event_handler
 from djust.tests import _per_turn_harness as harness
 from djust.tests import _save_frequency as sf
+from djust.tests._frames import legacy_type
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -192,7 +193,7 @@ async def test_a_deferred_turn_answers_and_the_timer_writes_it(
         rt = runtimes[-1]
         try:
             reply = await harness.event(comm, "inc")
-            assert reply["type"] in ("patch", "html_update"), reply
+            assert legacy_type(reply) in ("patch", "html_update"), reply
             if deferral == "off":
                 assert await _stored(key) == 1 and rt._state_timer is None
                 return
@@ -716,7 +717,7 @@ async def test_a_push_turn_saves_like_any_turn_on_both_push_paths(
             await comm.disconnect()
         stored_at_close = await _stored(key)
     assert len(offloaded) == (1 if pool else 0), offloaded
-    assert [f["type"] for f in frames] == ["patch"], frames
+    assert [legacy_type(f) for f in frames] == ["patch"], frames
     if interval:
         assert (stored_at_frame, unsaved) == (0, True)
     else:

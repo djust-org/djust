@@ -25,6 +25,7 @@ from djust import LiveView, event_handler
 from djust.decorators import state
 from djust.presence import PresenceManager, PresenceMixin
 from djust.push import apush_to_view, view_group_name
+from djust.tests._frames import frame_matches, legacy_type
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
 
@@ -150,7 +151,7 @@ async def _frames_until(communicator, *types, timeout=15.0):
         assert remaining > 0, "no frame of type %r; got %r" % (types, frames)
         frame = await communicator.receive_json_from(timeout=remaining)
         frames.append(frame)
-        if frame.get("type") in types:
+        if frame_matches(frame, types):
             return frames
 
 
@@ -274,7 +275,7 @@ async def test_a_click_on_the_page_view_still_runs_after_a_lazy_sibling_hydrates
         page, lazy = _one(Page), _one(Lazy)
 
         reply = await _event(communicator, "click")
-        assert reply["type"] in ("patch", "html_update"), reply
+        assert legacy_type(reply) in ("patch", "html_update"), reply
         assert "target_id" not in reply  # the page view's frames are unchanged
         assert EVENTS == [("clicked", page)]
         assert VIEWS[page].count == 1
@@ -291,7 +292,7 @@ async def test_a_click_in_the_lazy_view_runs_on_it_and_its_reply_is_addressed_to
         page, lazy = _one(Page), _one(Lazy)
 
         reply = await _event(communicator, "click", target_id="lazy-1")
-        assert reply["type"] in ("patch", "html_update"), reply
+        assert legacy_type(reply) in ("patch", "html_update"), reply
         assert reply["target_id"] == "lazy-1"
         assert reply["ref"] == 1
         assert EVENTS == [("clicked", lazy)]
@@ -487,7 +488,7 @@ async def test_a_mount_batch_keeps_every_view_live():
 
         for target, tag in (("b-1", lazy), ("b-2", lazy2), ("b-3", lazy3), (None, page)):
             reply = await _event(communicator, "click", target_id=target)
-            assert reply["type"] in ("patch", "html_update"), (target, reply)
+            assert legacy_type(reply) in ("patch", "html_update"), (target, reply)
             if target is not None:
                 assert reply["target_id"] == target
             assert EVENTS[-1] == ("clicked", tag)
@@ -505,7 +506,7 @@ async def test_a_mount_batch_does_not_replace_the_page_view():
         assert ("unregistered", page) not in EVENTS
         assert len(_members(_group(Page))) == 1
         reply = await _event(communicator, "click")
-        assert reply["type"] in ("patch", "html_update")
+        assert legacy_type(reply) in ("patch", "html_update")
         assert EVENTS == [("clicked", page)]
     finally:
         await _close(communicator)
@@ -518,7 +519,7 @@ async def test_a_batch_only_socket_answers_an_event_without_a_target_on_the_last
     try:
         await _mount_batch(communicator, (Lazy, "b-1"), (Lazy2, "b-2"))
         reply = await _event(communicator, "click")
-        assert reply["type"] in ("patch", "html_update")
+        assert legacy_type(reply) in ("patch", "html_update")
         assert EVENTS == [("clicked", _one(Lazy2))]
     finally:
         await _close(communicator)
@@ -679,7 +680,7 @@ async def test_a_view_the_user_may_not_mount_is_refused_and_the_socket_stays_liv
         # The page view is still live on the same socket, and the refused view's
         # address answers nothing.
         reply = await _event(communicator, "click")
-        assert reply["type"] in ("patch", "html_update")
+        assert legacy_type(reply) in ("patch", "html_update")
         reply = await _event(communicator, "click", target_id="guarded")
         assert reply["type"] == "error"
         assert [e[0] for e in EVENTS] == ["clicked"]
@@ -735,7 +736,7 @@ async def test_an_explicit_view_in_a_slot_is_authorized_on_its_own():
         assert mounted["target_id"] == "explicit"
 
         reply = await _event(communicator, "bump", target_id="explicit")
-        assert reply["type"] in ("patch", "html_update"), reply
+        assert legacy_type(reply) in ("patch", "html_update"), reply
         assert reply["target_id"] == "explicit"
         assert EVENTS == [("bumped", "explicit")]
 
@@ -1063,7 +1064,7 @@ async def test_explicit_views_beside_each_other_each_restore_their_own_state():
         for target, times in ((None, 1), ("explicit", 3), (None, 1)):
             for _ in range(times):
                 reply = await _event(communicator, "bump", target_id=target)
-                assert reply["type"] in ("patch", "html_update"), reply
+                assert legacy_type(reply) in ("patch", "html_update"), reply
     finally:
         await _close(communicator)
 
@@ -1241,8 +1242,9 @@ async def test_a_lazy_view_with_an_upload_registers_and_receives_it():
     """A file input inside a lazy view uploads to that view: its register frame
     is addressed to it, and the binary chunks (which carry only the upload's
     ref) reach the manager that registered the ref."""
-    from djust.uploads import FRAME_CHUNK, FRAME_COMPLETE
     import struct
+
+    from djust.uploads import FRAME_CHUNK, FRAME_COMPLETE
 
     communicator = await _connect()
     try:

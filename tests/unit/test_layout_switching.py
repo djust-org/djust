@@ -5,9 +5,8 @@ from __future__ import annotations
 from unittest.mock import AsyncMock
 
 import pytest
-
 from djust.mixins.layout import LayoutMixin
-
+from djust.tests._frames import effects_of
 
 # ---------------------------------------------------------------------------
 # LayoutMixin unit tests
@@ -56,7 +55,7 @@ class TestLayoutMixin:
 
 
 # ---------------------------------------------------------------------------
-# Consumer _flush_pending_layout
+# Consumer layout drain (one effects-only render frame, #3658)
 # ---------------------------------------------------------------------------
 
 
@@ -79,11 +78,10 @@ async def test_flush_pending_layout_emits_frame_when_pending(monkeypatch):
         return "<html><body>FULLSCREEN</body></html>"
 
     monkeypatch.setattr("django.template.loader.render_to_string", _fake_render_to_string)
-    await consumer._flush_pending_layout()
+    await consumer._send_effects("event", kinds=("layout",))
 
     consumer.send_json.assert_awaited_once()
-    sent = consumer.send_json.await_args.args[0]
-    assert sent["type"] == "layout"
+    [sent] = effects_of(consumer.send_json.await_args.args[0], "layout")
     assert sent["path"] == "layouts/fullscreen.html"
     assert "FULLSCREEN" in sent["html"]
 
@@ -96,7 +94,7 @@ async def test_flush_pending_layout_noop_when_empty():
     consumer.view_instance = _View()
     consumer.send_json = AsyncMock()
 
-    await consumer._flush_pending_layout()
+    await consumer._send_effects("event", kinds=("layout",))
     consumer.send_json.assert_not_awaited()
 
 
@@ -107,7 +105,6 @@ async def test_flush_pending_layout_template_missing_logs_and_skips(monkeypatch,
     import logging
 
     from django.template.exceptions import TemplateDoesNotExist
-
     from djust.websocket import LiveViewConsumer
 
     consumer = LiveViewConsumer.__new__(LiveViewConsumer)
@@ -122,7 +119,7 @@ async def test_flush_pending_layout_template_missing_logs_and_skips(monkeypatch,
     monkeypatch.setattr("django.template.loader.render_to_string", _raise)
 
     with caplog.at_level(logging.WARNING, logger="djust.websocket"):
-        await consumer._flush_pending_layout()
+        await consumer._send_effects("event", kinds=("layout",))
 
     consumer.send_json.assert_not_awaited()
     assert any("template not found" in r.message for r in caplog.records)
@@ -141,7 +138,7 @@ async def test_flush_pending_layout_view_without_mixin_is_safe():
     consumer.view_instance = _PlainView()
     consumer.send_json = AsyncMock()
 
-    await consumer._flush_pending_layout()
+    await consumer._send_effects("event", kinds=("layout",))
     consumer.send_json.assert_not_awaited()
 
 
@@ -153,7 +150,7 @@ async def test_flush_pending_layout_view_none_is_safe():
     consumer.view_instance = None
     consumer.send_json = AsyncMock()
 
-    await consumer._flush_pending_layout()
+    await consumer._send_effects("event", kinds=("layout",))
     consumer.send_json.assert_not_awaited()
 
 
@@ -161,7 +158,6 @@ async def _flush_broken_context_in_production(caplog):
     import logging
 
     from django.test import override_settings
-
     from djust.websocket import LiveViewConsumer
 
     class _BrokenContext(LayoutMixin):
@@ -178,7 +174,7 @@ async def _flush_broken_context_in_production(caplog):
 
     with override_settings(DEBUG=False):
         with caplog.at_level(logging.ERROR, logger="djust.websocket"):
-            await consumer._flush_pending_layout()
+            await consumer._send_effects("event", kinds=("layout",))
     consumer.send_json.assert_not_awaited()  # the swap is skipped, the WS stays alive
 
 
@@ -209,7 +205,6 @@ async def test_flush_pending_layout_get_context_raises_prod_names_error_when_opt
 async def test_flush_pending_layout_get_context_raises_debug_reraises(monkeypatch):
     """In DEBUG, the exception re-raises so programmer errors surface."""
     from django.test import override_settings
-
     from djust.websocket import LiveViewConsumer
 
     class _BrokenContext(LayoutMixin):
@@ -226,7 +221,7 @@ async def test_flush_pending_layout_get_context_raises_debug_reraises(monkeypatc
 
     with override_settings(DEBUG=True):
         with pytest.raises(AttributeError, match="missing_key"):
-            await consumer._flush_pending_layout()
+            await consumer._send_effects("event", kinds=("layout",))
 
 
 # ---------------------------------------------------------------------------

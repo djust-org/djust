@@ -9,11 +9,12 @@ Verifies that:
 """
 
 import asyncio
-import pytest
 from unittest.mock import MagicMock
-from djust import LiveView
+
+import pytest
+from djust import LiveView, state
+from djust.tests._frames import legacy_type
 from djust.websocket import LiveViewConsumer
-from djust import state
 
 
 class TickCounterView(LiveView):
@@ -75,7 +76,7 @@ class TestSendUpdateSourceAndRef:
 
         assert len(sent_messages) == 1
         msg = sent_messages[0]
-        assert msg["type"] == "patch"
+        assert legacy_type(msg) == "patch"
         assert msg["source"] == "tick"
         assert "ref" not in msg  # Ticks don't have refs
 
@@ -107,7 +108,7 @@ class TestSendUpdateSourceAndRef:
 
         assert len(sent_messages) == 1
         msg = sent_messages[0]
-        assert msg["type"] == "patch"
+        assert legacy_type(msg) == "patch"
         assert msg["source"] == "event"
         assert msg["ref"] == 42
 
@@ -168,7 +169,7 @@ class TestSendUpdateSourceAndRef:
 
         assert len(sent_messages) == 1
         msg = sent_messages[0]
-        assert msg["type"] == "html_update"
+        assert legacy_type(msg) == "html_update"
         assert msg["source"] == "event"
         assert msg["ref"] == 7
 
@@ -190,7 +191,7 @@ class TestSendNoopRef:
 
         assert len(sent_messages) == 1
         msg = sent_messages[0]
-        assert msg["type"] == "noop"
+        assert legacy_type(msg) == "noop"
         assert msg["ref"] == 99
 
     @pytest.mark.asyncio
@@ -329,7 +330,7 @@ class TestServerPushSourceBroadcast:
 
         await consumer.server_push({"state": {"count": 10}})
 
-        patch_msgs = [m for m in consumer.sent if m.get("type") == "patch"]
+        patch_msgs = [m for m in consumer.sent if legacy_type(m) == "patch"]
         assert len(patch_msgs) == 1
         assert patch_msgs[0]["source"] == "broadcast"
 
@@ -362,7 +363,7 @@ class TestServerPushSourceBroadcast:
 
         # server_push must not render while the user event runs (#560)...
         await consumer.server_push({"state": {"count": 10}})
-        patch_msgs = [m for m in consumer.sent if m.get("type") == "patch"]
+        patch_msgs = [m for m in consumer.sent if legacy_type(m) == "patch"]
         assert len(patch_msgs) == 0
 
         # ...but it is deferred, not dropped (#3001): once the event ends it
@@ -370,7 +371,7 @@ class TestServerPushSourceBroadcast:
         consumer._processing_user_event = False
         consumer._render_lock.release()
         await asyncio.wait_for(consumer._push_drain_task, timeout=1)
-        patch_msgs = [m for m in consumer.sent if m.get("type") == "patch"]
+        patch_msgs = [m for m in consumer.sent if legacy_type(m) == "patch"]
         assert len(patch_msgs) == 1
         assert patch_msgs[0]["source"] == "broadcast"
 
@@ -390,6 +391,6 @@ class TestAsyncWorkSourceAsync:
 
         await consumer._run_async_work("test_task", sync_callback, (), {}, event_name="generate")
 
-        patch_msgs = [m for m in consumer.sent if m.get("type") == "patch"]
+        patch_msgs = [m for m in consumer.sent if legacy_type(m) == "patch"]
         assert len(patch_msgs) == 1
         assert patch_msgs[0]["source"] == "async"

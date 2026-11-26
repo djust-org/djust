@@ -29,6 +29,7 @@ from django.urls import path
 
 from djust import LiveView, event_handler
 from djust.decorators import state
+from djust.tests._frames import frame_matches, legacy_type
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
 
@@ -289,7 +290,7 @@ async def _event(comm, event, **params):
     await comm.send_json_to({"type": "event", "event": event, "params": params})
     while True:
         frame = await comm.receive_json_from()
-        if frame.get("type") in {"embedded_update", "error", "patch", "html_update", "noop"}:
+        if legacy_type(frame) in {"embedded_update", "error", "patch", "html_update", "noop"}:
             return frame
 
 
@@ -299,7 +300,7 @@ async def _send(comm, payload, until=("mount", "error", "mount_batch")):
     while True:
         frame = await comm.receive_json_from()
         frames.append(frame)
-        if frame.get("type") in until:
+        if frame_matches(frame, until):
             return frames
 
 
@@ -342,7 +343,7 @@ async def test_nested_child_moves_with_its_carried_parent():
             assert frames[-1]["type"] == "mount", frames
             assert Inner.mounts == 1
             reply = await _event(comm, "inc", view_id="inner")
-            assert reply["type"] == "embedded_update", reply
+            assert legacy_type(reply) == "embedded_update", reply
             assert "inner=3" in reply["html"], reply
             # Re-rendering the carried parent reuses the nested child.
             reply = await _event(comm, "bump", view_id="outer")
@@ -361,7 +362,7 @@ async def test_sticky_child_nested_in_a_sticky_child_moves_with_it():
             frames = await _redirect(comm, "KB", "/kb/")
             assert _held(frames) == ["outer"]
             reply = await _event(comm, "inc", view_id="inner-sticky")
-            assert reply["type"] == "embedded_update", reply
+            assert legacy_type(reply) == "embedded_update", reply
             assert "inner=2" in reply["html"], reply
             assert InnerSticky.mounts == 1
         finally:
@@ -378,7 +379,7 @@ async def test_nested_child_server_state_moves_to_the_destination():
             assert _held(frames) == ["outer"]
             assert (await _stored(key, "/sb/", ("outer", "stored-inner"))) == {"n": 1}
             reply = await _event(comm, "inc", view_id="stored-inner")
-            assert reply["type"] == "embedded_update", reply
+            assert legacy_type(reply) == "embedded_update", reply
             assert "inner=2" in reply["html"], reply
         finally:
             await comm.disconnect()

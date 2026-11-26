@@ -19,12 +19,11 @@ import pytest
 from asgiref.sync import sync_to_async
 from django.test import override_settings
 
-from djust import LiveView
+from djust import LiveView, multiloop, state
 from djust.config import config as djust_config
-from djust import multiloop
 from djust.decorators import event_handler
 from djust.push import push_to_view
-from djust import state
+from djust.tests._frames import legacy_type
 
 pytest.importorskip("channels")
 
@@ -228,7 +227,7 @@ def test_a_push_from_outside_any_loop_reaches_sessions_on_both_loops(
                 )
             assert _wait_for(lambda: len(_SEEN.get("a", ())) >= 5 and len(_SEEN.get("b", ())) >= 5)
             frames = [loop_a.run(_drain(a, 0.5)), loop_b.run(_drain(b, 0.5))]
-            assert all(any(f.get("type") == "patch" for f in fs) for fs in frames)
+            assert all(any(legacy_type(f) == "patch" for f in fs) for fs in frames)
             assert [n for _, n in _SEEN["a"]] == [n for _, n in _SEEN["b"]] == list(range(5))
         finally:
             loop_a.run(a.disconnect())

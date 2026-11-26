@@ -22,13 +22,14 @@ import pytest
 from djust import LiveView
 from djust.decorators import event_handler
 from djust.mixins.rust_bridge import RENDER_REQUESTED, full_html_requested
+from djust.tests._frames import legacy_type
 from djust.tests.test_transport_behavioral_parity import _mounted_event_runtime
 
 _HERE = "djust.tests.test_set_changed_keys_diff_4286"
 
 
 def _updates(sent):
-    return [f for f in sent if f.get("type") in ("patch", "html_update")]
+    return [f for f in sent if legacy_type(f) in ("patch", "html_update")]
 
 
 def _patch_text(frame):
@@ -225,19 +226,19 @@ class TestEventSpine:
     async def test_zero_arg_form_sends_a_patch(self):
         view, sent = await _dispatch(NoteView(), "typed", value="Wh")
         frames = _updates(sent)
-        assert [f["type"] for f in frames] == ["patch"], sent
+        assert [legacy_type(f) for f in frames] == ["patch"], sent
         assert '"2"' in _patch_text(frames[0]), frames[0]
         assert not view.__dict__.get("_force_full_html"), "consumed by the render"
 
     async def test_keyed_form_sends_a_patch_with_the_new_text(self):
         _view, sent = await _dispatch(RowsView(), "rename", name="gamma")
         frames = _updates(sent)
-        assert [f["type"] for f in frames] == ["patch"], sent
+        assert [legacy_type(f) for f in frames] == ["patch"], sent
         assert "gamma" in _patch_text(frames[0]), frames[0]
 
     async def test_request_full_render_still_sends_full_html(self):
         _view, sent = await _dispatch(NoteView(), "reload_all", value="Wh")
-        assert [f["type"] for f in _updates(sent)] == ["html_update"], sent
+        assert [legacy_type(f) for f in _updates(sent)] == ["html_update"], sent
 
     async def test_a_framework_full_page_stays_a_full_page(self):
         """Upgrade only: a restore set ``True`` before dispatch."""
@@ -245,13 +246,13 @@ class TestEventSpine:
         transport.sent.clear()
         runtime.view_instance._force_full_html = True
         await runtime.dispatch_event({"type": "event", "event": "typed", "params": {"value": "W"}})
-        assert [f["type"] for f in _updates(transport.sent)] == ["html_update"], transport.sent
+        assert [legacy_type(f) for f in _updates(transport.sent)] == ["html_update"], transport.sent
 
     async def test_set_changed_keys_wins_over_skip_render(self):
         """#2834 precedence holds for the sentinel."""
         _view, sent = await _dispatch(NoteView(), "typed_quietly", value="abc")
         frames = _updates(sent)
-        assert [f["type"] for f in frames] == ["patch"], sent
+        assert [legacy_type(f) for f in frames] == ["patch"], sent
         assert '"3"' in _patch_text(frames[0]), frames[0]
 
 
@@ -278,7 +279,7 @@ async def test_tick_that_calls_set_changed_keys_sends_a_patch():
     consumer.sent.clear()
     await consumer._tick_once()
     frames = _updates(consumer.sent)
-    assert [f["type"] for f in frames] == ["patch"], consumer.sent
+    assert [legacy_type(f) for f in frames] == ["patch"], consumer.sent
     assert '"1"' in _patch_text(frames[0]), frames[0]
     assert not consumer.view_instance.__dict__.get("_force_full_html")
 
@@ -291,7 +292,7 @@ async def test_url_change_that_calls_set_changed_keys_sends_a_patch():
     transport.sent.clear()
     await runtime.dispatch_url_change({"type": "url_change", "params": {"a": "1"}, "uri": "/"})
     frames = _updates(transport.sent)
-    assert [f["type"] for f in frames] == ["patch"], transport.sent
+    assert [legacy_type(f) for f in frames] == ["patch"], transport.sent
     assert not runtime.view_instance.__dict__.get("_force_full_html")
 
 
@@ -309,7 +310,7 @@ async def test_sse_runtime_tick_consumes_the_render_request():
     transport.sent.clear()
     assert await runtime._tick_once(view) is True
     frames = _updates(transport.sent)
-    assert [f["type"] for f in frames] == ["patch"], transport.sent
+    assert [legacy_type(f) for f in frames] == ["patch"], transport.sent
     assert '"1"' in _patch_text(frames[0]), frames[0]
     assert not view.__dict__.get("_force_full_html"), "the tick consumed the request"
     transport.sent.clear()
@@ -326,5 +327,5 @@ async def test_sse_async_result_with_a_full_page_request_sends_html():
     transport.sent.clear()
     view._force_full_html = True
     await runtime._render_async_result("tick", source="tick")
-    assert [f["type"] for f in _updates(transport.sent)] == ["html_update"], transport.sent
+    assert [legacy_type(f) for f in _updates(transport.sent)] == ["html_update"], transport.sent
     assert view._force_full_html is False

@@ -39,6 +39,7 @@ from djust import LiveView
 from djust._late_save import LateSaveDropped, check_session, detached
 from djust.decorators import event_handler, state
 from djust.sse import DjustSSEMessageView, DjustSSEStreamView, _sse_sessions
+from djust.tests._frames import legacy_type
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -439,7 +440,7 @@ async def test_an_explicit_turn_whose_save_finds_the_session_logged_out_asks_for
     errors = [f for f in frames if f.get("type") == "error"]
     assert errors and errors[0].get("code") == "state_error", frames
     assert not errors[0].get("transient"), errors
-    assert not [f for f in frames if f.get("type") in ("patch", "html_update", "noop")], frames
+    assert not [f for f in frames if legacy_type(f) in ("patch", "html_update", "noop")], frames
     assert not await sync_to_async(_exists)(engine, key)
     messages = [r.getMessage() for r in caplog.records]
     assert any("Late state save dropped" in m for m in messages), messages

@@ -20,14 +20,15 @@ import re
 import pytest
 from asgiref.sync import sync_to_async
 from channels.testing import WebsocketCommunicator
+from django.contrib.auth.decorators import login_required
 from django.contrib.auth.models import AnonymousUser, User
 from django.contrib.sessions.backends.db import SessionStore
-from django.contrib.auth.decorators import login_required
 from django.test import RequestFactory, override_settings
 from django.utils.decorators import method_decorator
 
 from djust import LiveView, event_handler, state
 from djust.decorators import permission_required
+from djust.tests._frames import legacy_type
 
 MOD = __name__
 PATH = "/page/"
@@ -260,7 +261,7 @@ def test_event_for_explicit_child_runs_on_it_over_http(session, which):
     response = _post(session, {"view_id": view_id})
     assert response.status_code == 200, response.content
     data = json.loads(response.content)
-    assert data["type"] == "embedded_update"
+    assert legacy_type(data) == "embedded_update"
     assert data["view_id"] == view_id
     assert _count(response) == 1
 
@@ -452,7 +453,7 @@ async def test_same_event_over_ws_sse_and_http_agrees(monkeypatch):
         kid = re.search(r'data-djust-embedded="(child_[^"]+)"', mount["html"]).group(1)
         await socket.send_json_to({"type": "event", "event": "inc", "params": {"view_id": kid}})
         frames = await receive_until(socket, has_type("embedded_update"))
-        htmls["ws"] = [f for f in frames if f.get("type") == "embedded_update"][0]["html"]
+        htmls["ws"] = [f for f in frames if legacy_type(f) == "embedded_update"][0]["html"]
     finally:
         await socket.disconnect()
 

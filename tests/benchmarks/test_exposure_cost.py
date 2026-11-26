@@ -34,9 +34,9 @@ from contextlib import contextmanager
 from typing import Any, Dict, Iterator, List
 
 import pytest
-
 from djust import LiveView, event_handler
 from djust.decorators import state
+from djust.tests._frames import legacy_type
 
 TEMPLATE = """<div dj-root dj-view="{view}">
   <h1>{{{{ title }}}}</h1>
@@ -169,7 +169,6 @@ def _ws_settings() -> Iterator[None]:
     """
     from django.conf import settings
     from django.test import override_settings
-
     from djust._exposure_sessions import MAX_EXPLICIT_STATE_SAVE_TIMEOUT_S
     from djust.config import config as djust_config
 
@@ -195,7 +194,6 @@ async def _connect(session_key: str):
     from channels.testing import WebsocketCommunicator
     from django.contrib.auth.models import AnonymousUser
     from django.contrib.sessions.backends.db import SessionStore
-
     from djust.websocket import LiveViewConsumer
 
     comm = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
@@ -243,7 +241,7 @@ async def _round(comm) -> Dict[str, Any]:
     await comm.send_json_to({"type": "event", "event": "increment", "params": {}})
     while True:
         frame = await comm.receive_json_from()
-        if frame.get("type") in {"patch", "html_update", "error"}:
+        if legacy_type(frame) in {"patch", "html_update", "error"}:
             return frame
 
 
@@ -272,11 +270,10 @@ def test_ws_event(benchmark, staged):
         finally:
             loop.run_until_complete(comm.disconnect())
             loop.close()
-    assert frame["type"] in {"patch", "html_update"}, frame
+    assert legacy_type(frame) in {"patch", "html_update"}, frame
     assert "error" not in replies, replies
     # Prove the explicit event path persisted the declared state each time.
     from django.contrib.sessions.backends.db import SessionStore
-
     from djust._exposure_sessions import load_server_state
 
     restored = load_server_state(ExplicitCostView(), _request(SessionStore(key)))
@@ -305,7 +302,6 @@ def test_a_slow_save_does_not_turn_a_round_into_a_state_error(staged, monkeypatc
 
     pytest.importorskip("channels")
     from django.contrib.sessions.backends.db import SessionStore
-
     from djust import _exposure_sessions
     from djust._exposure_sessions import load_server_state
 
@@ -341,7 +337,7 @@ def test_a_slow_save_does_not_turn_a_round_into_a_state_error(staged, monkeypatc
         finally:
             loop.close()
 
-    assert all(f["type"] in {"patch", "html_update"} for f in frames), frames
+    assert all(legacy_type(f) in {"patch", "html_update"} for f in frames), frames
     assert saves == ["slow", "fast", "fast"], f"the fault was not injected as intended: {saves}"
     restored = load_server_state(ExplicitCostView(), _request(SessionStore(key)))
     assert restored is not None and restored["count"] == 3, restored
@@ -395,7 +391,6 @@ def test_repeated_mount_renderer(benchmark, staged, memory_backend, rf):
 def _adapter(engine: str):
     from django.contrib.sessions.backends.cache import SessionStore as CacheSession
     from django.contrib.sessions.backends.db import SessionStore as DBSession
-
     from djust._exposure import ExposureContract
     from djust._exposure_sessions import ServerStateSession, request_binding
 

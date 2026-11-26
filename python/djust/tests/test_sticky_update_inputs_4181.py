@@ -22,6 +22,7 @@ from django.test import RequestFactory, override_settings
 from django.urls import path
 
 from djust import LiveView, event_handler, state
+from djust.tests._frames import legacy_type
 
 pytestmark = [pytest.mark.django_db(transaction=True)]
 
@@ -231,7 +232,7 @@ async def _event(comm, event, **params):
     await comm.send_json_to({"type": "event", "event": event, "params": params})
     while True:
         frame = await comm.receive_json_from(timeout=10)
-        if frame.get("type") in {"embedded_update", "error", "patch", "html_update", "noop"}:
+        if legacy_type(frame) in {"embedded_update", "error", "patch", "html_update", "noop"}:
             return frame
 
 
@@ -245,7 +246,7 @@ async def _recovery(comm):
 
 async def _play(comm):
     reply = await _event(comm, "play", view_id="player")
-    assert reply["type"] == "embedded_update", reply
+    assert legacy_type(reply) == "embedded_update", reply
     assert "plays=1" in reply["html"], reply
 
 
@@ -309,12 +310,12 @@ async def test_updatable_change_across_live_redirect_carries_and_updates():
             await _play(comm)
             frames = await _redirect(comm, "OtherShell", "/other/")
             assert _held(frames) == ["player"]
-            types = [f.get("type") for f in frames]
+            types = [legacy_type(f) for f in frames]
             mount_at = types.index("mount")
             updates = [
                 f
                 for f in frames[mount_at:]
-                if f.get("type") == "embedded_update" and f.get("view_id") == "player"
+                if legacy_type(f) == "embedded_update" and f.get("view_id") == "player"
             ]
             assert updates, types
             assert "b|t1|plays=1" in updates[0]["html"], updates[0]
@@ -409,7 +410,7 @@ async def test_carried_child_object_permission_is_checked_again_after_the_hook()
             assert carried.object_id == "forbidden"  # the hook ran...
             assert getattr(carried, "_djust_child_disposed", False)  # ...then it was dropped
             assert not any(
-                f.get("type") == "embedded_update" and "obj=forbidden" in f.get("html", "")
+                legacy_type(f) == "embedded_update" and "obj=forbidden" in f.get("html", "")
                 for f in frames
             )
         finally:

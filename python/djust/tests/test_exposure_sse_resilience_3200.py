@@ -31,6 +31,7 @@ from django.utils.functional import SimpleLazyObject
 from djust import LiveView, event_handler
 from djust.decorators import state
 from djust.sse import DjustSSEMessageView, DjustSSEStreamView, _sse_sessions
+from djust.tests._frames import legacy_type
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -131,7 +132,7 @@ async def test_sse_background_result_renders_after_the_post_returns():
         for _ in range(500):
             frames.extend(_drain(session))
             if any(
-                f.get("source") == "async" and f.get("type") in {"patch", "html_update"}
+                f.get("source") == "async" and legacy_type(f) in {"patch", "html_update"}
                 for f in frames
             ) or any(f.get("type") == "error" for f in frames):
                 break
@@ -140,7 +141,8 @@ async def test_sse_background_result_renders_after_the_post_returns():
         assert not errors, errors
         assert session.view_instance.count == 10
         assert any(
-            f.get("source") == "async" and f.get("type") in {"patch", "html_update"} for f in frames
+            f.get("source") == "async" and legacy_type(f) in {"patch", "html_update"}
+            for f in frames
         ), frames
     finally:
         _sse_sessions.pop(session.session_id, None)
@@ -299,7 +301,7 @@ async def test_child_background_result_renders_through_the_sync_bridge(monkeypat
     assert not transport.errors, transport.errors
     assert done == {"result": 4}
     assert child.count == 4
-    assert any(f.get("type") == "embedded_update" for f in transport.sent), transport.sent
+    assert any(legacy_type(f) == "embedded_update" for f in transport.sent), transport.sent
 
 
 async def test_catch_up_delivers_through_the_sync_bridge():
@@ -340,4 +342,4 @@ async def test_catch_up_delivers_through_the_sync_bridge():
         finally:
             SessionStore.save = original
     assert [bool(e.get("transient")) for e in transport.errors] == [True], transport.errors
-    assert [f["type"] for f in transport.sent if f.get("source") == "async"] == ["html_update"]
+    assert [legacy_type(f) for f in transport.sent if f.get("source") == "async"] == ["html_update"]

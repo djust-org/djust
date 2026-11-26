@@ -21,12 +21,12 @@ from djust.mixins.push_events import PushEventMixin
 
 
 class _FakeConsumer:
-    """Minimal consumer with _flush_push_events."""
+    """Minimal consumer with ``_send_effects`` (the flush ``flush_push_events`` uses)."""
 
     def __init__(self):
         self.flush_called = False
 
-    async def _flush_push_events(self):
+    async def _send_effects(self, source, *views, kinds=None):
         self.flush_called = True
 
 
@@ -47,7 +47,7 @@ class TestDynamicFlushCallback:
 
     @pytest.mark.asyncio
     async def test_flush_via_ws_consumer(self):
-        """When _ws_consumer has _flush_push_events, it is used."""
+        """When _ws_consumer has _send_effects, it is used."""
         view = _PushView()
         consumer = _FakeConsumer()
         view._ws_consumer = consumer

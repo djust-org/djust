@@ -21,14 +21,15 @@ from django.contrib.sessions.backends.db import SessionStore
 from django.test import override_settings
 
 from djust import LiveView, event_handler
+from djust._component_state import wire_id
 from djust._exposure_sessions import server_state_adapter
 from djust.components._interactive import DropdownMenu
 from djust.components.descriptors.base import LiveComponent as DescriptorComponent
 from djust.decorators import state
 from djust.runtime import ViewRuntime
+from djust.tests._frames import frame_matches, legacy_type
 from djust.tests.test_exposure_runtime import RuntimeView, make_request
 from djust.tests.test_runtime_state_save_tt_1894 import MockTransport
-from djust._component_state import wire_id
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
 
@@ -112,7 +113,7 @@ async def test_an_explicit_failed_save_is_not_acked(failing_store):
     failing_store()
     await runtime.dispatch_event({"type": "event", "event": "increment", "params": {}})
 
-    assert not [f for f in transport.sent if f.get("type") in SUCCESS_FRAMES], transport.sent
+    assert not [f for f in transport.sent if frame_matches(f, SUCCESS_FRAMES)], transport.sent
     [error] = transport.errors
     assert error["code"] == "state_error"
     assert "STORE_SENTINEL" not in json.dumps(transport.errors)
@@ -123,7 +124,7 @@ async def test_an_explicit_save_goes_through_the_explicit_commit():
     await runtime.dispatch_event({"type": "event", "event": "increment", "params": {}})
 
     assert not transport.errors, transport.errors
-    assert any(f.get("type") in {"patch", "html_update"} for f in transport.sent)
+    assert any(legacy_type(f) in {"patch", "html_update"} for f in transport.sent)
     assert await stored(runtime.view_instance, request.session.session_key) == {
         "count": 6,
         "hidden": "SERVER_SENTINEL",
@@ -169,7 +170,7 @@ async def test_component_declaration_failed_save_is_not_acked(failing_store):
         }
     )
 
-    assert not [f for f in transport.sent if f.get("type") in SUCCESS_FRAMES], transport.sent
+    assert not [f for f in transport.sent if frame_matches(f, SUCCESS_FRAMES)], transport.sent
     [error] = transport.errors
     assert error["code"] == "state_error"
 
@@ -236,7 +237,7 @@ async def test_send_parent_write_with_a_failing_store_is_not_acked(failing_store
     await runtime.dispatch_event(_ping(view))
 
     assert view.count == 1, "the parent's declared field was written"
-    assert not [f for f in transport.sent if f.get("type") in SUCCESS_FRAMES], transport.sent
+    assert not [f for f in transport.sent if frame_matches(f, SUCCESS_FRAMES)], transport.sent
     [error] = transport.errors
     assert error["code"] == "state_error"
 

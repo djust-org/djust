@@ -90,6 +90,19 @@ def _default_close(turn: Turn, refusal: Refusal) -> bool:
     return False
 
 
+def _refusal_frame(turn: Turn, effect: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """One ``render`` frame for a refused turn (#3658): its effect, if any, and,
+    for an event, the acknowledgement (``event_name`` and ``ref``)."""
+    from ._render_frame import render_frame
+
+    fields: Dict[str, Any] = {"source": "mount" if turn.kind in _MOUNT_KINDS else "refusal"}
+    if turn.kind == "event":
+        fields["event_name"] = turn.event
+        fields.update(_ref_fields(turn))
+        fields["source"] = "refusal"
+    return render_frame(effects=[effect] if effect else [], **fields)
+
+
 class RuntimeTurnPort:
     """Port methods for :class:`~djust.runtime.ViewRuntime` (mixed in).
 
@@ -139,22 +152,26 @@ class RuntimeTurnPort:
             target = _target_for(turn, refusal)
             reason = "login_required" if kind == "login" else "redirect"
             if not await self._refused_view(reason, target):  # type: ignore[attr-defined]
-                await transport.send({"type": "navigate", "to": target})
+                # One frame: the navigation and, for an event, its acknowledgement.
+                await transport.send(_refusal_frame(turn, {"kind": "navigate", "to": target}))
+            elif not is_mount:
+                await self._send_turn_ack(turn)
             if is_mount:
                 if close:
                     await self._finalize_mount_auth("redirect")  # type: ignore[attr-defined]
                 return
-            await self._send_turn_ack(turn)
         elif kind == "flash":
             await transport.send(
-                {
-                    "type": "flash",
-                    "action": "put",
-                    "level": refusal.level,
-                    "message": refusal.message or "",
-                }
+                _refusal_frame(
+                    turn,
+                    {
+                        "kind": "flash",
+                        "action": "put",
+                        "level": refusal.level,
+                        "message": refusal.message or "",
+                    },
+                )
             )
-            await self._send_turn_ack(turn)
         elif kind == "rate_limited":
             if turn.kind not in _SERVER_KINDS:
                 await transport.send(
@@ -174,9 +191,8 @@ class RuntimeTurnPort:
         """A refused event that sent no error still ends the client's loading state."""
         if turn.kind != "event":
             return
-        frame: Dict[str, Any] = {"type": "noop", "event_name": turn.event, **_ref_fields(turn)}
         with contextlib.suppress(Exception):
-            await self.transport.send(frame)
+            await self.transport.send(_refusal_frame(turn, None))
 
     async def turn_failed(self, turn: Turn, exc: BaseException) -> bool:
         """The value-free error envelope for an exception escaping a turn.
@@ -246,16 +262,21 @@ class ConsumerTurnPort:
         close = _default_close(turn, refusal)
         if kind in ("login", "redirect"):
             with contextlib.suppress(Exception):
-                await self.send_json({"type": "navigate", "to": _target_for(turn, refusal)})  # type: ignore[attr-defined]
+                await self.send_json(  # type: ignore[attr-defined]
+                    _refusal_frame(turn, {"kind": "navigate", "to": _target_for(turn, refusal)})
+                )
         elif kind == "flash":
             with contextlib.suppress(Exception):
                 await self.send_json(  # type: ignore[attr-defined]
-                    {
-                        "type": "flash",
-                        "action": "put",
-                        "level": refusal.level,
-                        "message": refusal.message or "",
-                    }
+                    _refusal_frame(
+                        turn,
+                        {
+                            "kind": "flash",
+                            "action": "put",
+                            "level": refusal.level,
+                            "message": refusal.message or "",
+                        },
+                    )
                 )
         elif kind == "deny" and turn.kind == "render":
             with contextlib.suppress(Exception):

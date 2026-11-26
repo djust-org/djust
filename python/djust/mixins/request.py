@@ -473,69 +473,44 @@ def _run_http_background_work(view: Any, budget: Optional[_BackgroundBudget] = N
         )
 
 
-def _drain_http_side_channels(view: Any, resp_data: Dict[str, Any]) -> None:
-    """Put ``view``'s queued client side effects on an HTTP fallback answer.
+def _drain_http_side_channels(
+    view: Any,
+    resp_data: Dict[str, Any],
+    navigation: Optional[List[Dict[str, Any]]] = None,
+) -> None:
+    """Make ``resp_data`` the ``render`` answer, carrying ``view``'s queued effects.
 
-    The WebSocket turn sends each queue as its own frame
-    (``LiveViewConsumer._flush_all_pending``). An HTTP answer carries them as
-    keys the client's ``applyHttpSideChannels`` applies: ``_flash``,
-    ``_page_metadata``, ``_push_events`` (``push_event`` / ``push_commands``,
-    in the ``push_event`` frame's ``{event, payload}`` shape) and ``_layout``
-    (``set_layout``, the ``layout`` frame's ``{path, html}``). Then the
-    ``defer()`` callbacks run, last, as they do on the socket. Before this, the
-    fallback carried only flash and page metadata, and dropped the other three
-    queues on the floor.
+    The HTTP answer body is the same ``render`` frame the socket sends (#3658):
+    ``type`` is ``render`` and ``effects`` holds the queued push events, flash,
+    page metadata, layout and navigation in the canonical order
+    (``djust._render_frame.drain_effects``). ``navigation`` is the navigation the
+    caller drained early (to tell a ``live_redirect`` apart); it keeps its place
+    among the navigation effects. Then the ``defer()`` callbacks run, last, as
+    on the socket, and what they queued joins the same answer (the HTTP turn has
+    no second frame).
     """
-    if hasattr(view, "_drain_flash"):
-        flash_commands = view._drain_flash()
-        if flash_commands:
-            resp_data["_flash"] = flash_commands
-    if hasattr(view, "_drain_page_metadata"):
-        meta_commands = view._drain_page_metadata()
-        if meta_commands:
-            resp_data["_page_metadata"] = meta_commands
-    if hasattr(view, "_drain_push_events"):
-        events = view._drain_push_events()
-        if isinstance(events, list) and events:
-            resp_data["_push_events"] = [
-                {"event": event_name, "payload": payload} for event_name, payload in events
-            ]
-    if hasattr(view, "_drain_pending_layout"):
-        layout_path = view._drain_pending_layout()
-        if layout_path:
-            layout = _render_http_layout(view, layout_path)
-            if layout is not None:
-                resp_data["_layout"] = layout
-    _run_http_deferred(view)
+    from .._render_frame import RENDER, drain_effects
 
-
-def _render_http_layout(view: Any, layout_path: str) -> Optional[Dict[str, str]]:
-    """``set_layout``'s ``{path, html}``, with the socket's error handling."""
-    from django.conf import settings as django_settings
-    from django.template.exceptions import TemplateDoesNotExist
-
-    from .._exposure_diagnostics import log_failure_for
-    from .layout import render_pending_layout
-
-    try:
-        html = render_pending_layout(view, layout_path)
-    except TemplateDoesNotExist:
-        logger.warning("set_layout(%r) — template not found; ignoring swap request", layout_path)
-        return None
-    except Exception as exc:  # noqa: BLE001 — a layout error must not fail the event answer
-        log_failure_for(
-            logger,
-            (view,),
-            exc,
-            "set_layout(%r) — template rendering raised; ignoring swap request",
-            layout_path,
-            traceback=True,
+    effects = drain_effects(view)
+    if navigation:
+        first_nav = next(
+            (i for i, e in enumerate(effects) if e.get("kind") == "navigation"), len(effects)
         )
-        # In DEBUG, re-raise so programmer errors are visible (the socket does).
-        if getattr(django_settings, "DEBUG", False):
-            raise
-        return None
-    return {"path": layout_path, "html": html}
+        effects[first_nav:first_nav] = list(navigation)
+    _run_http_deferred(view)
+    effects.extend(drain_effects(view))
+    fields = {k: v for k, v in resp_data.items() if k not in ("type", "effects")}
+    resp_data.clear()
+    resp_data["type"] = RENDER
+    resp_data.update(fields)
+    resp_data["effects"] = effects
+
+
+def _drain_http_navigation(view: Any) -> List[Dict[str, Any]]:
+    """``view``'s queued navigation, drained now, as ``navigation`` effects."""
+    from .._render_frame import drain_effects
+
+    return drain_effects(view, kinds=("navigation",))
 
 
 def _run_http_deferred(view: Any) -> None:
@@ -1665,31 +1640,21 @@ class RequestMixin:
     ) -> HttpResponse:
         """Answer an event the child's handler has run (#3104).
 
-        The shape the socket transports use for a child's event: an
-        ``embedded_update`` carrying the child's own HTML, which the client
+        The shape the socket transports use for a child's event: a ``render``
+        frame whose ``view_id`` + ``html`` carry the child's own HTML, which the client
         morphs into the child's container. Its side channels (flash, page
         metadata, navigation) are the child's, and nothing of the page is
         rendered or saved: the event could not have changed it.
         """
         from ..websocket import render_embedded_child_html
 
-        response: Dict[str, Any] = {"type": "embedded_update", "view_id": view_id}
-        navigation_frames: List[Dict[str, Any]] = []
-        if hasattr(child, "_drain_navigation"):
-            for command in child._drain_navigation():
-                navigation_frames.append(
-                    {
-                        "type": "navigation",
-                        "action": command.get("type"),
-                        **{k: v for k, v in command.items() if k != "type"},
-                    }
-                )
-        if navigation_frames:
-            response["_navigation"] = navigation_frames
-        _drain_http_side_channels(child, response)
-        if any(frame["action"] == "live_redirect" for frame in navigation_frames):
+        response: Dict[str, Any] = {}
+        navigation = _drain_http_navigation(child)
+        _drain_http_side_channels(child, response, navigation)
+        if any(effect.get("action") == "live_redirect" for effect in navigation):
             # The event leaves the page: nothing is rendered or saved for it.
             return JsonResponse(response)
+        response["view_id"] = view_id
 
         # The page tree's public parameter contracts travel with the update, as
         # with every other render answer (ADR-036): the child's owners are part
@@ -1801,9 +1766,7 @@ class RequestMixin:
             navigation_frames: List[Dict[str, Any]] = []
 
             def _inject_side_channels(resp_data: Dict[str, Any]) -> None:
-                if navigation_frames:
-                    resp_data["_navigation"] = navigation_frames
-                _drain_http_side_channels(self, resp_data)
+                _drain_http_side_channels(self, resp_data, navigation_frames)
 
             # --- Authorization layer 1 of 3: view-level ---------------------
             # login_required / permission_required / check_permissions().
@@ -2328,16 +2291,8 @@ class RequestMixin:
             # nothing is rendered or saved for it: after ``logout()`` the
             # request is anonymous and ``get_context_data()`` may not run. A
             # ``live_patch`` stays on the view, so its render still goes out.
-            if hasattr(self, "_drain_navigation"):
-                for command in self._drain_navigation():
-                    navigation_frames.append(
-                        {
-                            "type": "navigation",
-                            "action": command.get("type"),
-                            **{k: v for k, v in command.items() if k != "type"},
-                        }
-                    )
-            if any(frame["action"] == "live_redirect" for frame in navigation_frames):
+            navigation_frames.extend(_drain_http_navigation(self))
+            if any(effect.get("action") == "live_redirect" for effect in navigation_frames):
                 redirect_response: Dict[str, Any] = {}
                 _inject_side_channels(redirect_response)
                 return JsonResponse(redirect_response)
@@ -2386,7 +2341,7 @@ class RequestMixin:
                 and not getattr(self, "_force_full_html", False)
                 and not getattr(self, "_async_tasks", None)
             ):
-                noop_response = {"type": "noop", "event_name": event_name, **response_fields}
+                noop_response = {"event_name": event_name, **response_fields}
                 _inject_side_channels(noop_response)
                 return JsonResponse(noop_response)
 
@@ -2396,15 +2351,16 @@ class RequestMixin:
             # ``_resolve_skip_render`` (#2834, #2924); the HTTP fallback never
             # consulted it, so the same flag rendered here and was never reset
             # (#3038, the #1646 parallel-path class). An explicit view's
-            # declared state above is already saved. The answer is an empty patch list with no ``version``: nothing was
-            # rendered, so the client's VDOM cursor must not move. Side channels
-            # (flash, page metadata) still go out, as they do with the WS noop.
+            # declared state above is already saved. The answer is a ``render``
+            # frame with no DOM part and no ``version`` (#3658): nothing was
+            # rendered, so the client's VDOM cursor must not move. The effects
+            # (flash, page metadata, ...) still go out, as on the socket.
             # No ``cache_request_id``: the WS/SSE noop carries none, so a
             # skipped turn is never stored as an ``@cache`` hit on any transport.
             from ..websocket import _resolve_skip_render
 
             if _resolve_skip_render(self):
-                skip_response: Dict[str, Any] = {"patches": [], **response_fields}
+                skip_response: Dict[str, Any] = {**response_fields}
                 contract_fields = _http_parameter_contract_fields(self, request)
                 if contract_fields is None:
                     return _contract_error_response()

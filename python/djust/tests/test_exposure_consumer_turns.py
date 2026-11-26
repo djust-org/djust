@@ -25,6 +25,7 @@ from django.test import override_settings
 
 from djust import LiveView, event_handler
 from djust.decorators import state
+from djust.tests._frames import legacy_type
 from djust.websocket import LiveViewConsumer
 
 from ._ws_frames import WAIT_S, drain_extra, has_type, receive_until
@@ -186,7 +187,7 @@ _UPDATE = has_type("patch", "html_update")
 
 def _update_from(source):
     return lambda frames: any(
-        f.get("type") in {"patch", "html_update"} and f.get("source") == source for f in frames
+        legacy_type(f) in {"patch", "html_update"} and f.get("source") == source for f in frames
     )
 
 
@@ -234,7 +235,7 @@ async def test_db_notify_mutation_is_persisted(pool):
             await _notify({"count": 9})
             frames, closed = await _collect(socket, _UPDATE)
             assert RAN == ["notify"] and closed is None, (RAN, frames)
-            assert any(f.get("type") in {"patch", "html_update"} for f in frames), frames
+            assert any(legacy_type(f) in {"patch", "html_update"} for f in frames), frames
         finally:
             await socket.disconnect()
         assert ">9<" in await _restored_count(request, TurnView), "NOTIFY state not persisted"
@@ -253,7 +254,7 @@ async def test_db_notify_on_a_revoked_session_is_denied(pool):
                 socket, lambda frames: frames[-1:] and frames[-1]["type"] == "websocket.close"
             )
             assert RAN == [], "handle_info ran without current authorization"
-            assert not [f for f in frames if f.get("type") in {"patch", "html_update"}], frames
+            assert not [f for f in frames if legacy_type(f) in {"patch", "html_update"}], frames
             assert [f.get("code") for f in frames if f.get("type") == "error"] == [
                 "permission_denied"
             ]
@@ -296,7 +297,7 @@ async def test_server_push_on_a_revoked_session_is_denied(pool):
                 socket, lambda frames: frames[-1:] and frames[-1]["type"] == "websocket.close"
             )
             assert RAN == [], "the push hook ran without current authorization"
-            assert not [f for f in frames if f.get("type") in {"patch", "html_update"}], frames
+            assert not [f for f in frames if legacy_type(f) in {"patch", "html_update"}], frames
             assert [f.get("code") for f in frames if f.get("type") == "error"] == [
                 "permission_denied"
             ]
@@ -337,7 +338,7 @@ async def test_push_to_a_view_with_async_check_permissions(pool, allowed):
                 )
                 assert RAN == [], "the push hook ran on a refused async check_permissions"
                 assert closed == {"type": "websocket.close", "code": 4403}
-                assert not [f for f in frames if f.get("type") in {"patch", "html_update"}]
+                assert not [f for f in frames if legacy_type(f) in {"patch", "html_update"}]
         finally:
             AsyncCheckTurnView.allowed = True
             await socket.disconnect()
@@ -386,12 +387,12 @@ async def test_server_push_whose_save_fails_withholds_the_frame(pool, monkeypatc
             frames, closed = await _collect(socket, has_type("error"))
             assert RAN == ["push"] and closed is None, (RAN, frames)
             assert [f.get("code") for f in frames if f.get("type") == "error"] == ["state_error"]
-            assert not [f for f in frames if f.get("type") in {"patch", "html_update"}], frames
+            assert not [f for f in frames if legacy_type(f) in {"patch", "html_update"}], frames
             fail["on"] = False
             # This push changes only the label; the withheld count must still land.
             await apush_to_view(path, handler="handle_label", payload={"label": "b"})
             frames, _ = await _collect(socket, _UPDATE)
-            updates = [f for f in frames if f.get("type") in {"patch", "html_update"}]
+            updates = [f for f in frames if legacy_type(f) in {"patch", "html_update"}]
             assert len(updates) == 1, frames
             assert "4" in json.dumps(updates[0]), updates
         finally:
@@ -426,7 +427,7 @@ async def test_push_turn_refreshes_the_client_snapshot(pool):
             frames, _ = await _collect(socket, _UPDATE)
         finally:
             await socket.disconnect()
-    updates = [f for f in frames if f.get("type") in {"patch", "html_update"}]
+    updates = [f for f in frames if legacy_type(f) in {"patch", "html_update"}]
     assert updates, frames
     token = updates[-1].get("state_snapshot_signed")
     assert isinstance(token, str) and token and token != mount_frame.get("state_snapshot_signed")
@@ -463,7 +464,7 @@ async def test_tick_on_a_revoked_session_is_denied(pool):
                 socket, lambda frames: frames[-1:] and frames[-1]["type"] == "websocket.close"
             )
             assert "tick" not in RAN, "handle_tick ran without current authorization"
-            assert not [f for f in frames if f.get("type") in {"patch", "html_update"}], frames
+            assert not [f for f in frames if legacy_type(f) in {"patch", "html_update"}], frames
             assert [f.get("code") for f in frames if f.get("type") == "error"] == [
                 "permission_denied"
             ]
@@ -513,7 +514,7 @@ async def test_tick_whose_save_fails_withholds_the_frame(pool, monkeypatch):
             fail["on"] = False
             assert RAN == ["tick"], (RAN, frames)
             assert [f.get("code") for f in frames if f.get("type") == "error"] == ["state_error"]
-            assert not [f for f in frames if f.get("type") in {"patch", "html_update"}], frames
+            assert not [f for f in frames if legacy_type(f) in {"patch", "html_update"}], frames
             frames = await receive_until(socket, _update_from("tick"), what="the next tick")
             updates = [f for f in frames if f.get("source") == "tick"]
             last = updates[-1]
@@ -542,11 +543,11 @@ async def test_db_notify_whose_save_fails_withholds_the_frame(pool, monkeypatch)
             frames, closed = await _collect(socket, has_type("error"))
             assert RAN == ["notify"] and closed is None, (RAN, frames)
             assert [f.get("code") for f in frames if f.get("type") == "error"] == ["state_error"]
-            assert not [f for f in frames if f.get("type") in {"patch", "html_update"}], frames
+            assert not [f for f in frames if legacy_type(f) in {"patch", "html_update"}], frames
             fail["on"] = False
             await apush_to_view(path, handler="handle_label", payload={"label": "b"})
             frames, _ = await _collect(socket, _UPDATE)
-            updates = [f for f in frames if f.get("type") in {"patch", "html_update"}]
+            updates = [f for f in frames if legacy_type(f) in {"patch", "html_update"}]
             assert len(updates) == 1, frames
             assert "4" in json.dumps(updates[0]), updates
         finally:
@@ -684,7 +685,7 @@ async def test_notify_turn_refreshes_the_client_snapshot(pool):
             frames, _ = await _collect(socket, _UPDATE)
         finally:
             await socket.disconnect()
-    updates = [f for f in frames if f.get("type") in {"patch", "html_update"}]
+    updates = [f for f in frames if legacy_type(f) in {"patch", "html_update"}]
     assert updates, frames
     token = updates[-1].get("state_snapshot_signed")
     assert isinstance(token, str) and token and token != mount_frame.get("state_snapshot_signed")

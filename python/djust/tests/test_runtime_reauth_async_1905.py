@@ -34,6 +34,7 @@ from djust import LiveView
 from djust.decorators import event_handler
 from djust.runtime import ViewRuntime, WSConsumerTransport
 from djust.sse import DjustSSEMessageView, DjustSSEStreamView, _sse_sessions
+from djust.tests._frames import legacy_type
 
 pytestmark = pytest.mark.django_db
 
@@ -169,10 +170,10 @@ class TestAsyncSourceReconcile:
         for _ in range(200):
             await asyncio.sleep(0.01)
             followup += _drain(session)
-            if any(m.get("type") in ("patch", "html_update") for m in followup):
+            if any(legacy_type(m) in ("patch", "html_update") for m in followup):
                 break
 
-        async_frames = [m for m in followup if m.get("type") in ("patch", "html_update")]
+        async_frames = [m for m in followup if legacy_type(m) in ("patch", "html_update")]
         assert async_frames, f"background completion must stream a render frame, got {followup!r}"
         assert all(m.get("source") == "async" for m in async_frames), (
             f"runtime async-result frames must carry source='async', got {async_frames!r}"
@@ -214,7 +215,7 @@ class TestAsyncSourceReconcile:
 
         await runtime._render_async_result("begin_async")
         assert sent, "a frame must be sent"
-        assert sent[0]["type"] == "patch"
+        assert legacy_type(sent[0]) == "patch"
         assert sent[0]["source"] == "async", (
             f"patch async frame must be source='async': {sent[0]!r}"
         )
@@ -225,7 +226,7 @@ class TestAsyncSourceReconcile:
         view._strip_comments_and_whitespace = MagicMock(side_effect=lambda h: h)
         view._extract_liveview_content = MagicMock(side_effect=lambda h: h)
         await runtime._render_async_result("begin_async")
-        assert sent[0]["type"] == "html_update"
+        assert legacy_type(sent[0]) == "html_update"
         assert sent[0]["source"] == "async", (
             f"html_update async frame must be source='async': {sent[0]!r}"
         )

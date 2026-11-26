@@ -19,6 +19,7 @@ from django.urls import path
 from djust import LiveView
 from djust._automatic_state import TAB_HEADER
 from djust.decorators import event_handler, state
+from djust.tests._frames import legacy_type
 from djust.tests.http_fallback_matrix import PAGE
 
 pytestmark = [pytest.mark.django_db(transaction=True)]
@@ -146,7 +147,7 @@ async def test_websocket_mount_mounts_fresh_when_the_session_is_gone():
         assert 'id="n">0<' in frame["html"] and "MOUNTED" in frame["html"], frame["html"]
         await comm.send_json_to({"type": "event", "event": "increment", "params": {}})
         reply = await comm.receive_json_from()
-        assert reply["type"] in {"patch", "html_update"}, reply
+        assert legacy_type(reply) in {"patch", "html_update"}, reply
     finally:
         await comm.disconnect()
 

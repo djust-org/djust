@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from djust import LiveView
+from djust.tests._frames import legacy_type
 from djust.tests._live_session import amount_on_consumer
 from djust.websocket import LiveViewConsumer
 
@@ -51,14 +52,14 @@ async def test_lost_background_baseline_delivers_html_and_arms_recovery(producer
 
     consumer._send_update.assert_awaited_once()
     frame = consumer.send_json.call_args.args[0]
-    assert frame["type"] == "html_update"
+    assert legacy_type(frame) == "html_update"
     assert "Count: 1" in frame["html"]
     assert frame["version"] == 8
     assert frame["source"] == ("tick" if producer == "tick" else "broadcast")
     assert consumer._recovery_version == 8
     assert "Count: 1" in consumer._recovery_html
     assert not consumer._render_lock.locked()
-    consumer._flush_all_pending.assert_awaited_once()
+    assert frame["effects"] == []  # one render frame carries the turn's effects (#3658)
     await consumer.handle_request_html({})
     recovered = consumer.send_json.call_args.args[0]
     assert recovered["type"] == "html_recovery"

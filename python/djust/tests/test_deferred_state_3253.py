@@ -11,9 +11,10 @@ from django.test import override_settings
 from djust import LiveView, event_handler
 from djust.decorators import state
 from djust.sse import SSESession
+from djust.tests._frames import legacy_type
 from djust.websocket import LiveViewConsumer
 
-from ._ws_frames import receive_settled, has_type
+from ._ws_frames import has_type, receive_settled
 from .test_exposure_runtime import make_request
 
 TOKEN = "state_snapshot_signed"
@@ -100,7 +101,7 @@ async def test_deferred_turn_saves_and_signs_declared_state_only(transport, quie
             queued = await sse_event(
                 session, request, "change", {"_activity": "panel", "quiet": quiet}
             )
-            assert any(f.get("type") == "noop" for f in queued)
+            assert any(legacy_type(f) == "noop" for f in queued)
             frames = await sse_event(session, request, "reveal", {})
         else:
             socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
@@ -129,11 +130,11 @@ async def test_deferred_turn_saves_and_signs_declared_state_only(transport, quie
             frames = await receive_settled(
                 socket,
                 lambda fs: any(
-                    f.get(TOKEN) or f.get("event_name") == "change" or f.get("type") == "noop"
+                    f.get(TOKEN) or f.get("event_name") == "change" or legacy_type(f) == "noop"
                     for f in fs
                 ),
             )
-        successes = [f for f in frames if f.get("type") in ("noop", "patch", "html_update")]
+        successes = [f for f in frames if legacy_type(f) in ("noop", "patch", "html_update")]
         assert successes, frames
         # Read fresh storage, not the in-memory mounted instance/session cache.
         fresh = await sync_to_async(make_request)(request.session.session_key)
@@ -189,7 +190,7 @@ async def test_deferred_explicit_waits_for_storage(monkeypatch, quiet, outcome):
             # The outer reveal may acknowledge count=0. No deferred success is
             # allowed while its count=1 write is blocked.
             frames = drain(session)
-            assert not any(f.get("type") in ("patch", "html_update") for f in frames), frames
+            assert not any(legacy_type(f) in ("patch", "html_update") for f in frames), frames
             assert not any(f.get("event_name") == "change" for f in frames), frames
             assert not task.done()
             if outcome == "cancel":

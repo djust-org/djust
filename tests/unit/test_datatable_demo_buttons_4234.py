@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 from django.test import Client
+from djust.tests._frames import payloads_of
 
 URL = "/demos/datatable/"
 TEMPLATE = (
@@ -46,7 +47,7 @@ def _click(client, event):
         URL, data=json.dumps({"event": event, "params": {}}), content_type="application/json"
     )
     assert resp.status_code == 200, resp.content.decode()
-    pushed = [e for e in resp.json().get("_push_events", []) if e["event"] == "products_updated"]
+    pushed = [e for e in payloads_of(resp.json(), "push_event") if e["event"] == "products_updated"]
     assert len(pushed) == 1, resp.json()
     payload = pushed[0]["payload"]
     assert set(payload) == {"products", "stats"}

@@ -23,6 +23,8 @@ import pytest
 from asgiref.sync import sync_to_async
 from django.conf import settings
 
+from djust.tests._frames import effects_of, legacy_type
+
 if not settings.configured:
     settings.configure(
         DATABASES={"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}},
@@ -312,7 +314,7 @@ async def _mounted(cls: type) -> tuple[LiveView, ViewRuntime, MockTransport]:
 
 
 def _last_frame(transport: MockTransport) -> Dict[str, Any]:
-    frames = [f for f in transport.sent if f.get("type") in ("patch", "html_update", "noop")]
+    frames = [f for f in transport.sent if legacy_type(f) in ("patch", "html_update", "noop")]
     assert frames, transport.sent
     return frames[-1]
 
@@ -427,7 +429,7 @@ class TestScopedPath:
                 {"type": "event", "event": "select", "params": {"component_id": "nav"}, "ref": 19}
             )
             ack = next(frame for frame in transport.sent if frame.get("ref") == 19)
-            assert ack["type"] == frame_type
+            assert legacy_type(ack) == frame_type
             assert ack.get("async_pending") is True
             token = ack["async_batch"]
             for _ in range(100):
@@ -463,7 +465,7 @@ class TestScopedPath:
         )
         assert transport.errors == []
         frame = _last_frame(transport)
-        assert frame["type"] == "patch", frame
+        assert legacy_type(frame) == "patch", frame
         assert frame["ref"] == 7 and frame["event_name"] == "select"
         assert frame["patches"], frame
         for patch in frame["patches"]:
@@ -482,7 +484,7 @@ class TestScopedPath:
         )
         assert transport.errors == []
         frame = _last_frame(transport)
-        assert frame["type"] == "patch", frame
+        assert legacy_type(frame) == "patch", frame
         assert transport.scopes == ["component"]
         assert "billing" in str(frame["patches"]), frame["patches"]
         assert view.probe.active == "billing"
@@ -503,7 +505,7 @@ class TestScopedPath:
             {"type": "event", "event": "rename", "params": {"value": "T2"}}
         )
         frame = _last_frame(transport)
-        assert frame["type"] == "patch", frame
+        assert legacy_type(frame) == "patch", frame
         assert frame["version"] > v1
         texts = [p["text"] for p in frame["patches"] if p["type"] == "SetText"]
         assert texts == ["T2"], frame["patches"]
@@ -515,7 +517,7 @@ class TestScopedPath:
             {"type": "event", "event": "select", "params": {"component_id": "nav", "value": "b2"}}
         )
         frame = _last_frame(transport)
-        assert frame["type"] == "patch" and transport.scopes[-1] == "component"
+        assert legacy_type(frame) == "patch" and transport.scopes[-1] == "component"
         assert [p["text"] for p in frame["patches"] if p["type"] == "SetText"] == ["b2"]
 
     @pytest.mark.asyncio
@@ -540,10 +542,10 @@ class TestNoChangeOnTheComponentRoute:
         event = {"type": "event", "event": "accept", "params": {"component_id": "banner"}}
         await runtime.dispatch_event({**event, "ref": 1})
         first = _last_frame(transport)
-        assert first["type"] == "patch" and first["ref"] == 1, first
+        assert legacy_type(first) == "patch" and first["ref"] == 1, first
         await runtime.dispatch_event({**event, "ref": 2})
         second = _last_frame(transport)
-        assert second["type"] == "noop", second
+        assert legacy_type(second) == "noop", second
         assert second["ref"] == 2 and second["event_name"] == "accept"
         assert view.banner.accepted is True
 
@@ -558,9 +560,9 @@ class TestNoChangeOnTheComponentRoute:
             {"type": "event", "event": "toast", "params": {"component_id": "banner"}, "ref": 1}
         )
         await asyncio.sleep(0)
-        types = [f.get("type") for f in transport.sent]
+        types = [legacy_type(f) for f in transport.sent]
         assert "noop" in types and "html_update" not in types, types
-        assert "push_event" in types, types
+        assert effects_of(transport.sent, "push_event"), transport.sent
 
     @pytest.mark.asyncio
     async def test_forced_full_html_is_consumed_on_the_component_route(self):
@@ -569,12 +571,12 @@ class TestNoChangeOnTheComponentRoute:
         view, runtime, transport = await _mounted(IdempotentPage)
         event = {"type": "event", "params": {"component_id": "banner"}}
         await runtime.dispatch_event({**event, "event": "force", "ref": 1})
-        assert _last_frame(transport)["type"] == "html_update"
+        assert legacy_type(_last_frame(transport)) == "html_update"
         assert view._force_full_html is False
         await runtime.dispatch_event({**event, "event": "accept", "ref": 2})
-        assert _last_frame(transport)["type"] == "patch"
+        assert legacy_type(_last_frame(transport)) == "patch"
         await runtime.dispatch_event({**event, "event": "accept", "ref": 3})
-        assert _last_frame(transport)["type"] == "noop"
+        assert legacy_type(_last_frame(transport)) == "noop"
 
 
 @pytest.mark.django_db(transaction=True)
@@ -587,7 +589,7 @@ class TestFullPathGates:
         await runtime.dispatch_event({"type": "event", **event})
         assert transport.errors == []
         frame = _last_frame(transport)
-        assert frame["type"] in ("patch", "html_update"), frame
+        assert legacy_type(frame) in ("patch", "html_update"), frame
         # The component route's page render emits ``html_update`` without the
         # frame hook; the runtime route stamps ``None``. Neither says "component".
         assert "component" not in transport.scopes, transport.scopes
@@ -624,14 +626,14 @@ class TestFullPathGates:
     @pytest.mark.asyncio
     async def test_handler_changing_another_assign_as_well(self):
         view, frame = await self._run(OpaquePage, {"event": "both", "params": {}})
-        assert frame["type"] == "patch"
+        assert legacy_type(frame) == "patch"
         texts = {p["text"] for p in frame["patches"] if p["type"] == "SetText"}
         assert {"Both", "both"} <= texts, frame["patches"]
 
     @pytest.mark.asyncio
     async def test_forced_full_html(self):
         _, frame = await self._run(OpaquePage, {"event": "forced", "params": {}})
-        assert frame["type"] == "html_update" and "forced<b" in frame["html"]
+        assert legacy_type(frame) == "html_update" and "forced<b" in frame["html"]
 
     @pytest.mark.asyncio
     async def test_pending_push_events(self):
@@ -652,7 +654,7 @@ async def _receive_until(communicator, wanted_type, *, tries=8, timeout=30):
     last = None
     for _ in range(tries):
         last = await communicator.receive_json_from(timeout=timeout)
-        if last.get("type") == wanted_type:
+        if legacy_type(last) == wanted_type:
             return last
     return last
 
@@ -694,7 +696,7 @@ class TestWebSocketFrame:
                     }
                 )
                 updated = await _receive_until(communicator, "patch")
-                assert updated.get("type") == "patch", updated
+                assert legacy_type(updated) == "patch", updated
                 assert updated.get("ref") == 3
                 assert updated["timing"]["scope"] == "component", updated
                 assert "render" in updated["timing"]
@@ -730,7 +732,7 @@ class TestWebSocketFrame:
                     {"type": "event", "event": "rename", "params": {"value": "Renamed"}, "ref": 2}
                 )
                 second = await _receive_until(communicator, "patch")
-                assert second.get("type") == "patch", second
+                assert legacy_type(second) == "patch", second
                 assert "scope" not in second["timing"], second
                 assert second["version"] == first["version"] + 1
                 texts = [p["text"] for p in second["patches"] if p["type"] == "SetText"]

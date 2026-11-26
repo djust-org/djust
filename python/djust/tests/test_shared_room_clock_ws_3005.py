@@ -13,13 +13,15 @@ from django.contrib.sessions.backends.db import SessionStore
 from django.test import override_settings
 
 from djust import LiveView, PresenceMixin
-from djust.clocks import RoomClock, SharedPoll, Publish, _registry
+from djust.clocks import Publish, RoomClock, SharedPoll, _registry
 from djust.decorators import event_handler
+from djust.tenants.middleware import get_current_tenant
 from djust.tenants.mixin import TenantMixin
 from djust.tenants.resolvers import TenantInfo
-from djust.tenants.middleware import get_current_tenant
-from djust.testing import ManualClock, DeterministicClockExecutor
+from djust.testing import DeterministicClockExecutor, ManualClock
+from djust.tests._frames import legacy_type
 from djust.websocket import LiveViewConsumer
+
 from ._ws_frames import wait_until as _wait_until
 
 CONSUMERS = []
@@ -391,14 +393,14 @@ async def test_async_handler_tracks_and_broadcasts_presence_with_clock():
             peer, peer_consumer = await mount(view_class=AsyncJoinView)
             sockets.append(peer)
             await peer.send_json_to({"type": "event", "event": "join", "params": {}})
-            assert (await peer.receive_json_from(timeout=30))["type"] == "patch"
+            assert legacy_type(await peer.receive_json_from(timeout=30)) == "patch"
             await wait_until(lambda: peer_consumer.view_instance.joins == 1, what="first join")
             assert peer_consumer.view_instance.clock_running_on_join
             joining, consumer = await mount(view_class=AsyncJoinView)
             sockets.append(joining)
             await joining.send_json_to({"type": "event", "event": "join", "params": {}})
             frame = await joining.receive_json_from(timeout=30)
-            assert frame["type"] == "patch", frame
+            assert legacy_type(frame) == "patch", frame
             await wait_until(
                 lambda: getattr(peer_consumer.view_instance, "online_count", 0) == 2,
                 what="join broadcast reaches peer",
@@ -463,7 +465,7 @@ async def join_followup(sockets, mode):
     sockets.append(socket)
     if mode == "async":
         await socket.send_json_to({"type": "event", "event": "join", "params": {}})
-        assert (await socket.receive_json_from(timeout=30))["type"] == "patch"
+        assert legacy_type(await socket.receive_json_from(timeout=30)) == "patch"
     return consumer.view_instance
 
 

@@ -27,6 +27,7 @@ from django.test import override_settings
 
 from djust import runtime as runtime_module
 from djust._exposure_sessions import server_state_adapter
+from djust.tests._frames import legacy_type
 from djust.tests.test_exposure_runtime import RuntimeView, make_request, mount
 
 pytestmark = [pytest.mark.django_db(transaction=True)]
@@ -80,7 +81,7 @@ async def test_a_busy_sync_thread_does_not_fail_the_save(staged):
         await asyncio.gather(*workers)
 
     assert not transport.errors, transport.errors
-    assert any(frame.get("type") in {"patch", "html_update"} for frame in transport.sent)
+    assert any(legacy_type(frame) in {"patch", "html_update"} for frame in transport.sent)
     assert await _stored_count(request.session.session_key) == 6
 
 
@@ -146,7 +147,7 @@ async def test_slow_storage_is_withheld_but_not_a_reload(staged, caplog):
                 # Deferred, not failed: the value is kept, nothing is acked yet.
                 assert view.count == 6, "the handler ran and its value is kept"
                 assert not [
-                    f for f in transport.sent if f.get("type") in {"patch", "html_update", "noop"}
+                    f for f in transport.sent if legacy_type(f) in {"patch", "html_update", "noop"}
                 ]
                 [error] = transport.errors
                 assert error["code"] == "state_error"
@@ -164,7 +165,7 @@ async def test_slow_storage_is_withheld_but_not_a_reload(staged, caplog):
             SessionStore.save = original
 
     catch_up = [f for f in transport.sent if f.get("source") == "async"]
-    assert [f["type"] for f in catch_up] == ["html_update"], transport.sent
+    assert [legacy_type(f) for f in catch_up] == ["html_update"], transport.sent
     assert ">6<" in catch_up[0]["html"]
     assert len(transport.errors) == 1, transport.errors
     assert before != 6 and await _stored_count(request.session.session_key) == 6
@@ -177,7 +178,7 @@ async def test_slow_storage_is_withheld_but_not_a_reload(staged, caplog):
     transport.sent.clear()
     await runtime.dispatch_event({"type": "event", "event": "increment", "params": {}})
     assert not transport.errors[1:], transport.errors
-    assert any(f.get("type") in {"patch", "html_update"} for f in transport.sent)
+    assert any(legacy_type(f) in {"patch", "html_update"} for f in transport.sent)
     assert await _stored_count(request.session.session_key) == 7
 
 
@@ -222,7 +223,7 @@ async def test_a_late_save_never_overwrites_a_newer_acked_one(staged):
             turn_n1 = asyncio.ensure_future(runtime.dispatch_event(dict(event)))
             var.reset(token)
             await asyncio.wait_for(turn_n1, 10)
-            acked = [f for f in transport.sent if f.get("type") in {"patch", "html_update"}]
+            acked = [f for f in transport.sent if legacy_type(f) in {"patch", "html_update"}]
             assert not acked, "turn N+1 must not be acked while turn N's save is running"
             release.set()
             await asyncio.wait_for(runtime._explicit_save_pending, 10)
@@ -235,7 +236,7 @@ async def test_a_late_save_never_overwrites_a_newer_acked_one(staged):
             await ctx_a.__aexit__(None, None, None)
             await ctx_b.__aexit__(None, None, None)
 
-    shown = [f for f in transport.sent if f.get("type") in {"patch", "html_update"}]
+    shown = [f for f in transport.sent if legacy_type(f) in {"patch", "html_update"}]
     assert shown and ">7<" in json.dumps(shown[-1]), transport.sent
     assert await _stored_count(request.session.session_key) == 7
 
@@ -396,7 +397,7 @@ async def test_sustained_slow_storage_catches_up_once_and_stops(staged):
     # The abandoned save, then the catch-up's commit: nothing else.
     assert saves == [True, True], saves
     assert [e.get("transient") for e in transport.errors] == [True]
-    assert [f["type"] for f in transport.sent if f.get("source") == "async"] == ["html_update"]
+    assert [legacy_type(f) for f in transport.sent if f.get("source") == "async"] == ["html_update"]
     assert await _stored_count(request.session.session_key) == 6
 
 
@@ -489,7 +490,7 @@ async def test_a_catch_up_that_cannot_send_withdraws_the_promise(staged, monkeyp
 
     assert [bool(e.get("transient")) for e in transport.errors] == [True, False]
     assert transport.errors[-1]["error"] == "State unavailable. Please reload the page."
-    assert not [f for f in transport.sent if f.get("type") in {"patch", "html_update"}]
+    assert not [f for f in transport.sent if legacy_type(f) in {"patch", "html_update"}]
     assert "AUTH_SENTINEL" not in json.dumps(transport.sent)
 
 

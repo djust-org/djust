@@ -26,6 +26,7 @@ from django.test import RequestFactory, override_settings
 
 from djust import LiveView
 from djust.presence import PresenceManager, PresenceMixin
+from djust.tests._frames import effects_of, frame_matches
 
 pytest.importorskip("channels")
 
@@ -120,9 +121,8 @@ def _members(group: str) -> list:
 async def _connect():
     from channels.testing import WebsocketCommunicator
 
-    from djust.websocket import LiveViewConsumer
-
     from djust.testing import with_live_session
+    from djust.websocket import LiveViewConsumer
 
     communicator = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
     # A live server session: an explicit mount binds to one, so a refusal
@@ -136,7 +136,7 @@ async def _connect():
 async def _receive_type(communicator, wanted: str, *, tries: int = 6):
     for _ in range(tries):
         frame = await communicator.receive_json_from()
-        if frame.get("type") == wanted:
+        if frame_matches(frame, wanted):
             return frame
     raise AssertionError(f"no {wanted!r} frame received")
 
@@ -269,7 +269,7 @@ async def test_single_refused_mount_joins_no_groups():
                 {"type": "mount", "view": _path(_GatedPresenceView), "url": "/a/"}
             )
             frame = await _receive_type(communicator, "navigate")
-            assert frame["to"]
+            assert effects_of(frame, "navigate")[0]["to"]
             assert joined == [], "no group is joined before auth has admitted the view"
             assert _members(_presence_group(_GatedPresenceView)) == []
         finally:
@@ -352,9 +352,14 @@ async def test_handler_drops_event_without_mounted_view(handler):
 async def test_handler_forwards_event_with_mounted_view(handler, frame_type):
     consumer = _bare_consumer(MagicMock())
     await getattr(consumer, handler)({"event": "e", "payload": {"k": "v"}})
-    consumer.send_json.assert_awaited_once_with(
-        {"type": frame_type, "event": "e", "payload": {"k": "v"}}
-    )
+    expected = {"type": frame_type, "event": "e", "payload": {"k": "v"}}
+    if frame_type == "push_event":  # an effect of a render frame (#3658)
+        expected = {
+            "type": "render",
+            "source": "push",
+            "effects": [{"kind": "push_event", "event": "e", "payload": {"k": "v"}}],
+        }
+    consumer.send_json.assert_awaited_once_with(expected)
 
 
 # --------------------------------------------------------------------------- #
@@ -364,7 +369,6 @@ async def test_handler_forwards_event_with_mounted_view(handler, frame_type):
 
 def _sse_session(path: str):
     from djust.sse import SSESession
-
     from djust.testing import with_live_session
 
     session = SSESession("22222222-2222-2222-2222-222222222222")

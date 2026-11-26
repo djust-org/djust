@@ -29,6 +29,7 @@ from djust import LiveView, state
 from djust._exposure import StateLimits
 from djust._exposure_sessions import StateLimitExceeded, load_server_state, save_server_state
 from djust.decorators import event_handler
+from djust.tests._frames import frame_matches, legacy_type
 
 pytest.importorskip("channels")
 
@@ -173,7 +174,7 @@ async def _until(communicator, *types):
     frames = []
     while True:
         frames.append(await communicator.receive_json_from(timeout=15))
-        if frames[-1].get("type") in types:
+        if frame_matches(frames[-1], types):
             return frames[-1]
 
 
@@ -202,7 +203,7 @@ async def test_websocket_past_the_limit_and_back():
         # The view went back to the saved state: the next event starts there,
         # and its full render shows what the store holds.
         again = await _event(socket, "small")
-        assert again["type"] == "html_update", again
+        assert legacy_type(again) == "html_update", again
         assert "count=3" in again["html"]
         assert "%d,%d,1" % (len(BIG), len(BIG)) in again["html"]
         assert await sync_to_async(_stored)(key) == (3, [len(BIG), len(BIG), 1])
@@ -245,7 +246,7 @@ async def test_sse_past_the_limit_and_back():
         )
         posted = await DjustSSEMessageView().post(request, session_id=sid)
         assert posted.status_code == 200
-        return [f for f in drain() if f.get("type") in ("patch", "html_update", "error")]
+        return [f for f in drain() if legacy_type(f) in ("patch", "html_update", "error")]
 
     try:
         for _ in range(2):
@@ -258,7 +259,7 @@ async def test_sse_past_the_limit_and_back():
         assert await sync_to_async(_stored)(key) == (2, [len(BIG), len(BIG)])
 
         frames = await event("small")
-        assert frames and frames[-1]["type"] == "html_update", frames
+        assert frames and legacy_type(frames[-1]) == "html_update", frames
         assert "count=3" in frames[-1]["html"]
         assert await sync_to_async(_stored)(key) == (3, [len(BIG), len(BIG), 1])
     finally:

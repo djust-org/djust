@@ -33,11 +33,11 @@ from django.test.utils import CaptureQueriesContext
 from django.urls import path
 from django.utils.functional import cached_property
 
-from djust import LiveView
-from djust import _held_rows
+from djust import LiveView, _held_rows
 from djust.components.descriptors.base import LiveComponent, TypedState
 from djust.decorators import background, event_handler, state
 from djust.testing import live_session
+from djust.tests._frames import legacy_type
 
 TAG = {"value": ""}
 TEMPLATE = (
@@ -757,7 +757,7 @@ def _row_reads(statements) -> int:
 def _change(frame: dict) -> set:
     """What a frame does to the rows: ``bob`` shown, a row inserted, a row removed."""
     seen: set = set()
-    if frame.get("type") == "html_update":
+    if legacy_type(frame) == "html_update":
         names = set(re.findall(re.escape(TAG["value"]) + r"(alice|bob|carol)", frame["html"]))
         return names
     for patch in frame.get("patches", []):
@@ -801,7 +801,7 @@ class _WS:
         out = []
         while len(out) < frames:
             frame = await self.sock.receive_json_from()
-            if frame.get("type") in {"patch", "html_update", "error", "noop"}:
+            if legacy_type(frame) in {"patch", "html_update", "error", "noop"}:
                 out.append(frame)
         return out
 
@@ -815,7 +815,7 @@ class _SSE:
     async def next_rows_change(self, *, polls=1000):
         for _ in range(polls):
             for frame in self._drain():
-                if frame.get("type") in {"patch", "html_update"} and _change(frame):
+                if legacy_type(frame) in {"patch", "html_update"} and _change(frame):
                     return frame
             await asyncio.sleep(0.01)
         return None
@@ -874,7 +874,7 @@ class _SSE:
             out.extend(
                 f
                 for f in self._drain()
-                if f.get("type") in {"patch", "html_update", "error", "noop"}
+                if legacy_type(f) in {"patch", "html_update", "error", "noop"}
             )
             if len(out) >= frames:
                 break
@@ -931,7 +931,7 @@ async def test_a_write_shows_on_the_live_transports(request, transport, shape, o
     await client.open(cls, owner)
     try:
         (frame,) = await client.event(op)
-        assert frame.get("type") == "patch", frame
+        assert legacy_type(frame) == "patch", frame
         assert _change(frame) == expected[op], (shape, op, frame)
     finally:
         await client.close()
@@ -1008,8 +1008,8 @@ async def test_a_reset_alone_is_not_a_state_change(cls, saves, sql):
         assert _session_writes(sql) == saves, sql
         assert len(sql) == len(quiet_statements) + len(writes) + len(handler_reads) + 1, sql
         # The counter changed in both; the rows only after the write.
-        assert [p["type"] for p in quiet["patches"]] == ["SetText"]
-        assert sorted(p["type"] for p in frame["patches"]) == ["SetText", "SetText"]
+        assert [legacy_type(p) for p in quiet["patches"]] == ["SetText"]
+        assert sorted(legacy_type(p) for p in frame["patches"]) == ["SetText", "SetText"]
     finally:
         await client.close()
 
@@ -1079,7 +1079,7 @@ async def _until_rows_change(client, *, frames=20):
     """
     for _ in range(frames):
         frame = await client.sock.receive_json_from()
-        if frame.get("type") in {"patch", "html_update"} and _change(frame):
+        if legacy_type(frame) in {"patch", "html_update"} and _change(frame):
             return frame
     return None
 
@@ -1151,7 +1151,7 @@ async def test_a_queued_activity_event_that_writes(release):
     await client.open(HiddenActivity, owner)
     try:
         (ack,) = await client.event("raw", {"_activity": "panel"})
-        assert ack.get("type") == "noop", ack
+        assert legacy_type(ack) == "noop", ack
         if release == "db_notify":
             await get_channel_layer().group_send(
                 "djust_db_notify_held_rows_activity_4112",
@@ -1201,7 +1201,7 @@ async def test_a_components_write_refreshes_its_parent():
     try:
         component_id = re.search(r'data-component-id="([^"]+)"', mount["html"]).group(1)
         (frame,) = await client.event("rename", {"component_id": component_id})
-        assert frame.get("type") in {"patch", "html_update"}, frame
+        assert legacy_type(frame) in {"patch", "html_update"}, frame
         assert TAG["value"] + "bob" in json.dumps(frame), frame
     finally:
         await client.close()
@@ -1538,9 +1538,9 @@ async def test_a_sticky_childs_write_refreshes_both_when_they_render():
         )
         while True:
             child = await client.sock.receive_json_from()
-            if child.get("type") in {"embedded_update", "patch", "html_update", "error", "noop"}:
+            if legacy_type(child) in {"embedded_update", "patch", "html_update", "error", "noop"}:
                 break
-        assert child.get("type") == "embedded_update", child
+        assert legacy_type(child) == "embedded_update", child
         assert "c:" + TAG["value"] + "bob" in json.dumps(child), child  # the child itself
         # The parent is marked and re-reads on its next render (none was sent for it).
         (frame,) = await client.event("noop")
@@ -1718,7 +1718,7 @@ async def test_a_write_to_an_unrelated_table_is_a_noop_as_before(request, transp
         quiet_statements = list(sql)
         sql.clear()
         (frame,) = await client.event("other_table")
-        assert frame.get("type") == "noop", frame
+        assert legacy_type(frame) == "noop", frame
         handler = [s for s in sql if "auth_permission" in s]
         assert _row_selects(sql) == 0, sql
         assert len(sql) == len(quiet_statements) + len(handler), sql
@@ -1737,10 +1737,10 @@ async def test_rows_changed_narrows_to_the_tables_named(sql):
     await client.open(Unrelated, owner)
     try:
         (frame,) = await client.event("other_table_marked")
-        assert frame.get("type") == "noop", frame
+        assert legacy_type(frame) == "noop", frame
         sql.clear()
         (frame,) = await client.event("own_table_marked")
-        assert frame.get("type") == "patch" and _row_selects(sql) == 1, (frame, sql)
+        assert legacy_type(frame) == "patch" and _row_selects(sql) == 1, (frame, sql)
     finally:
         await client.close()
 
@@ -1755,7 +1755,7 @@ async def test_a_write_whose_table_cannot_be_read_refreshes_everything(sql, capl
         sql.clear()
         with caplog.at_level("DEBUG", logger="djust._held_rows"):
             (frame,) = await client.event("unreadable_write")
-        assert frame.get("type") == "patch", frame
+        assert legacy_type(frame) == "patch", frame
         assert _row_selects(sql) == 1, sql
         assert sum(_held_rows.fallback_counts.values()) > before
         assert any("UNKNOWN" in r.getMessage() for r in caplog.records)
@@ -1771,7 +1771,7 @@ async def test_rows_read_in_get_context_data_count_as_read(sql):
     await client.open(ReadsInContext, owner)
     try:
         (frame,) = await client.event("other_table")
-        assert frame.get("type") == "noop", frame
+        assert legacy_type(frame) == "noop", frame
         (frame,) = await client.event("write_only")
         assert _change(frame) == {"bob"}, frame
     finally:
@@ -1789,7 +1789,7 @@ async def test_cached_properties_are_recomputed_only_for_tables_the_view_reads()
         await client.event("other_table")
         await client.event("noop")
         (frame,) = await client.event("other_table_and_bump")  # renders: the counter changed
-        assert frame.get("type") == "patch", frame
+        assert legacy_type(frame) == "patch", frame
         assert COMPUTED["n"] == 1
         (frame,) = await client.event("update")
         assert COMPUTED["n"] == 2 and _change(frame) == {"bob"}, frame
@@ -1805,7 +1805,7 @@ async def test_a_write_to_a_through_table_refreshes_a_queryset_filtering_through
     await client.open(ThroughFilter, owner)
     try:
         (frame,) = await client.event("join")
-        assert frame.get("type") == "patch", frame
+        assert legacy_type(frame) == "patch", frame
         assert {p["type"] for p in frame["patches"]} >= {"InsertChild"}, frame
     finally:
         await client.close()
@@ -1856,7 +1856,7 @@ async def test_a_relation_read_at_render_time_counts_as_read(request, transport)
     await client.open(RelationAtRender, owner)
     try:
         (frame,) = await client.event("other_table")
-        assert frame.get("type") == "noop", frame
+        assert legacy_type(frame) == "noop", frame
         (frame,) = await client.event("join_new")
         assert "insert" in _change(frame), frame
     finally:
@@ -1871,7 +1871,7 @@ async def test_an_unknown_read_makes_every_write_refresh(sql):
     try:
         sql.clear()
         (frame,) = await client.event("other_table")
-        assert frame.get("type") == "patch", frame  # slower, never stale
+        assert legacy_type(frame) == "patch", frame  # slower, never stale
         assert _row_reads(sql) == 1, sql
     finally:
         await client.close()
@@ -1884,7 +1884,7 @@ async def test_a_session_save_is_not_a_write_even_for_a_view_that_reads_the_sess
     await client.open(ReadsSessionTable, owner)
     try:
         (frame,) = await client.event("session_save")
-        assert frame.get("type") == "noop", frame
+        assert legacy_type(frame) == "noop", frame
     finally:
         await client.close()
 
@@ -2488,7 +2488,7 @@ async def test_the_switch_makes_an_unrelated_write_refresh(sql):
         with override_settings(DJUST_REFRESH_ON_ANY_WRITE=True):
             sql.clear()
             (frame,) = await client.event("other_table")
-        assert frame.get("type") == "patch", frame
+        assert legacy_type(frame) == "patch", frame
         assert _row_reads(sql) == 1, sql
     finally:
         await client.close()
@@ -2998,7 +2998,7 @@ async def test_a_queryset_behind_plain_items_is_refreshed(request, transport, cl
         assert _row_reads(sql) == 1, sql
         sql.clear()
         (frame,) = await client.event("other_table")
-        assert frame.get("type") == "noop", frame  # R is known: an unrelated write costs nothing
+        assert legacy_type(frame) == "noop", frame  # R is known: an unrelated write costs nothing
     finally:
         await client.close()
 
@@ -3014,13 +3014,13 @@ async def test_rows_evaluated_in_mount_are_known(request, transport, sql):
         for _ in range(2):
             sql.clear()
             (frame,) = await client.event("other_table")
-            assert frame.get("type") == "noop", frame
+            assert legacy_type(frame) == "noop", frame
             assert _row_reads(sql) == 0, sql
         (frame,) = await client.event("write_only")
         assert _change(frame) == {"bob"}, frame
         sql.clear()
         (frame,) = await client.event("other_table")
-        assert frame.get("type") == "noop" and _row_reads(sql) == 0, (
+        assert legacy_type(frame) == "noop" and _row_reads(sql) == 0, (
             frame
         )  # still known after the refresh
     finally:
@@ -3035,7 +3035,7 @@ async def test_a_cached_property_computed_in_a_handler_is_known():
     try:
         await client.event("touch")
         (frame,) = await client.event("other_table")
-        assert frame.get("type") == "noop", frame
+        assert legacy_type(frame) == "noop", frame
     finally:
         await client.close()
 
@@ -3048,7 +3048,7 @@ async def test_a_view_of_session_rows_is_not_refreshed_by_session_writes():
     await client.open(SessionRows, owner)
     try:
         (frame,) = await client.event("add_session")
-        assert frame.get("type") == "noop", frame
+        assert legacy_type(frame) == "noop", frame
     finally:
         await client.close()
 

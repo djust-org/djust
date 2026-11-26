@@ -22,9 +22,9 @@ from django.contrib.sessions.backends.db import SessionStore
 from django.test import RequestFactory, override_settings
 from django.utils.functional import SimpleLazyObject
 
-from djust import LiveView, event_handler, sse
+from djust import LiveView, event_handler, sse, state
 from djust.sse import DjustSSEMessageView, DjustSSEStreamView, _sse_sessions
-from djust import state
+from djust.tests._frames import frame_matches, legacy_type
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
 
@@ -111,7 +111,7 @@ async def _frame(stream, *types, timeout=10.0):
         if not chunk.startswith("data:"):
             continue
         frame = json.loads(chunk[len("data:") :])
-        if frame.get("type") in types:
+        if frame_matches(frame, types):
             return frame
 
 
@@ -147,7 +147,7 @@ async def test_a_childs_event_runs_on_the_child_over_sse():
             {"type": "event", "event": "click", "params": {"view_id": "kid"}, "ref": 4},
         )
         frame = await _frame(stream, "embedded_update", "error", "patch", "html_update")
-        assert frame["type"] == "embedded_update"
+        assert legacy_type(frame) == "embedded_update"
         assert frame["view_id"] == "kid"
         assert "clicked" in frame["html"]
         assert RECEIVED == ["kid"]

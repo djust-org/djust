@@ -20,8 +20,8 @@ the second copy's fixed sidebar and heading drawn inside the widget card.
 from __future__ import annotations
 
 import re
-from html import unescape
 import sys
+from html import unescape
 from pathlib import Path
 
 import pytest
@@ -33,6 +33,7 @@ from django.urls import path
 
 from djust import LiveView
 from djust.admin_ext import DjustAdminSite, DjustModelAdmin
+from djust.tests._frames import frame_matches
 
 pytestmark = pytest.mark.admin
 
@@ -265,7 +266,7 @@ class _Socket:
         for _ in range(30):
             frame = await self.comm.receive_json_from(timeout=10)
             assert frame.get("type") != "error", frame
-            if frame.get("type") in types:
+            if frame_matches(frame, types):
                 return frame
         raise AssertionError("no %s frame" % (types,))
 

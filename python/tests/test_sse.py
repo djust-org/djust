@@ -12,10 +12,10 @@ import json
 import uuid
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 import django
+import pytest
 from django.conf import settings
+from djust.tests._frames import legacy_type
 
 # Configure Django if not already done
 if not settings.configured:
@@ -41,14 +41,12 @@ if not settings.configured:
 
 from asgiref.sync import sync_to_async  # noqa: E402
 from django.test import RequestFactory
-
 from djust.sse import (
-    SSESession,
     DjustSSEStreamView,
+    SSESession,
     _get_session,
     _sse_sessions,
 )
-
 
 # ------------------------------------------------------------------ #
 # Helpers
@@ -81,7 +79,6 @@ def give_live_request(session: SSESession, path: str = "/") -> None:
     """Stash a stream request with a saved server session on ``session``, as
     the GET stream does: an explicit view's mount binds to that session."""
     from django.contrib.auth.models import AnonymousUser
-
     from djust.testing import with_live_session
 
     session._request = with_live_session(RequestFactory().get(path), AnonymousUser())
@@ -423,7 +420,7 @@ class TestSSEMountFrameURLKwargs:
         not the SSE endpoint URL. Pre-fix, kwargs were resolved against
         ``request.path`` (the SSE endpoint), so ``pk`` was never set.
         """
-        from djust.runtime import ViewRuntime, SSESessionTransport
+        from djust.runtime import SSESessionTransport, ViewRuntime
 
         DummyLV, captured = _make_dummy_view_class()
 
@@ -470,7 +467,7 @@ class TestSSEMountFrameURLKwargs:
         ``handle_params(params, uri)`` must fire ONCE after mount() over SSE,
         matching Phoenix-parity / WebSocket behavior at websocket.py:2129.
         """
-        from djust.runtime import ViewRuntime, SSESessionTransport
+        from djust.runtime import SSESessionTransport, ViewRuntime
 
         DummyLV, captured = _make_dummy_view_class()
         import sys
@@ -519,7 +516,7 @@ class TestSSEUrlChangeFlow:
         run handle_params() and emit a patch / html_update frame to the
         SSE queue.
         """
-        from djust.runtime import ViewRuntime, SSESessionTransport
+        from djust.runtime import SSESessionTransport, ViewRuntime
 
         DummyLV, captured = _make_dummy_view_class()
         import sys
@@ -546,7 +543,7 @@ class TestSSEUrlChangeFlow:
 
         # Frame was queued for the SSE stream.
         messages = drain_queue(session)
-        types = [m.get("type") for m in messages]
+        types = [legacy_type(m) for m in messages]
         assert "patch" in types or "html_update" in types
 
 
@@ -567,8 +564,8 @@ class TestSSEMessageEndpoint:
     async def test_message_endpoint_unknown_type_returns_error(self):
         """Posting an unknown message type returns 200 with a queued error
         envelope on the SSE stream."""
+        from djust.runtime import SSESessionTransport, ViewRuntime
         from djust.sse import DjustSSEMessageView
-        from djust.runtime import ViewRuntime, SSESessionTransport
 
         session = make_session()
         session.view_instance = MagicMock()  # marked as mounted
@@ -587,7 +584,7 @@ class TestSSEMessageEndpoint:
         assert response.status_code == 200
 
         messages = drain_queue(session)
-        types = [m.get("type") for m in messages]
+        types = [legacy_type(m) for m in messages]
         assert "error" in types
 
 
@@ -609,7 +606,7 @@ class TestSSEDoubleMountGuard:
         """Calling dispatch_mount twice on the same runtime is a no-op
         on the second call. Guards the legacy `?view=` GET-mount + new
         POST mount-frame double-fire (Risk #1)."""
-        from djust.runtime import ViewRuntime, SSESessionTransport
+        from djust.runtime import SSESessionTransport, ViewRuntime
 
         DummyLV, captured = _make_dummy_view_class()
         import sys
@@ -668,7 +665,7 @@ class TestSSERuntimeUrlChangeSharedWithWs:
         the same view + frame produce the same on-wire shape regardless
         of which transport the runtime is wired to. Detailed coverage in
         python/tests/test_sse_ws_symmetry.py."""
-        from djust.runtime import ViewRuntime, SSESessionTransport
+        from djust.runtime import SSESessionTransport, ViewRuntime
 
         DummyLV, captured = _make_dummy_view_class()
 
@@ -681,5 +678,5 @@ class TestSSERuntimeUrlChangeSharedWithWs:
 
         # handle_params was invoked once; queue holds an html_update or patch.
         assert len(captured["handle_params"]) == 1
-        types = [m.get("type") for m in drain_queue(session)]
+        types = [legacy_type(m) for m in drain_queue(session)]
         assert types[0] in ("patch", "html_update")

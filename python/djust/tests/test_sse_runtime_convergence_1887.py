@@ -35,14 +35,15 @@ import sys
 from unittest.mock import patch
 
 import pytest
-from django.contrib.auth.models import AnonymousUser
 from asgiref.sync import sync_to_async
+from django.contrib.auth.models import AnonymousUser
 from django.test import RequestFactory, override_settings
 
-from djust.testing import live_session
 from djust import LiveView
 from djust.decorators import event_handler
 from djust.sse import DjustSSEStreamView, _sse_sessions
+from djust.testing import live_session
+from djust.tests._frames import effects_of, legacy_type
 
 pytestmark = pytest.mark.django_db
 
@@ -270,7 +271,7 @@ class TestSSEEventViaRuntime:
         assert json.loads(response.content) == {"ok": True}
 
         msgs = _drain(session)
-        render_frames = [m for m in msgs if m.get("type") in ("patch", "html_update")]
+        render_frames = [m for m in msgs if legacy_type(m) in ("patch", "html_update")]
         assert render_frames, f"increment must stream a render frame, got {msgs!r}"
         assert session.runtime.view_instance.count == 1
 
@@ -424,11 +425,11 @@ class TestSSEAsyncWorkViaRuntime:
         for _ in range(200):
             await asyncio.sleep(0.01)
             followup += _drain(session)
-            if any(m.get("type") in ("patch", "html_update") for m in followup):
+            if any(legacy_type(m) in ("patch", "html_update") for m in followup):
                 break
 
         assert session.runtime.view_instance.count == 99, "background task did not run"
-        assert any(m.get("type") in ("patch", "html_update") for m in followup), (
+        assert any(legacy_type(m) in ("patch", "html_update") for m in followup), (
             f"background completion must stream a follow-up render frame, got {followup!r}"
         )
 
@@ -488,7 +489,7 @@ class TestSSEEventSpineParity:
         )
         assert resp.status_code == 200
         msgs = _drain(session)
-        render = [m for m in msgs if m.get("type") in ("patch", "html_update")]
+        render = [m for m in msgs if legacy_type(m) in ("patch", "html_update")]
         assert render, f"increment must stream an update frame, got {msgs!r}"
         f = render[0]
         assert f.get("ref") == 77, f"SSE update frame must echo the client ref (#560); got {f!r}"
@@ -513,7 +514,7 @@ class TestSSEEventSpineParity:
         )
         assert resp.status_code == 200
         msgs = _drain(session)
-        noops = [m for m in msgs if m.get("type") == "noop"]
+        noops = [m for m in msgs if legacy_type(m) == "noop"]
         assert noops, f"no-change event must stream a noop frame, got {msgs!r}"
         n = noops[0]
         assert n.get("ref") == 88, f"SSE noop must echo the client ref (#560); got {n!r}"
@@ -538,9 +539,9 @@ class TestSSEEventSpineParity:
         # The push send is fire-and-forget; let the scheduled frame land.
         await asyncio.sleep(0)
         msgs = _drain(session)
-        renders = [m for m in msgs if m.get("type") in ("patch", "html_update")]
-        noops = [m for m in msgs if m.get("type") == "noop"]
-        pushes = [m for m in msgs if m.get("type") == "push_event"]
+        renders = [m for m in msgs if legacy_type(m) in ("patch", "html_update")]
+        noops = [m for m in msgs if legacy_type(m) == "noop"]
+        pushes = [m for m in effects_of(msgs, "push_event")]
         assert not renders, f"push-only handler must NOT render over SSE; got {msgs!r}"
         assert noops, f"push-only handler must emit a noop over SSE; got {msgs!r}"
         assert noops[0].get("ref") == 5, "the noop must still echo the ref"

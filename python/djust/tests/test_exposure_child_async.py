@@ -8,8 +8,9 @@ from django.contrib.sessions.backends.db import SessionStore
 
 from djust import LiveView, event_handler
 from djust._exposure_children import child_state_key
-from djust.tests.test_exposure_child_events import EventChild, mount
 from djust._parameter_metadata import expand_parameter_manifest
+from djust.tests._frames import legacy_type
+from djust.tests.test_exposure_child_events import EventChild, mount
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
 
@@ -39,8 +40,8 @@ async def test_background_contract_failure_withholds_html_and_completes_batch(
     monkeypatch, explicit, caplog, settings
 ):
     from djust.tests.test_runtime_child_routing_1892 import (
-        _StickyChildView,
         _mounted_sticky_parent,
+        _StickyChildView,
     )
 
     started, release, completed = asyncio.Event(), asyncio.Event(), asyncio.Event()
@@ -89,7 +90,7 @@ async def test_background_contract_failure_withholds_html_and_completes_batch(
         await drain_owned_tasks(child)
         await asyncio.wait_for(completed.wait(), 1)
         assert child.count == 4
-        assert not any(frame.get("type") == "embedded_update" for frame in transport.sent)
+        assert not any(legacy_type(frame) == "embedded_update" for frame in transport.sent)
         assert any(error.get("code") == "render_error" for error in transport.errors)
         assert {"type": "async_complete", "async_batch": ack["async_batch"]} in transport.sent
         assert "SECRET_CONTRACT_DISCOVERY" not in repr(transport.sent)
@@ -183,7 +184,7 @@ async def test_child_event_runs_its_queue_and_persists_a_scoped_completion(monke
         assert root_calls == []
         frames = [frame for frame in transport.sent if frame.get("source") == "async"]
         assert len(frames) == 1
-        assert frames[0]["type"] == "embedded_update"
+        assert legacy_type(frames[0]) == "embedded_update"
         assert frames[0]["view_id"] == "menu"
         assert "Count=4" in frames[0]["html"]
         assert "SERVER_SENTINEL" not in str(frames)

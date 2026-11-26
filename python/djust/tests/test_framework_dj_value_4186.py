@@ -38,9 +38,10 @@ from asgiref.sync import sync_to_async
 from django.template import engines
 
 from djust import LiveView
-from djust.decorators import event_handler
-from djust.validation import validate_handler_params, validated_call_arguments
 from djust._parameter_metadata import expand_parameter_manifest
+from djust.decorators import event_handler
+from djust.tests._frames import legacy_type
+from djust.validation import validate_handler_params, validated_call_arguments
 
 ROOT = Path(__file__).resolve().parents[3]
 PACKAGE = ROOT / "python" / "djust"
@@ -864,7 +865,7 @@ async def test_data_table_events_over_websocket():
                     }
                 )
                 frame = await socket.receive_json_from(timeout=10)
-                assert frame["type"] in ("patch", "update", "html_update"), frame
+                assert legacy_type(frame) in ("patch", "update", "html_update"), frame
                 assert shown in json.dumps(frame), (case_id, frame)
         finally:
             await socket.disconnect()

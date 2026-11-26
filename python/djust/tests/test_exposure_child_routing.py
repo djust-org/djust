@@ -15,6 +15,7 @@ from djust import LiveView, event_handler
 from djust._exposure_auth import fresh_socket_request
 from djust._exposure_children import child_event_adapter, child_state_key
 from djust.decorators import state
+from djust.tests._frames import legacy_type
 from djust.tests.test_exposure_child_events import mount
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
@@ -126,7 +127,7 @@ def updates(transport):
     return [
         (f["view_id"], f.get("source"))
         for f in transport.sent
-        if f.get("type") == "embedded_update"
+        if legacy_type(f) == "embedded_update"
     ]
 
 

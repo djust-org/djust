@@ -47,6 +47,7 @@ import pytest
 
 from djust import LiveView
 from djust.decorators import event_handler
+from djust.tests._frames import legacy_type
 from djust.tests._live_session import amount_on_consumer
 from djust.tests.test_transport_behavioral_parity import _mounted_event_runtime
 
@@ -104,11 +105,11 @@ async def _mounted_consumer(view_class):
 
 
 def _updates(sent):
-    return [f for f in sent if f.get("type") in ("patch", "html_update")]
+    return [f for f in sent if legacy_type(f) in ("patch", "html_update")]
 
 
 def _noops(sent):
-    return [f for f in sent if f.get("type") == "noop"]
+    return [f for f in sent if legacy_type(f) == "noop"]
 
 
 # ---------------------------------------------------------------------------

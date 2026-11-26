@@ -19,10 +19,9 @@ from html.parser import HTMLParser
 from typing import Any, Dict, List, Tuple
 
 import pytest
-
 from djust.live_view import LiveView
 from djust.testing import with_live_session
-
+from djust.tests._frames import effects_of
 
 # ---------------------------------------------------------------------------
 # HTML parse helpers
@@ -428,7 +427,7 @@ class TestMountBatch:
         assert len(batch_frames[0]["views"]) == 1
 
         # The push_event frame must arrive AFTER the batch frame.
-        push_frames = [f for f in consumer.sent_frames if f.get("type") == "push_event"]
+        push_frames = [f for f in effects_of(consumer.sent_frames, "push_event")]
         assert len(push_frames) == 1, (
             "push_event() from mount() must survive the _mount_one collector; "
             "got 0 push_event frames (all frames: %s)" % consumer.sent_frames
@@ -438,7 +437,9 @@ class TestMountBatch:
 
         # Verify ordering: push_event after mount_batch.
         batch_idx = consumer.sent_frames.index(batch_frames[0])
-        push_idx = consumer.sent_frames.index(push_frames[0])
+        push_idx = next(
+            i for i, f in enumerate(consumer.sent_frames) if effects_of(f, "push_event")
+        )
         assert push_idx > batch_idx, "push_event must flush after mount_batch, not before"
 
 

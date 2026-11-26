@@ -28,12 +28,12 @@ import pytest
 from asgiref.sync import ThreadSensitiveContext, async_to_sync, sync_to_async
 from django.contrib.sessions.backends.db import SessionStore
 from django.test import override_settings
-
 from django.urls import path
 
 from djust import LiveView, event_handler
 from djust.decorators import state
 from djust.sse import DjustSSEMessageView, DjustSSEStreamView, _sse_sessions
+from djust.tests._frames import legacy_type
 from djust.tests.test_exposure_sse_resilience_3200 import BackgroundPage, _fresh_key, _request
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
@@ -178,7 +178,7 @@ async def test_a_deferred_save_does_not_block_the_loop_at_request_teardown(block
     release.set()
     await _until(
         lambda: any(
-            f and f.get("source") == "async" and f.get("type") == "html_update"
+            f and f.get("source") == "async" and legacy_type(f) == "html_update"
             for f in list(session.queue._queue)
         ),
         "the catch-up frame",

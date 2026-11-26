@@ -632,7 +632,8 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
         "ViewRuntime.authorize_explicit_turn",
         "self.authorize_explicit_turn_sync",
     ): plumbing(_AUTH_OF_CHILD, _TENANT),
-    ("runtime.py", "ViewRuntime._flush_pending_layout", "render_pending_layout"): plumbing(_RENDER),
+    # #3658: the one layout render of every transport's effects drain.
+    ("_render_frame.py", "adrain_effects", "render_pending_layout"): plumbing(_RENDER),
     ("runtime.py", "ViewRuntime._render_async_result", "view._sync_state_to_rust"): plumbing(
         _RENDER
     ),
@@ -789,9 +790,6 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
         "LiveViewConsumer._handle_request_html_locked",
         "self.view_instance._extract_liveview_content",
     ): plumbing(_RENDER),
-    ("websocket.py", "LiveViewConsumer._flush_pending_layout", "render_pending_layout"): plumbing(
-        _RENDER
-    ),
     (
         "websocket.py",
         "LiveViewConsumer._dispatch_single_event_body",

@@ -18,21 +18,19 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from django.test import override_settings
 
+from djust.mixins.commands import CommandsMixin
+from djust.tests._frames import effects_of
 from djust.websocket import LiveViewConsumer
 
 URLCONF = "tests.redirect_mount_test_urls"
 TARGET = "tests.redirect_mount_test_urls.RedirectTargetView"
 
 
-class _QueueingView:
+class _QueueingView(CommandsMixin):
     """Stands in for a view whose ``mount()`` queued client-side commands."""
 
     def __init__(self):
-        self._pending = [{"action": "title", "value": "Target — Components"}]
-
-    def _drain_page_metadata(self):
-        drained, self._pending = self._pending, []
-        return drained
+        self._enqueue("page_metadata", {"action": "title", "value": "Target — Components"})
 
 
 def _consumer_with_queued_view():
@@ -61,7 +59,7 @@ async def test_a_title_queued_during_mount_reaches_the_client():
             {"view": TARGET, "url": "/redirect-target/", "params": {}}
         )
 
-    titles = [f for f in sent if f.get("type") == "page_metadata" and f.get("action") == "title"]
+    titles = [f for f in effects_of(sent, "page_metadata") if f.get("action") == "title"]
     assert titles, f"no page_metadata title frame was sent; got {[f.get('type') for f in sent]}"
     assert titles[0]["value"] == "Target — Components"
 
@@ -92,9 +90,8 @@ async def test_the_queue_is_not_delivered_twice():
 async def test_a_view_that_queued_nothing_sends_nothing():
     consumer, sent = _consumer_with_queued_view()
 
-    class _Quiet:
-        def _drain_page_metadata(self):
-            return []
+    class _Quiet(CommandsMixin):
+        pass
 
     async def _fake_handle_mount(data, **kwargs):
         consumer.view_instance = _Quiet()
@@ -104,4 +101,4 @@ async def test_a_view_that_queued_nothing_sends_nothing():
             {"view": TARGET, "url": "/redirect-target/", "params": {}}
         )
 
-    assert [f for f in sent if f.get("type") == "page_metadata"] == []
+    assert [f for f in effects_of(sent, "page_metadata")] == []

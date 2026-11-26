@@ -15,8 +15,9 @@ import pytest
 from asgiref.sync import sync_to_async
 from django.contrib.auth.models import Group
 
-from djust.tests import test_model_form_acceptance_adr035 as acc
 from djust.testing import live_session
+from djust.tests import test_model_form_acceptance_adr035 as acc
+from djust.tests._frames import effects_of, frame_matches, legacy_type
 from djust.tests._ws_frames import has_type, receive_until
 
 
@@ -56,10 +57,12 @@ async def test_url_change_to_another_record_redirects_instead_of_rendering_the_o
             frame = await acc._mount(socket, "ScopedEdit", "/edit/%s/" % mine.pk)
             assert frame["type"] == "mount", frame
             frames = await _url_change(socket, "/edit/%s/" % other.pk)
-            assert [f["type"] for f in frames] == ["navigation"], frames
-            assert frames[0]["action"] == "live_redirect"
-            assert frames[0]["path"] == "/edit/%s/" % other.pk
-            assert frames[0]["replace"] is True
+            # One effects-only render frame carrying the redirect (#3658).
+            assert [legacy_type(f) for f in frames] == ["noop"], frames
+            [nav] = effects_of(frames, "navigation")
+            assert nav["action"] == "live_redirect"
+            assert nav["path"] == "/edit/%s/" % other.pk
+            assert nav["replace"] is True
             # The old record is not re-rendered under the new URL.
             assert mine.name not in json.dumps(frames)
             # The redirect's mount edits the record the URL names.
@@ -89,7 +92,7 @@ async def test_url_change_to_a_forbidden_record_is_denied_by_the_remount():
                 "type"
             ] == "mount"
             frames = await _url_change(socket, "/edit/%s/" % theirs.pk)
-            assert [(f["type"], f.get("action")) for f in frames] == [
+            assert [(f["kind"], f.get("action")) for f in effects_of(frames)] == [
                 ("navigation", "live_redirect")
             ], frames
             frame = await acc._mount(socket, "ScopedEdit", "/edit/%s/" % theirs.pk)
@@ -112,8 +115,8 @@ async def test_url_change_on_the_same_record_still_patches():
                 "type"
             ] == "mount"
             frames = await _url_change(socket, "/edit/%s/?tab=2" % mine.pk)
-            assert frames and frames[-1]["type"] in {"patch", "html_update"}, frames
-            assert not any(f["type"] == "navigation" for f in frames)
+            assert frames and legacy_type(frames[-1]) in {"patch", "html_update"}, frames
+            assert not any(frame_matches(f, "navigation") for f in frames)
         finally:
             await socket.disconnect()
 
@@ -169,7 +172,7 @@ async def test_the_redirect_never_echoes_a_scheme_or_host(uri):
             frames = await _url_change(socket, uri.replace("{t}", str(other.pk)))
         finally:
             await socket.disconnect()
-    navigations = [f for f in frames if f.get("type") == "navigation"]
+    navigations = [f for f in effects_of(frames, "navigation")]
     assert navigations, frames
     path = navigations[0]["path"]
     parts = urlsplit(path)

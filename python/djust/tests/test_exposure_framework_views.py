@@ -39,7 +39,8 @@ from djust.auth.admin_views import OAuthProvidersView, SocialAccountsView
 from djust.components.ttyd.terminal import TtydTerminalView
 from djust.decorators import state
 from djust.live_view import is_protected_http_entry
-from djust.tests.test_admin_page_render import _Socket, _session_cookie
+from djust.tests._frames import frame_matches, legacy_type
+from djust.tests.test_admin_page_render import _session_cookie, _Socket
 
 PACKAGE = Path(__file__).resolve().parents[1]
 MODULE = __name__
@@ -698,7 +699,7 @@ class _StackSocket(_Socket):
         await self.send(frame)
         for _ in range(10):
             received = await self.comm.receive_json_from(timeout=10)
-            if received.get("type") in types:
+            if frame_matches(received, types):
                 return received
         raise AssertionError("no %s frame" % (types,))
 
@@ -739,7 +740,7 @@ async def test_a_public_view_has_one_principal_for_mount_and_event(
         assert ">mount=%s</i>" % expected in mounted["html"], mounted["html"]
         answered = await ws.answer(_event("ask"), *_EVENT_ANSWERS)
     # The event is accepted, and its request names the principal the mount did.
-    assert answered.get("type") == "patch", answered
+    assert legacy_type(answered) == "patch", answered
     assert _text_patches(answered) == ["event=%s" % expected], answered
 
 
@@ -782,7 +783,7 @@ async def test_a_shipped_public_page_works_behind_the_session_only_stack(site_ur
         )
         assert mounted.get("type") == "mount", mounted
         answered = await ws.answer(_event("search", value="accordion"), *_EVENT_ANSWERS)
-    assert answered.get("type") in ("patch", "html_update"), answered
+    assert legacy_type(answered) in ("patch", "html_update"), answered
 
 
 # --------------------------------------------------------------------------
@@ -806,9 +807,9 @@ def test_the_catalogue_renders_without_a_user_or_a_server_side_session(site_urls
     ``request.user``, so the page would stop rendering for a project that has
     neither. It has to keep rendering there.
     """
-    from djust.theming.gallery.live_views import ComponentsIndexView
-
     from django.contrib.sessions.backends.signed_cookies import SessionStore
+
+    from djust.theming.gallery.live_views import ComponentsIndexView
 
     request = RequestFactory().get(CATALOGUE)
     request.session = SessionStore()  # a cookie session, and no request.user

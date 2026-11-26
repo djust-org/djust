@@ -31,8 +31,9 @@ from __future__ import annotations
 
 from typing import Any, Dict, Mapping, Optional
 
-#: The protocol this server speaks. ``1`` is the first versioned protocol.
-PROTOCOL_VERSION: int = 1
+#: The protocol this server speaks. ``1`` was the first versioned protocol (the
+#: 1.x frames); ``2`` is the one ``render`` frame with ``effects`` (#3658, TC9).
+PROTOCOL_VERSION: int = 2
 
 #: Header the client sends on HTTP and SSE-message POSTs, and the server
 #: returns on HTTP answers.

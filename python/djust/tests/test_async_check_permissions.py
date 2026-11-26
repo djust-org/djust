@@ -51,6 +51,7 @@ from djust.auth.core import (
 )
 from djust.config import config
 from djust.decorators import event_handler, permission_required
+from djust.tests._frames import effects_of, legacy_type
 
 pytest.importorskip("channels")
 
@@ -391,7 +392,7 @@ async def _close(comm):
 
 
 def _mounted(frames):
-    return any(f.get("type") in ("mount", "html_update", "patch") for f in frames)
+    return any(legacy_type(f) in ("mount", "html_update", "patch") for f in frames)
 
 
 def _denied(frames):
@@ -430,7 +431,7 @@ class TestWebSocket:
         frames += await _frames(comm)
         await _close(comm)
         assert "mount" not in RAN
-        assert {"type": "navigate", "to": "/login/"} in frames
+        assert {"kind": "navigate", "to": "/login/"} in effects_of(frames)
         assert {"__close__": 4403} in frames
 
     async def test_mount_check_exception_fails_closed(self, flavour):

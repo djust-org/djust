@@ -28,7 +28,6 @@ import sys
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 from django.contrib.auth.models import AnonymousUser
 from django.test import RequestFactory, override_settings
 
@@ -40,7 +39,7 @@ from djust.rate_limit import (
     handler_rate_check,
     reset_handler_buckets,
 )
-
+from djust.tests._frames import frame_matches
 
 # --------------------------------------------------------------------------- #
 # Fixtures / helpers
@@ -260,7 +259,7 @@ async def test_f27_two_websocket_connections_combined_limit():
         await comm.receive_json_from()  # connect ack
         await comm.send_json_to({"type": "mount", "view": view_path})
         mount_resp = await comm.receive_json_from()
-        assert mount_resp.get("type") != "navigate", f"unexpected redirect: {mount_resp!r}"
+        assert not frame_matches(mount_resp, "navigate"), f"unexpected redirect: {mount_resp!r}"
         return comm
 
     comm_a = await _connect()
@@ -309,8 +308,8 @@ async def test_f27_cross_transport_ws_and_api_share_budget():
     dict (pre-fix), the API calls below would all succeed independently and the
     combined count would be 10 instead of 5.
     """
-    from djust.websocket_utils import _validate_event_security
     from djust.api.dispatch import _rate_limit_check
+    from djust.websocket_utils import _validate_event_security
 
     # WS side: authenticated user pk=99.
     ws_view = _make_view(_request_for_user(99))

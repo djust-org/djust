@@ -23,6 +23,7 @@ from django.test import RequestFactory, override_settings
 from djust import LiveView
 from djust.components.descriptors.base import LiveComponent as DescriptorComponent
 from djust.decorators import event_handler, state
+from djust.tests._frames import legacy_type
 
 _MOD = __name__
 _URL = "/explicit-snapshot-kept/"
@@ -154,8 +155,8 @@ async def test_an_explicit_skip_render_noop_carries_the_token_and_a_reconnect_re
 
     await runtime.dispatch_event(_explicit_event(runtime.view_instance, route))
     assert not transport.errors, transport.errors
-    [noop] = [f for f in transport.sent if f.get("type") in ("noop", "patch", "html_update")]
-    assert noop["type"] == "noop", noop
+    [noop] = [f for f in transport.sent if legacy_type(f) in ("noop", "patch", "html_update")]
+    assert legacy_type(noop) == "noop", noop
     assert noop.get(TOKEN), noop
 
     fresh = await sync_to_async(make_request)(request.session.session_key)
@@ -182,5 +183,5 @@ async def test_an_explicit_skip_render_turn_whose_commit_failed_sends_no_token(r
     monkeypatch.setattr("djust._exposure_sessions.save_server_state", refuse)
     await runtime.dispatch_event(_explicit_event(runtime.view_instance, route))
     assert transport.errors, "the failed commit must answer an error; vacuous"
-    assert not [f for f in transport.sent if f.get("type") == "noop"], transport.sent
+    assert not [f for f in transport.sent if legacy_type(f) == "noop"], transport.sent
     assert not [f for f in transport.sent if f.get(TOKEN)], transport.sent

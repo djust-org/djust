@@ -2,13 +2,13 @@
 
 import json
 
-from asgiref.sync import async_to_sync
 import pytest
+from asgiref.sync import async_to_sync
 
 from djust import LiveView
-from djust.decorators import state
 from djust.components._interactive import DropdownMenu
-
+from djust.decorators import state
+from djust.tests._frames import legacy_type
 
 observations = []
 
@@ -75,7 +75,7 @@ def test_visibility_mode_and_native_markup_are_explicit_and_opt_in():
 
 
 def test_observer_injects_bound_source_without_assigning_visibility_or_dirtying_state():
-    from djust.websocket import _snapshot_assigns, _compute_changed_keys
+    from djust.websocket import _compute_changed_keys, _snapshot_assigns
 
     view = page()
     menu = view.menu
@@ -147,11 +147,13 @@ def test_storage_failure_does_not_invoke_observer(monkeypatch):
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.parametrize("changes_state", [False, True])
 async def test_native_ws_observation_uses_normal_noop_or_render_path(changes_state):
+    import re
+
     from channels.testing import WebsocketCommunicator
     from django.test import override_settings
-    from djust.websocket import LiveViewConsumer
+
     from djust.testing import with_live_session
-    import re
+    from djust.websocket import LiveViewConsumer
 
     cls = RenderingObserverPage if changes_state else ObserverPage
     slug = __name__ + "." + cls.__name__
@@ -180,7 +182,7 @@ async def test_native_ws_observation_uses_normal_noop_or_render_path(changes_sta
                 }
             )
             response = await socket.receive_json_from()
-            assert response["type"] == ("html_update" if changes_state else "noop"), response
+            assert legacy_type(response) == ("html_update" if changes_state else "noop"), response
             if changes_state:
                 assert "opened" in response["html"]
             else:

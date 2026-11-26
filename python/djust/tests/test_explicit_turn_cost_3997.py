@@ -21,6 +21,7 @@ from djust import LiveView, _automatic_state, event_handler
 from djust._automatic_state import Projection, _digests, _encode, _envelope_length
 from djust.decorators import state
 from djust.tests import _per_turn_harness as harness
+from djust.tests._frames import legacy_type
 
 MODULE = __name__
 ROWS = 200
@@ -158,7 +159,7 @@ async def test_a_changed_turn_encodes_the_state_once_and_builds_one_name_rule(mo
             reply = await harness.event(comm, "cell")
         finally:
             await comm.disconnect()
-    assert reply["type"] == "patch"
+    assert legacy_type(reply) == "patch"
     assert len(saved) == 1, "exactly one save ran in the measured turn"
     state_chars = len(saved[0])  # the save's whole text (its rollback copy)
     assert state_chars > ROWS * 30, "the measured save carried the rows"

@@ -16,6 +16,7 @@ from django.contrib.sessions.backends.db import SessionStore
 
 from djust import LiveView, event_handler
 from djust._exposure_children import child_state_key
+from djust.tests._frames import legacy_type
 from djust.tests.test_exposure_child_events import EventChild, EventParent, mount
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
@@ -103,7 +104,7 @@ async def test_mount_queued_child_work_arrives_as_owned_scoped_update(monkeypatc
     await drain(child)
     await asyncio.wait_for(completed.wait(), 2)
 
-    updates = [f for f in transport.sent if f.get("type") == "embedded_update"]
+    updates = [f for f in transport.sent if legacy_type(f) == "embedded_update"]
     assert len(updates) == 1
     assert updates[0]["view_id"] == "menu"
     assert updates[0]["source"] == "async"
@@ -132,7 +133,7 @@ async def test_mount_queued_child_work_is_dropped_when_authority_is_revoked(monk
     child = runtime.view_instance._get_child_view("menu")
     await drain(child)
     await asyncio.sleep(0)
-    assert not any(f.get("type") == "embedded_update" for f in transport.sent)
+    assert not any(legacy_type(f) == "embedded_update" for f in transport.sent)
     assert transport.errors and transport.errors[-1]["code"] == "async_error"
     assert WORK_SENTINEL not in repr(transport.sent)
     stored = await sync_to_async(SessionStore(request.session.session_key).load)()
@@ -158,7 +159,7 @@ async def test_parent_turn_queued_child_work_runs_under_child_owner(monkeypatch)
     assert "async_pending" not in ack and "async_batch" not in ack
     await drain(child)
     await asyncio.wait_for(completed.wait(), 2)
-    updates = [f for f in transport.sent if f.get("type") == "embedded_update"]
+    updates = [f for f in transport.sent if legacy_type(f) == "embedded_update"]
     assert [(u["view_id"], u["source"]) for u in updates] == [("menu", "async")]
     assert "Count=8" in updates[0]["html"]
     completions = [f["async_batch"] for f in transport.sent if f.get("type") == "async_complete"]
@@ -192,7 +193,7 @@ async def test_consumer_turn_queued_child_work_runs_under_child_owner(monkeypatc
 
     await drain(child)
     await asyncio.wait_for(completed.wait(), 2)
-    updates = [f for f in transport.sent if f.get("type") == "embedded_update"]
+    updates = [f for f in transport.sent if legacy_type(f) == "embedded_update"]
     assert [(u["view_id"], u["source"]) for u in updates] == [("menu", "async")]
     assert "Count=9" in updates[0]["html"]
     assert not transport.errors

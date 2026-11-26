@@ -24,6 +24,7 @@ from djust import LiveView, event_handler
 from djust.decorators import state
 from djust.forms import FormMixin
 from djust.runtime import ViewRuntime
+from djust.tests._frames import legacy_type
 from djust.tests.test_exposure_runtime import make_request
 from djust.tests.test_runtime_state_save_tt_1894 import MockTransport
 
@@ -141,7 +142,7 @@ async def test_dj_activity_registers_on_the_rendering_view(monkeypatch):
         {"type": "event", "event": "bump", "params": {"view_id": "panel_child"}}
     )
     assert not transport.errors, transport.errors
-    assert any(frame.get("type") == "embedded_update" for frame in transport.sent)
+    assert any(legacy_type(frame) == "embedded_update" for frame in transport.sent)
     assert child.count == 1
     assert child.is_activity_visible("drawer") is False
 
@@ -162,7 +163,7 @@ async def test_colocated_hook_namespacing_uses_the_rendering_view(
     await runtime.dispatch_event(
         {"type": "event", "event": "bump", "params": {"view_id": "panel_child"}}
     )
-    update = json.dumps([f for f in transport.sent if f.get("type") == "embedded_update"])
+    update = json.dumps([f for f in transport.sent if legacy_type(f) == "embedded_update"])
     assert update != "[]"
     expected = f"{MODULE}.TagChild.Chart" if namespacing == "strict" else "Chart"
     assert f'data-hook=\\"{expected}\\"' in update

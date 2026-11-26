@@ -21,6 +21,7 @@ from django.test import override_settings
 from djust import LiveView, event_handler
 from djust.decorators import state
 from djust.runtime import ViewRuntime
+from djust.tests._frames import legacy_type
 from djust.tests.test_exposure_runtime import make_request
 from djust.tests.test_runtime_state_save_tt_1894 import MockTransport
 
@@ -99,7 +100,7 @@ def _rendered(transport):
     return [
         (frame.get("source"), _shown(frame))
         for frame in transport.sent
-        if frame.get("type") in {"html_update", "patch"}
+        if legacy_type(frame) in {"html_update", "patch"}
     ]
 
 
@@ -152,7 +153,7 @@ async def test_the_background_result_reaches_the_client_after_a_deferred_save(st
     assert _rendered(transport) == [("async", 2), ("async", 12)], transport.sent
     # The catch-up frame announces the work, as a turn's own frame would, and
     # the same batch is completed once the work has run.
-    catch_up = next(f for f in transport.sent if f.get("type") == "html_update")
+    catch_up = next(f for f in transport.sent if legacy_type(f) == "html_update")
     assert catch_up.get("async_pending") is True and catch_up.get("async_batch")
     await _until(
         lambda: (
@@ -225,5 +226,5 @@ async def test_over_a_real_websocket(staged):
         finally:
             await socket.disconnect()
 
-    shown = [_shown(f) for f in frames if f.get("type") in {"html_update", "patch"}]
+    shown = [_shown(f) for f in frames if legacy_type(f) in {"html_update", "patch"}]
     assert shown == [1, 11], frames

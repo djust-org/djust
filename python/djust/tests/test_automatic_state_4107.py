@@ -29,6 +29,7 @@ from django.test import RequestFactory
 from djust import LiveView, _automatic_state, _per_turn, event_handler  # noqa: F401
 from djust.decorators import state
 from djust.tests import _per_turn_harness as harness
+from djust.tests._frames import legacy_type
 
 MODULE = __name__
 SECRET = "s3cr3t-never-shown-4107"
@@ -1641,7 +1642,7 @@ async def test_a_socket_mount_after_the_page_get_applies_nothing():
     # socket's mount() built, so nothing was restored and the first event
     # answers with a patch, not the whole page.
     assert CALLS == ["mount", "mount", "restore"]
-    assert frame["type"] == "patch", frame
+    assert legacy_type(frame) == "patch", frame
 
 
 class Tabs(_Base):

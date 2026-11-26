@@ -35,6 +35,7 @@ from djust.testing import (
     open_live_page,
     with_live_session,
 )
+from djust.tests._frames import effects_of, legacy_type
 
 pytestmark = [pytest.mark.django_db(transaction=True)]
 
@@ -255,7 +256,7 @@ async def test_socket_mounts_on_the_pages_session_and_runs_events():
         assert isinstance(socket, LiveSocket)
         assert socket.mount["type"] == "mount", socket.mount
         answer = await socket.send_event("increment")
-        assert answer["type"] in ("patch", "html_update"), answer
+        assert legacy_type(answer) in ("patch", "html_update"), answer
         assert answer["ref"] == 1
     assert _seen("increment") == [("anonymous", "-", 1)]
 
@@ -269,10 +270,10 @@ async def test_send_event_answers_with_its_own_frame_and_keeps_the_others():
         first = await socket.send_event("ping")
         second = await socket.send_event("increment")
         assert first["ref"] == 1 and second["ref"] == 2, (first, second)
-        assert second["type"] in ("patch", "html_update"), second
-        pushed = await socket.receive(("push_event",), timeout=5)
-        assert pushed["event"] == "pinged", socket.frames
-        assert socket.frames.index(pushed) < socket.frames.index(second)
+        assert legacy_type(second) in ("patch", "html_update"), second
+        # ``ping``'s push rides in its own answer (#3658).
+        assert [e["event"] for e in effects_of(first, "push_event")] == ["pinged"], first
+        assert socket.frames.index(first) < socket.frames.index(second)
 
 
 async def test_socket_as_a_logged_in_user():
@@ -358,11 +359,10 @@ async def test_a_receive_timeout_leaves_the_socket_usable():
         with pytest.raises(asyncio.TimeoutError):
             await socket.receive(("push_event",), timeout=0.3)
         answer = await socket.send_event("increment")
-        assert answer["type"] in ("patch", "html_update"), answer
+        assert legacy_type(answer) in ("patch", "html_update"), answer
         await socket.receive_nothing(("push_event",), within=0.3)
-        await socket.send_event("ping")
-        with pytest.raises(AssertionError, match="expected no push_event"):
-            await socket.receive_nothing(("push_event",), within=5)
+        pinged = await socket.send_event("ping")
+        assert effects_of(pinged, "push_event"), pinged  # the push rides in the answer (#3658)
     assert [count for *_, count in _seen("increment")] == [1]
 
 
@@ -423,7 +423,7 @@ async def test_sse_mounts_on_the_pages_session_and_runs_events():
         assert stream.mount["type"] == "mount", stream.mount
         assert stream.session is not None
         answer = await stream.send_event("increment")
-        assert answer["type"] in ("patch", "html_update"), answer
+        assert legacy_type(answer) in ("patch", "html_update"), answer
     assert stream.session is None, "closing the stream disposes the session"
     assert _seen("increment") == [("anonymous", "-", 1)]
 
@@ -452,7 +452,7 @@ async def test_a_receive_timeout_leaves_the_stream_usable():
         with pytest.raises(asyncio.TimeoutError):
             await stream.receive(("push_event",), timeout=0.3)
         assert stream.session is not None
-        assert (await stream.send_event("increment"))["type"] in ("patch", "html_update")
+        assert legacy_type(await stream.send_event("increment")) in ("patch", "html_update")
     assert [count for *_, count in _seen("increment")] == [1]
 
 

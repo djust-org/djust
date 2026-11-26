@@ -9,6 +9,7 @@ from django.test import override_settings
 from djust import LiveView, event_handler
 from djust.decorators import state
 from djust.runtime import ViewRuntime
+from djust.tests._frames import legacy_type
 from djust.tests.test_exposure_runtime import make_request
 from djust.tests.test_runtime_state_save_tt_1894 import MockTransport
 
@@ -137,7 +138,7 @@ async def test_child_event_persists_with_fresh_request_without_snapshot_optin():
     await increment(runtime)
     assert child.count == 2
     assert not transport.errors, transport.errors
-    assert any(frame.get("type") == "embedded_update" for frame in transport.sent)
+    assert any(legacy_type(frame) == "embedded_update" for frame in transport.sent)
     assert "SERVER_SENTINEL" not in json.dumps(transport.sent)
     restored, _, _ = await mount(request.session.session_key)
     assert restored.view_instance._get_child_view("menu").count == 2
@@ -152,7 +153,7 @@ async def test_parent_event_persists_child_mutation(skip):
     )
     assert runtime.view_instance._get_child_view("menu").count == 4
     assert not transport.errors, transport.errors
-    assert any(frame.get("type") == "noop" for frame in transport.sent) is skip
+    assert any(legacy_type(frame) == "noop" for frame in transport.sent) is skip
     if not skip:
         assert "Count=4" in json.dumps(transport.sent)
     restored, _, _ = await mount(request.session.session_key)
@@ -176,11 +177,11 @@ async def test_parent_save_failure_forces_full_html_on_next_success(monkeypatch)
     await runtime.dispatch_event(event)
     assert transport.errors
     assert runtime.view_instance._force_full_html
-    assert not any(frame.get("type") in ("patch", "html_update") for frame in transport.sent)
+    assert not any(legacy_type(frame) in ("patch", "html_update") for frame in transport.sent)
     monkeypatch.setattr(SessionStore, "save", original)
     transport.sent.clear()
     await runtime.dispatch_event(event)
-    assert any(frame.get("type") == "html_update" for frame in transport.sent)
+    assert any(legacy_type(frame) == "html_update" for frame in transport.sent)
     assert "Count=4" in json.dumps(transport.sent)
     assert not runtime.view_instance._force_full_html
 
@@ -221,10 +222,9 @@ async def test_failed_render_override_does_not_commit_base_render_pruning(monkey
 @pytest.mark.parametrize("failure", ["auth", "object", "storage", "timeout"])
 async def test_parent_child_save_failure_has_no_success_ack(failure, monkeypatch, caplog):
     import asyncio
+    import threading
 
     from django.contrib.sessions.backends.db import SessionStore
-
-    import threading
 
     from djust import runtime as runtime_module
 
@@ -270,7 +270,7 @@ async def test_parent_child_save_failure_has_no_success_ack(failure, monkeypatch
     assert bool(transport.errors[0].get("transient")) is (failure == "timeout")
     assert not any(error.get("transient") for error in transport.errors[1:])
     assert not any(
-        frame.get("type") in ("noop", "patch", "html_update") for frame in transport.sent
+        legacy_type(frame) in ("noop", "patch", "html_update") for frame in transport.sent
     )
     assert "SECRET_SENTINEL" not in json.dumps(transport.sent)
     assert "SECRET_SENTINEL" not in caplog.text
@@ -302,7 +302,7 @@ async def test_transient_child_event_checks_identity_without_server_grants(monke
     await increment(runtime)
     assert child._handler_calls == (0 if changed else 1)
     assert child.count == (1 if changed else 2)
-    assert any(frame.get("type") == "embedded_update" for frame in transport.sent) is not changed
+    assert any(legacy_type(frame) == "embedded_update" for frame in transport.sent) is not changed
 
 
 @pytest.mark.parametrize("mutation", ["permission", "inputs", "schema", "registration"])
@@ -319,7 +319,7 @@ async def test_child_event_rejects_stale_scope_before_handler(mutation, monkeypa
     assert child.count == 1
     assert child._handler_calls == 0
     assert transport.errors or any(frame.get("type") == "error" for frame in transport.sent)
-    assert not any(frame.get("type") == "embedded_update" for frame in transport.sent)
+    assert not any(legacy_type(frame) == "embedded_update" for frame in transport.sent)
     restored, _, _ = await mount(request.session.session_key)
     assert restored.view_instance._get_child_view("menu").count == 1
 
@@ -339,7 +339,7 @@ async def test_post_handler_failure_does_not_save_or_send_success(mode, monkeypa
     await increment(runtime, mode)
     assert runtime.view_instance._get_child_view("menu")._handler_calls == 1
     assert transport.errors
-    assert not any(frame.get("type") == "embedded_update" for frame in transport.sent)
+    assert not any(legacy_type(frame) == "embedded_update" for frame in transport.sent)
     assert "SECRET_SENTINEL" not in json.dumps(transport.sent)
     assert "SECRET_SENTINEL" not in caplog.text
     if mode == "storage":
@@ -360,7 +360,7 @@ async def test_render_failure_never_discloses_private_exception(monkeypatch, set
     assert "RENDER_SECRET_SENTINEL" not in json.dumps(transport.sent)
     assert "RENDER_SECRET_SENTINEL" not in caplog.text
     assert transport.errors
-    assert not any(frame.get("type") == "embedded_update" for frame in transport.sent)
+    assert not any(legacy_type(frame) == "embedded_update" for frame in transport.sent)
 
 
 async def test_child_save_timeout_is_withheld_and_lands_late(monkeypatch):
@@ -404,7 +404,7 @@ async def test_child_save_timeout_is_withheld_and_lands_late(monkeypatch):
     await asyncio.wait_for(dispatch, timeout=10)  # hang guard only
     assert [error.get("transient") for error in transport.errors] == [True]
     assert "reload" not in transport.errors[0]["error"].lower()
-    assert not any(frame.get("type") == "embedded_update" for frame in transport.sent)
+    assert not any(legacy_type(frame) == "embedded_update" for frame in transport.sent)
     # The abandoned save still runs, and the catch-up turn follows it.
     await asyncio.wait_for(runtime._explicit_catch_up, timeout=10)
     # Exactly two writes: the abandoned save landing late, then the ONE
@@ -412,7 +412,7 @@ async def test_child_save_timeout_is_withheld_and_lands_late(monkeypatch):
     # turn was deferred). A catch-up loop would add more (#3206 review B-a).
     assert saved == [True, True], saved
     assert any(
-        f.get("type") == "html_update" and f.get("source") == "async" for f in transport.sent
+        legacy_type(f) == "html_update" and f.get("source") == "async" for f in transport.sent
     ), "the catch-up turn must send full HTML"
     monkeypatch.setattr(SessionStore, "save", original)
     # The restoring mount saves too; on a loaded runner 50 ms is too short for it.

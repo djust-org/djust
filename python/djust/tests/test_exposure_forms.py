@@ -15,11 +15,11 @@ the real HTTP POST fallback. The Rust renderer has no handler for the
 ``{% live_form %}`` family, so templates use plain variables.
 """
 
-from typing import Any
 import contextlib
 import json
 import re
 import uuid
+from typing import Any
 
 import pytest
 from asgiref.sync import sync_to_async
@@ -37,6 +37,7 @@ from djust._exposure_snapshots import snapshot_codec
 from djust.decorators import event_handler, state
 from djust.forms import FormMixin, ModelFormMixin, persisted_form_input
 from djust.runtime import ViewRuntime
+from djust.tests._frames import legacy_type
 from djust.tests.test_runtime_state_save_tt_1894 import MockTransport
 
 pytestmark = [pytest.mark.django_db(transaction=True)]
@@ -587,7 +588,7 @@ async def _recheck_event(socket, ref, event, params):
     for _ in range(6):
         frame = await socket.receive_json_from()
         frames.append(frame)
-        if frame.get("type") in {"patch", "html_update", "error", "noop", "navigate"}:
+        if legacy_type(frame) in {"patch", "html_update", "error", "noop", "navigate"}:
             break
     assert not any(frame.get("type") == "error" for frame in frames), frames
     return frames

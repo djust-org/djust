@@ -24,6 +24,7 @@ from djust.decorators import (
     rate_limit,
     throttle,
 )
+from djust.tests._frames import legacy_type
 
 DECORATORS = {
     "debounce": debounce(wait=0.1),
@@ -97,7 +98,7 @@ async def _event(communicator, name):
         output = await communicator.receive_output()
         if output["type"] == "websocket.send":
             frame = json.loads(output.get("text") or "{}")
-            if frame.get("type") in ("patch", "noop", "html_update", "error"):
+            if legacy_type(frame) in ("patch", "noop", "html_update", "error"):
                 return frame
     raise AssertionError("no reply to the event")
 

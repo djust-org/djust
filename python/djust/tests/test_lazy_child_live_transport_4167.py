@@ -19,6 +19,7 @@ from django.test import RequestFactory, override_settings
 
 from djust import LiveView, event_handler
 from djust.decorators import state
+from djust.tests._frames import legacy_type
 
 # asyncio_mode = "auto" runs the async tests; an asyncio mark would also land on
 # the sync test below and warn (#4167 review N3).
@@ -173,7 +174,7 @@ async def event_reply(comm, event, **params):
     await comm.send_json_to({"type": "event", "event": event, "params": params})
     while True:
         frame = await comm.receive_json_from()
-        if frame.get("type") in {"embedded_update", "error", "patch", "html_update", "noop"}:
+        if legacy_type(frame) in {"embedded_update", "error", "patch", "html_update", "noop"}:
             return frame
 
 
@@ -187,12 +188,12 @@ async def test_lazy_explicit_child_routes_over_websocket_after_page_get():
         try:
             mounts = len(LazyChild.mounts)
             reply = await event_reply(comm, "increment", view_id="lz")
-            assert reply["type"] == "embedded_update", reply
+            assert legacy_type(reply) == "embedded_update", reply
             assert "Lazy=2" in reply["html"]
             reply = await event_reply(comm, "bump")
-            assert reply["type"] in {"patch", "html_update"}, reply
+            assert legacy_type(reply) in {"patch", "html_update"}, reply
             reply = await event_reply(comm, "increment", view_id="lz")
-            assert reply["type"] == "embedded_update", reply
+            assert legacy_type(reply) == "embedded_update", reply
             # The live child is reused across the parent's renders.
             assert "Lazy=3" in reply["html"]
             assert len(LazyChild.mounts) == mounts
@@ -237,7 +238,7 @@ async def test_socket_renders_stash_no_lazy_thunks(monkeypatch):
         try:
             for _ in range(3):
                 reply = await event_reply(comm, "bump")
-                assert reply["type"] in {"patch", "html_update"}, reply
+                assert legacy_type(reply) in {"patch", "html_update"}, reply
         finally:
             await comm.disconnect()
     assert views

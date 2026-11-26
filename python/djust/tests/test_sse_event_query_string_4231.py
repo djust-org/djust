@@ -31,6 +31,7 @@ from djust import LiveView
 from djust.decorators import event_handler, state
 from djust.tenants.mixin import TenantMixin
 from djust.tenants.resolvers import TenantInfo
+from djust.tests._frames import legacy_type
 
 pytestmark = [pytest.mark.django_db(transaction=True)]
 
@@ -136,7 +137,7 @@ async def _socket() -> list[tuple[str, str]]:
         await comm.send_json_to({"type": "event", "event": "bump", "params": {}})
         for _ in range(20):
             frame = json.loads(await comm.receive_from(timeout=30))
-            if frame.get("type") in ("patch", "html_update", "error"):
+            if legacy_type(frame) in ("patch", "html_update", "error"):
                 break
         assert frame["type"] != "error", frame
     finally:

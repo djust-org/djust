@@ -186,9 +186,9 @@ class PushEventMixin(CommandsMixin):
         # Prefer dynamic lookup via _ws_consumer — always current, even
         # after reconnect (#698).
         consumer = getattr(self, "_ws_consumer", None)
-        flush_fn = getattr(consumer, "_flush_push_events", None)
-        if flush_fn is not None:
-            await flush_fn()
+        send_effects = getattr(consumer, "_send_effects", None)
+        if send_effects is not None:
+            await send_effects("async", self, kinds=("push_event",))
             return
         if consumer is not None:
             return
@@ -197,11 +197,13 @@ class PushEventMixin(CommandsMixin):
         runtime = sse_runtime_for(self)
         if runtime is None:
             return  # HTTP fallback / tests: events stay queued for the response
-        send = runtime.transport.send
-        # Drain (never iterate in place): the SSE turn end drains too, so each
-        # event is sent exactly once.
-        for name, payload in self._drain_push_events():
-            await send({"type": "push_event", "event": name, "payload": payload})
+        # One effects-only ``render`` frame (#3658). Drained (never read in
+        # place): the SSE turn end drains too, so each event is sent once.
+        from .._render_frame import drain_effects, render_frame
+
+        effects = drain_effects(self, kinds=("push_event",))
+        if effects:
+            await runtime.transport.send(render_frame(source="async", effects=effects))
 
     def clear_push_events(self) -> List[Tuple[str, Dict[str, Any]]]:
         """Drop the push events queued so far in this turn, and return them.

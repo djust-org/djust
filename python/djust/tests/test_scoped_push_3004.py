@@ -14,7 +14,7 @@ import pytest
 from asgiref.sync import sync_to_async
 from django.test import override_settings
 
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
 from djust.push import (
     apush_to_view,
@@ -23,7 +23,7 @@ from djust.push import (
     view_group_name,
     view_push_scopes,
 )
-from djust import state
+from djust.tests._frames import legacy_type
 
 pytest.importorskip("channels")
 
@@ -244,7 +244,7 @@ async def _receive_until(communicator, wanted, *, tries=8, timeout=30):
     last = None
     for _ in range(tries):
         last = await communicator.receive_json_from(timeout=timeout)
-        if last.get("type") == wanted:
+        if legacy_type(last) == wanted:
             return last
     return last
 
@@ -273,7 +273,7 @@ async def _moved_away(communicator, view, old, new):
     await apush_to_view(view, handler="handle_ping", payload={"tag": NEW}, scope=new)
     frames = await receive_until(
         communicator,
-        lambda fs: any(f.get("type") == "patch" and NEW in _patch_text(f) for f in fs),
+        lambda fs: any(legacy_type(f) == "patch" and NEW in _patch_text(f) for f in fs),
         what="the new scope's patch",
     )
     stale = [f for f in frames if OLD in _patch_text(f)]
@@ -309,7 +309,7 @@ async def test_scoped_push_reaches_only_the_sessions_in_that_scope():
             assert fa and fb
             frames = await receive_until(
                 c,
-                lambda fs: any(f.get("type") == "patch" and NEW in _patch_text(f) for f in fs),
+                lambda fs: any(legacy_type(f) == "patch" and NEW in _patch_text(f) for f in fs),
                 what="the unscoped push's patch",
             )
             stale = [f for f in frames if OLD in _patch_text(f)]

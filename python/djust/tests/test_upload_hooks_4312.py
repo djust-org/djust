@@ -29,6 +29,7 @@ from django.urls import path
 
 from djust import LiveView, event_handler, state
 from djust.testing import open_live_page
+from djust.tests._frames import legacy_type
 from djust.tests._ws_frames import receive_until
 from djust.uploads import (
     FRAME_CANCEL,
@@ -191,7 +192,7 @@ async def _until(socket, predicate, limit=40):
 
 
 def _renders(frame, text):
-    return frame.get("type") in ("patch", "html_update") and text in json.dumps(frame)
+    return legacy_type(frame) in ("patch", "html_update") and text in json.dumps(frame)
 
 
 async def _open(url="/t/hooks/"):
@@ -209,7 +210,7 @@ async def test_started_then_finished_each_once_and_each_renders(site):
     _, socket = await _open()
     ref = await _start(socket, "doc")
     frames = await _until(socket, lambda f: _renders(f, "started doc"))
-    assert [f["type"] for f in frames] == ["patch"]
+    assert [legacy_type(f) for f in frames] == ["patch"]
 
     await socket.communicator.send_to(bytes_data=_chunk(ref, 0, b"0" * 40))
     await socket.communicator.send_to(bytes_data=_complete(ref))
@@ -274,7 +275,7 @@ async def test_progress_hook_runs_once_per_step_the_browser_gets(site):
     order = [
         ("p", f["progress"]) if f["type"] == "upload_progress" else ("r",)
         for f in frames
-        if f["type"] in ("upload_progress", "patch")
+        if legacy_type(f) in ("upload_progress", "patch")
     ]
     assert order == [item for step in steps for item in (("p", step), ("r",))]
     await socket.disconnect()
@@ -295,7 +296,7 @@ async def test_tiny_chunks_of_a_large_file_report_no_step_until_one_is_reached(s
     await _until(socket, lambda f: _renders(f, "started prog"))
     # 30 one-byte chunks of a 10 MB file: progress stays 0, no step is reached.
     frames = await _send_chunks_then_ping(socket, ref, 30)
-    assert [f for f in frames if f["type"] in ("upload_progress", "patch")] == []
+    assert [f for f in frames if legacy_type(f) in ("upload_progress", "patch")] == []
     await socket.receive_nothing(("upload_progress", "patch", "html_update"), within=0.2)
     assert [c for c in CALLS if c[0] == "progress"] == []
     await socket.disconnect()
@@ -309,8 +310,8 @@ async def test_chunks_past_the_announced_size_report_100_once(site):
     # Every chunk after the first keeps the upload at 100%.
     frames = await _send_chunks_then_ping(socket, ref, 20)
     assert [f["progress"] for f in frames if f["type"] == "upload_progress"] == [100]
-    assert [f for f in frames if f["type"] == "patch"] and _renders(
-        [f for f in frames if f["type"] == "patch"][-1], "progress prog 100"
+    assert [f for f in frames if legacy_type(f) == "patch"] and _renders(
+        [f for f in frames if legacy_type(f) == "patch"][-1], "progress prog 100"
     )
     await socket.receive_nothing(("upload_progress", "patch", "html_update"), within=0.2)
     assert [c[3] for c in CALLS if c[0] == "progress"] == [100]
@@ -604,7 +605,7 @@ def _event(name, ref, target=None):
 
 def _reply_to(ref):
     return lambda f: (
-        f.get("type") in ("patch", "html_update", "noop", "error") and f.get("ref") == ref
+        legacy_type(f) in ("patch", "html_update", "noop", "error") and f.get("ref") == ref
     )
 
 

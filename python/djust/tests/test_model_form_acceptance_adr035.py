@@ -34,6 +34,7 @@ from django.urls import path
 
 from djust import LiveView
 from djust.forms import FormMixin, ModelFormMixin
+from djust.tests._frames import legacy_type
 from djust.uploads import UploadMixin
 
 EVENTS: list = []
@@ -614,6 +615,7 @@ def _allow():
 
 async def _connect(user, session):
     from channels.testing import WebsocketCommunicator
+
     from djust.websocket import LiveViewConsumer
 
     socket = WebsocketCommunicator(LiveViewConsumer.as_asgi(), "/ws/")
@@ -641,7 +643,7 @@ async def _event(socket, ref, event, params):
     for _ in range(6):
         frame = await socket.receive_json_from()
         frames.append(frame)
-        if frame.get("type") in {"patch", "html_update", "error", "noop"}:
+        if legacy_type(frame) in {"patch", "html_update", "error", "noop"}:
             break
     return frames
 

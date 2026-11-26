@@ -23,6 +23,7 @@ from djust import LiveView, runtime
 from djust.decorators import event_handler
 from djust.tests import _per_turn_harness as harness
 from djust.tests import _save_frequency as sf
+from djust.tests._frames import effects_of, legacy_type
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -212,7 +213,7 @@ async def test_an_over_limit_turns_session_write_waits_for_the_save_still_runnin
             assert await sync_to_async(_order)(key) is None  # still behind the earlier save
             earlier.set_result(None)
             frames = await receive_until(comm, has_frame(ref=71), what="the reply")
-            assert frames[-1]["type"] in ("patch", "html_update"), frames
+            assert legacy_type(frames[-1]) in ("patch", "html_update"), frames
             assert await sync_to_async(_order)(key) == "placed"
         finally:
             await comm.disconnect()
@@ -251,7 +252,7 @@ async def test_an_over_limit_turns_session_write_is_bounded_by_the_save_deadline
                     {"type": "event", "event": "keep_and_note", "params": {}, "ref": 72}
                 )
                 frames = await receive_until(comm, has_frame(ref=72), what="the reply")
-            assert frames[-1]["type"] in ("patch", "html_update"), frames
+            assert legacy_type(frames[-1]) in ("patch", "html_update"), frames
             assert "outran the save deadline" in caplog.text
             pending = rt._explicit_save_pending
             if pending is not None:
@@ -280,21 +281,19 @@ async def test_a_handler_that_sends_the_page_away_is_saved_before_its_reply_when
     navigation. The documented means (``save=True``, ``self.save_state()``)
     store its state before the reply that carries the push, so the next page
     loads it; without either the turn is deferred like any other."""
-    from djust.tests._ws_frames import has_type, receive_until
-
     with _settings(DJUST_STATE_SAVE_INTERVAL=60):
         key = await sync_to_async(sf.page_get)(Counter)
         comm, _ = await harness.mount_view(Counter, key)
         try:
             frames = await harness.event_frames(comm, event)
             at_reply = await _stored(key)
-            # The push that sends the page away follows the reply: by the time
-            # the browser acts on it, the state must be stored.
-            pushed = await receive_until(comm, has_type("push_event"), what="the push")
-            at_push = await _stored(key)
+            # The push that sends the page away rides in the reply (#3658): by
+            # the time the browser acts on it, the state must be stored.
+            pushed = effects_of(frames, "push_event")
+            at_push = at_reply
         finally:
             await comm.disconnect()
-    assert frames[-1]["type"] in ("patch", "html_update"), frames
+    assert legacy_type(frames[-1]) in ("patch", "html_update"), frames
     assert pushed[-1]["event"] == "go", pushed
     assert (at_reply, at_push) == (stored, stored)
 

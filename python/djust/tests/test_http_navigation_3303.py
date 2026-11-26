@@ -20,9 +20,9 @@ from django.contrib.auth import get_user_model, login, logout
 from django.contrib.sessions.backends.db import SessionStore
 from django.test import RequestFactory
 
-from djust import LiveView
+from djust import LiveView, state
 from djust.decorators import event_handler
-from djust import state
+from djust.tests._frames import payloads_of
 
 PATH = "/nav-probe/"
 
@@ -107,8 +107,8 @@ def test_logout_then_live_redirect_returns_navigation_without_rendering(session_
     response = _post(session, user, "leave")
     assert response.status_code == 200, response.content
     body = json.loads(response.content)
-    assert body["_navigation"] == [
-        {"type": "navigation", "action": "live_redirect", "path": "/x/", "replace": False}
+    assert payloads_of(body, "navigation") == [
+        {"action": "live_redirect", "path": "/x/", "replace": False}
     ]
     assert "html" not in body and "patches" not in body and "version" not in body
     # The view never rendered for the logged-out request.
@@ -119,9 +119,8 @@ def test_live_redirect_carries_params_and_replace(session_user):
     session, user = session_user
     _get(session, user)
     body = json.loads(_post(session, user, "go").content)
-    assert body["_navigation"] == [
+    assert payloads_of(body, "navigation") == [
         {
-            "type": "navigation",
             "action": "live_redirect",
             "path": "/detail/",
             "replace": True,
@@ -136,7 +135,7 @@ def test_navigation_is_drained_so_the_next_event_does_not_replay_it(session_user
     _get(session, user)
     _post(session, user, "go")
     body = json.loads(_post(session, user, "rename", value="Z").content)
-    assert "_navigation" not in body
+    assert payloads_of(body, "navigation") == []
     assert body.get("patches") or body.get("html")
 
 
@@ -146,8 +145,8 @@ def test_live_patch_renders_and_carries_the_navigation(session_user):
     response = _post(session, user, "filter_it", value="Q")
     assert response.status_code == 200, response.content
     body = json.loads(response.content)
-    assert body["_navigation"] == [
-        {"type": "navigation", "action": "live_patch", "replace": False, "params": {"q": "Q"}}
+    assert payloads_of(body, "navigation") == [
+        {"action": "live_patch", "replace": False, "params": {"q": "Q"}}
     ]
     assert body.get("patches") or body.get("html")
 
@@ -156,4 +155,4 @@ def test_a_plain_event_has_no_navigation_key(session_user):
     session, user = session_user
     _get(session, user)
     body = json.loads(_post(session, user, "rename", value="Z").content)
-    assert "_navigation" not in body
+    assert payloads_of(body, "navigation") == []

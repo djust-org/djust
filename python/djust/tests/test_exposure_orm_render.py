@@ -21,6 +21,7 @@ from djust._exposure import explicit_debug_projection
 from djust._exposure_sessions import server_state_adapter
 from djust._exposure_snapshots import snapshot_codec
 from djust.decorators import state
+from djust.tests._frames import legacy_type
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
 
@@ -144,7 +145,7 @@ async def test_explicit_orm_render_reaches_html_but_not_storage_frames_or_debug(
     connect, mount, event = frames
     assert mount["type"] == "mount", mount
     assert f">{RENDERED}</p>" in mount["html"]
-    assert event["type"] in {"patch", "html_update"}, event
+    assert legacy_type(event) in {"patch", "html_update"}, event
     # The debug payload is really attached (DEBUG on); it is the projection.
     assert event["_debug"]["variables"]["count"]["type"] == "redacted"
     assert set(event["_debug"]["variables"]) == {"count", "member_id", "note"}

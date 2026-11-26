@@ -7,10 +7,9 @@ addressed to it must route afterwards.
 """
 
 import copy
-
-import django
 import json
 
+import django
 import pytest
 from asgiref.sync import sync_to_async
 from django.contrib.auth.models import AnonymousUser
@@ -18,9 +17,10 @@ from django.contrib.sessions.backends.db import SessionStore
 from django.test import override_settings
 
 from djust import LiveView, event_handler
-from djust.tests._worker_connections import close_new_worker_connections
 from djust._exposure_children import child_state_key
 from djust.decorators import state
+from djust.tests._frames import legacy_type
+from djust.tests._worker_connections import close_new_worker_connections
 
 pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
 
@@ -121,7 +121,7 @@ async def event_reply(comm, event, **params):
     await comm.send_json_to({"type": "event", "event": event, "params": params})
     while True:
         frame = await comm.receive_json_from()
-        if frame.get("type") in {"embedded_update", "error", "patch", "html_update", "noop"}:
+        if legacy_type(frame) in {"embedded_update", "error", "patch", "html_update", "noop"}:
             return frame
 
 
@@ -137,11 +137,11 @@ async def test_shell_child_is_reconstructed_with_state_and_routes_after_reconnec
         comm = await connect(session_key, "ShellPage")
         try:
             reply = await event_reply(comm, "increment", view_id="shell")
-            assert reply["type"] == "embedded_update", reply
+            assert legacy_type(reply) == "embedded_update", reply
             assert reply["view_id"] == "shell" and "Shell=2" in reply["html"]
             # A parent turn must not prune the shell child's stored state.
             reply = await event_reply(comm, "bump")
-            assert reply["type"] in {"patch", "html_update"}, reply
+            assert legacy_type(reply) in {"patch", "html_update"}, reply
         finally:
             await comm.disconnect()
         assert (await stored_shell(session_key))["count"] == 2
@@ -153,7 +153,7 @@ async def test_shell_child_is_reconstructed_with_state_and_routes_after_reconnec
             # The reconnect put count=2 back on top of mount()'s count=1 and told the child.
             assert ShellWidget.restored_counts and set(ShellWidget.restored_counts) == {2}
             reply = await event_reply(comm, "increment", view_id="shell")
-            assert reply["type"] == "embedded_update", reply
+            assert legacy_type(reply) == "embedded_update", reply
             assert reply["view_id"] == "shell" and "Shell=3" in reply["html"]
             assert "SHELL_SECRET_SENTINEL" not in json.dumps(reply)
         finally:
@@ -186,9 +186,9 @@ async def test_cold_reconnect_owns_only_current_children_and_revokes_stale_route
         "sticky=True %}{% endif %}</section><p>{{ n }}</p></main>"
     )
     from channels.testing import WebsocketCommunicator
-    from djust.websocket import LiveViewConsumer
 
     from djust.runtime import ViewRuntime
+    from djust.websocket import LiveViewConsumer
 
     failures = []
     original_fail = ViewRuntime._fail_mount
@@ -226,10 +226,10 @@ async def test_cold_reconnect_owns_only_current_children_and_revokes_stale_route
             assert [slot for slot, _ in frame["owned_children"]] == ["ignored"]
             assert "SHELL_SECRET_SENTINEL" not in json.dumps(frame)
             reply = await event_reply(socket, "bump")
-            assert reply["type"] in {"patch", "html_update"}, reply
+            assert legacy_type(reply) in {"patch", "html_update"}, reply
             # Warm ignore reuse preserves the current authenticated instance.
             reply = await event_reply(socket, "increment", view_id="ignored")
-            assert reply["type"] == "embedded_update", reply
+            assert legacy_type(reply) == "embedded_update", reply
         finally:
             await socket.disconnect()
         socket, frame = await mounted(key)

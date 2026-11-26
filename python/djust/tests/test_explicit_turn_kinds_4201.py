@@ -36,6 +36,7 @@ from django.urls import include, path
 from djust import LiveView, event_handler, sse, state, websocket
 from djust.sse import sse_urlpatterns
 from djust.testing import open_live_page
+from djust.tests._frames import effects_of
 
 pytestmark = [pytest.mark.django_db(transaction=True)]
 
@@ -315,7 +316,7 @@ async def test_a_frame_without_a_handler_is_sent_while_the_session_lives(kind):
         await _arm(socket)
         await _trigger(socket, kind)
         frame = await _next_frame(socket, kind)
-        assert frame["type"] == _DATA_FRAME[kind], frame
+        assert frame["type"] == _DATA_FRAME[kind] or effects_of(frame, _DATA_FRAME[kind]), frame
 
 
 @pytest.mark.parametrize("kind", sorted(_DATA_FRAME))

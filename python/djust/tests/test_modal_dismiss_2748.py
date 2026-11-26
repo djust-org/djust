@@ -24,6 +24,7 @@ from asgiref.sync import sync_to_async
 
 from djust import LiveView
 from djust.components.ui.modal import ModalComponent
+from djust.tests._frames import legacy_type
 
 _MODULE = "djust.tests.test_modal_dismiss_2748"
 _FRAMEWORKS = ("bootstrap5", "tailwind", "plain")
@@ -38,7 +39,7 @@ async def _receive_until(communicator, wanted_type, *, tries=8, timeout=30):
     last = None
     for _ in range(tries):
         last = await communicator.receive_json_from(timeout=timeout)
-        if last.get("type") == wanted_type:
+        if legacy_type(last) == wanted_type:
             return last
     return last
 
@@ -125,7 +126,7 @@ class TestModalDismissOverWebSocket:
             assert resp.get("type") != "error", (
                 f"#2748: the close control's 'dismiss' event must be handled; got {resp!r}"
             )
-            assert resp.get("type") == "html_update", resp
+            assert legacy_type(resp) == "html_update", resp
             assert "open=no" in resp.get("html", ""), (
                 f"dismiss must close the modal (parent re-render shows open=no); got {resp!r}"
             )

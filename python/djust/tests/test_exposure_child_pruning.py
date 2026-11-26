@@ -3,7 +3,6 @@
 import copy
 
 import django
-
 import pytest
 from django.contrib.sessions.backends.db import SessionStore
 
@@ -12,6 +11,7 @@ from djust._exposure import ExposureError
 from djust._exposure_child_persistence import save_child_states
 from djust._exposure_children import child_state_key
 from djust.decorators import state
+from djust.tests._frames import legacy_type
 from djust.tests.test_exposure_child_mount import MountChild, make_request
 
 
@@ -411,7 +411,7 @@ async def test_child_routed_event_prunes_nested_storage_before_success(rf, monke
     assert not transport.errors, transport.errors
     assert leaf._djust_child_disposed
     assert root._get_child_view("root") is None
-    assert any(frame.get("type") == "embedded_update" for frame in transport.sent)
+    assert any(legacy_type(frame) == "embedded_update" for frame in transport.sent)
     stored = await sync_to_async(SessionStore(request.session.session_key).load)()
     assert child_state_key(request.path, ("root", "root")) not in stored
     assert stored[child_state_key(request.path, ("root",))]["state"]["values"]["count"] == 2
@@ -484,6 +484,7 @@ def test_ignored_root_dom_retains_its_registered_child(rf, tmp_path):
 @pytest.mark.skipif(django.VERSION < (6, 0), reason="Django 6 authenticated page-graph rendering")
 def test_lost_owned_diff_proof_does_not_advance_baseline(rf, monkeypatch):
     import msgpack
+
     from djust._child_rendering import render_view_with_diff
 
     page, request = mounted(rf)
@@ -504,6 +505,7 @@ def test_lost_owned_diff_proof_does_not_advance_baseline(rf, monkeypatch):
 @pytest.mark.skipif(django.VERSION < (6, 0), reason="Django 6 authenticated page-graph rendering")
 def test_an_unrendered_replacement_cannot_receive_a_child_event(rf):
     from django.template import Context
+
     from djust._exposure_children import child_event_adapter
     from djust.templatetags.live_tags import live_render
 
@@ -560,6 +562,7 @@ def test_unauthored_ignore_cannot_retain_child_handlers(rf, tmp_path, monkeypatc
 @pytest.mark.skipif(django.VERSION < (6, 0), reason="Django 6 authenticated page-graph rendering")
 def test_preserved_sticky_slot_keeps_its_issued_child_binding(rf):
     from types import SimpleNamespace
+
     from djust._exposure_children import child_event_adapter
 
     old, request = mounted(rf)

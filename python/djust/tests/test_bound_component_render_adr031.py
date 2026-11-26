@@ -18,6 +18,8 @@ import django
 import pytest
 from django.conf import settings
 
+from djust.tests._frames import legacy_type
+
 if not settings.configured:
     settings.configure(
         DATABASES={"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": ":memory:"}},
@@ -136,7 +138,7 @@ async def _runtime(view: LiveView) -> tuple[ViewRuntime, MockTransport]:
 
 
 def _html(transport: MockTransport) -> str:
-    frame = next(f for f in transport.sent if f.get("type") == "html_update")
+    frame = next(f for f in transport.sent if legacy_type(f) == "html_update")
     return frame["html"]
 
 
@@ -328,7 +330,7 @@ class TestBoundComponentRenderRoundTrip:
             # ADR-032 (#2917): ``{{ grid }}`` is the only read of the component,
             # so the event patches its subtree instead of shipping the page.
             frame = transport.sent[-1]
-            assert frame["type"] == "patch", frame
+            assert legacy_type(frame) == "patch", frame
             texts = [p["text"] for p in frame["patches"] if p["type"] == "SetText"]
             assert texts == [expected], frame["patches"]
             assert f">{expected}</i>" in view.render_with_diff()[0]
