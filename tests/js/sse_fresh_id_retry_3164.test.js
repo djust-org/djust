@@ -7,6 +7,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { PROTOCOL } from './_helpers.js';
 import { JSDOM } from 'jsdom';
 import fs from 'fs';
 
@@ -83,7 +84,7 @@ describe('#3164 SSE fresh-id retry before the first ack', () => {
         // a 409 and EventSource gives up (CLOSED). The page must not go dead.
         const { sse, streams } = setup();
         sse.connect('app.views.SearchView', {});
-        const ack = (s) => s.onmessage({ data: JSON.stringify({ type: 'sse_connect', session_id: idOf(s) }) });
+        const ack = (s) => s.onmessage({ data: JSON.stringify({ type: 'sse_connect', protocol: PROTOCOL, session_id: idOf(s) }) });
         ack(streams[0]);
         streams[0].readyState = 0; // the drop: EventSource reconnects itself
         streams[0].onerror(new Error('network'));
@@ -98,7 +99,7 @@ describe('#3164 SSE fresh-id retry before the first ack', () => {
     it('does not regenerate the id when an acked connection closes without a reconnect', () => {
         const { sse, streams } = setup();
         sse.connect('app.views.SearchView', {});
-        streams[0].onmessage({ data: JSON.stringify({ type: 'sse_connect', session_id: idOf(streams[0]) }) });
+        streams[0].onmessage({ data: JSON.stringify({ type: 'sse_connect', protocol: PROTOCOL, session_id: idOf(streams[0]) }) });
         refuse(streams[0]);
 
         expect(streams).toHaveLength(1);
@@ -109,7 +110,7 @@ describe('#3164 SSE fresh-id retry before the first ack', () => {
         const { sse, streams } = setup();
         sse.connect('app.views.SearchView', {});
         refuse(streams[0]); // fresh id -> streams[1]
-        streams[1].onmessage({ data: JSON.stringify({ type: 'sse_connect', session_id: idOf(streams[1]) }) });
+        streams[1].onmessage({ data: JSON.stringify({ type: 'sse_connect', protocol: PROTOCOL, session_id: idOf(streams[1]) }) });
         expect(sse._freshIdRetried).toBe(false);
     });
 

@@ -141,6 +141,15 @@ window.djust.wsUrl = function wsUrl() {
 };
 
 // ============================================================================
+// Wire-protocol version (#3658)
+// ============================================================================
+// The shape of the frames this bundle reads and writes. It must equal
+// PROTOCOL_VERSION in python/djust/_protocol.py (a test compares the two). The
+// client sends it with every mount verb and fallback POST, and reloads the page
+// when the server names another (02c-frame-dispatch.js `protocolMismatch`).
+window.djust.PROTOCOL = 1;
+
+// ============================================================================
 // djLog: debug-gated console.log (#761)
 // ============================================================================
 // Per djust/CLAUDE.md: "No console.log in JS without if (globalThis.djustDebug)

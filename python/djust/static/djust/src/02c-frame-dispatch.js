@@ -11,11 +11,68 @@
 // session frames, mount, event replies (the WebSocket buffers server-initiated
 // patches, #560) and errors.
 
+// ----------------------------------------------------------------------------
+// Protocol version (#3658)
+// ----------------------------------------------------------------------------
+// The server names its protocol on `connect`, `sse_connect`, `mount` and as the
+// X-Djust-Protocol header of an HTTP answer. A different one means this bundle
+// and the server disagree about the frames (a rolling deploy, or a cached
+// bundle): the page reloads, once. A second mismatch within 30 s (a reload that
+// fetched the same bundle, or a node that is still old) does not reload again:
+// the live transport stops and the server-rendered page stays usable.
+const _PROTOCOL_RELOAD_KEY = 'djust:protocol-reload';
+// The frames that carry the client's protocol (the server checks it there).
+const _PROTOCOL_VERBS = new Set(['mount', 'mount_batch', 'live_redirect_mount']);
+let _protocolReloaded = false;
+
+/** True when `value` (a frame field or a header) is not this bundle's protocol. */
+function protocolDiffers(value) {
+    return Number(value) !== window.djust.PROTOCOL;
+}
+
+function protocolMismatch(transport) {
+    const now = Date.now();
+    let recent = _protocolReloaded;
+    try {
+        const last = Number(window.sessionStorage.getItem(_PROTOCOL_RELOAD_KEY));
+        recent = last > 0 && now - last < 30000;
+        window.sessionStorage.setItem(_PROTOCOL_RELOAD_KEY, String(now));
+    } catch (_e) {
+        // No storage: one reload per page load.
+    }
+    if (!recent) {
+        _protocolReloaded = true;
+        try {
+            window.djust._sw?.clearCaches();
+        } catch (_e) {
+            if (globalThis.djustDebug) console.warn('[LiveView] clearing service-worker caches failed', _e);
+        }
+        window.location.reload();
+        return;
+    }
+    if (transport && typeof transport.disconnect === 'function') transport.disconnect();
+    if (transport) transport.enabled = false;
+    window.dispatchEvent(new CustomEvent('djust:error', {detail: {
+        error: 'This page is out of date. Reload to continue.',
+        code: 'protocol_mismatch',
+        transient: false,
+        traceback: null,
+    }}));
+}
+
 /**
  * Receipt-time routing shared by the socket transports. Returns true when the
  * frame was handled here and the transport must not dispatch it again.
  */
 async function routeInboundFrame(transport, data) {
+    // #3658: a server that names no protocol on its handshake, or another one
+    // anywhere, speaks other frames than this bundle. A mount that names none
+    // follows a handshake that already did.
+    if (((data.type === 'connect' || data.type === 'sse_connect') && protocolDiffers(data.protocol)) ||
+        (data.type === 'mount' && data.protocol !== undefined && protocolDiffers(data.protocol))) {
+        protocolMismatch(transport);
+        return true;
+    }
     // #3036: a live navigation to a page with a different page shell is a
     // full page load; the destination's root is not applied.
     if (window.djust.fallBackToFullLoadOnShellChange?.(data)) return true;
@@ -161,8 +218,10 @@ async function dispatchCommonFrame(transport, data, logPrefix) {
             return true;
 
         case 'reload':
-            // Hot reload: file changed, refresh the page
-            window.location.reload();
+            // Hot reload: file changed, refresh the page. A protocol reload
+            // (#3658) goes through the loop guard.
+            if (data.reason === 'protocol') protocolMismatch(transport);
+            else window.location.reload();
             return true;
 
         default:

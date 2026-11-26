@@ -142,3 +142,14 @@ export async function mountAndWait(bodyHtml = '', ms = 20) {
     await nextFrame(dom, ms);
     return dom;
 }
+
+/**
+ * The wire-protocol version the client bundle speaks (#3658), read from
+ * `00-namespace.js` so a bump needs no test edit. A `connect` / `sse_connect`
+ * frame without it makes the client reload the page.
+ */
+export const PROTOCOL = Number(
+    /window\.djust\.PROTOCOL = (\d+);/.exec(
+        fs.readFileSync('./python/djust/static/djust/src/00-namespace.js', 'utf-8'),
+    )[1],
+);

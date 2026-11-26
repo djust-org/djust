@@ -142,6 +142,15 @@ window.djust.wsUrl = function wsUrl() {
 };
 
 // ============================================================================
+// Wire-protocol version (#3658)
+// ============================================================================
+// The shape of the frames this bundle reads and writes. It must equal
+// PROTOCOL_VERSION in python/djust/_protocol.py (a test compares the two). The
+// client sends it with every mount verb and fallback POST, and reloads the page
+// when the server names another (02c-frame-dispatch.js `protocolMismatch`).
+window.djust.PROTOCOL = 1;
+
+// ============================================================================
 // djLog: debug-gated console.log (#761)
 // ============================================================================
 // Per djust/CLAUDE.md: "No console.log in JS without if (globalThis.djustDebug)
@@ -1045,11 +1054,68 @@ async function handleServerResponse(data, eventName, triggerElement, transport =
 // session frames, mount, event replies (the WebSocket buffers server-initiated
 // patches, #560) and errors.
 
+// ----------------------------------------------------------------------------
+// Protocol version (#3658)
+// ----------------------------------------------------------------------------
+// The server names its protocol on `connect`, `sse_connect`, `mount` and as the
+// X-Djust-Protocol header of an HTTP answer. A different one means this bundle
+// and the server disagree about the frames (a rolling deploy, or a cached
+// bundle): the page reloads, once. A second mismatch within 30 s (a reload that
+// fetched the same bundle, or a node that is still old) does not reload again:
+// the live transport stops and the server-rendered page stays usable.
+const _PROTOCOL_RELOAD_KEY = 'djust:protocol-reload';
+// The frames that carry the client's protocol (the server checks it there).
+const _PROTOCOL_VERBS = new Set(['mount', 'mount_batch', 'live_redirect_mount']);
+let _protocolReloaded = false;
+
+/** True when `value` (a frame field or a header) is not this bundle's protocol. */
+function protocolDiffers(value) {
+    return Number(value) !== window.djust.PROTOCOL;
+}
+
+function protocolMismatch(transport) {
+    const now = Date.now();
+    let recent = _protocolReloaded;
+    try {
+        const last = Number(window.sessionStorage.getItem(_PROTOCOL_RELOAD_KEY));
+        recent = last > 0 && now - last < 30000;
+        window.sessionStorage.setItem(_PROTOCOL_RELOAD_KEY, String(now));
+    } catch (_e) {
+        // No storage: one reload per page load.
+    }
+    if (!recent) {
+        _protocolReloaded = true;
+        try {
+            window.djust._sw?.clearCaches();
+        } catch (_e) {
+            if (globalThis.djustDebug) console.warn('[LiveView] clearing service-worker caches failed', _e);
+        }
+        window.location.reload();
+        return;
+    }
+    if (transport && typeof transport.disconnect === 'function') transport.disconnect();
+    if (transport) transport.enabled = false;
+    window.dispatchEvent(new CustomEvent('djust:error', {detail: {
+        error: 'This page is out of date. Reload to continue.',
+        code: 'protocol_mismatch',
+        transient: false,
+        traceback: null,
+    }}));
+}
+
 /**
  * Receipt-time routing shared by the socket transports. Returns true when the
  * frame was handled here and the transport must not dispatch it again.
  */
 async function routeInboundFrame(transport, data) {
+    // #3658: a server that names no protocol on its handshake, or another one
+    // anywhere, speaks other frames than this bundle. A mount that names none
+    // follows a handshake that already did.
+    if (((data.type === 'connect' || data.type === 'sse_connect') && protocolDiffers(data.protocol)) ||
+        (data.type === 'mount' && data.protocol !== undefined && protocolDiffers(data.protocol))) {
+        protocolMismatch(transport);
+        return true;
+    }
     // #3036: a live navigation to a page with a different page shell is a
     // full page load; the destination's root is not applied.
     if (window.djust.fallBackToFullLoadOnShellChange?.(data)) return true;
@@ -1195,8 +1261,10 @@ async function dispatchCommonFrame(transport, data, logPrefix) {
             return true;
 
         case 'reload':
-            // Hot reload: file changed, refresh the page
-            window.location.reload();
+            // Hot reload: file changed, refresh the page. A protocol reload
+            // (#3658) goes through the loop guard.
+            if (data.reason === 'protocol') protocolMismatch(transport);
+            else window.location.reload();
             return true;
 
         default:
@@ -1731,7 +1799,10 @@ class LiveViewWebSocket {
             if (this.ws !== socket) return;
             if (globalThis.djustDebug) console.log('[LiveView] WebSocket disconnected');
             this.viewMounted = false;
-            const authRefused = event.code === 4401 || event.code === 4403;
+            // 4409: the server speaks another protocol (#3658). Its `reload`
+            // frame came first; reconnecting would only be refused again.
+            // (Named for the auth codes; a 4409 dispatches no auth event.)
+            const authRefused = event.code === 4401 || event.code === 4403 || event.code === 4409;
             // Disable before notifying hooks: a refused session must not retry
             // the socket, host-root path, or SSE transport (#3265).
             if (authRefused) this.enabled = false;
@@ -1789,7 +1860,7 @@ class LiveViewWebSocket {
                 // code of the refusal frame that preceded it, if one did (#3319).
                 const refusalCode = this._lastRefusalCode || null;
                 this._lastRefusalCode = null;
-                window.dispatchEvent(new CustomEvent('djust:auth-refused', {
+                if (event.code !== 4409) window.dispatchEvent(new CustomEvent('djust:auth-refused', {
                     detail: { code: event.code, reason: event.reason || '', error_code: refusalCode }
                 }));
                 return;
@@ -2746,6 +2817,8 @@ class LiveViewWebSocket {
      * @param {Object} data - Data to send (will be JSON stringified)
      */
     sendMessage(data) {
+        // #3658: every mount verb names the protocol this bundle speaks.
+        if (_PROTOCOL_VERBS.has(data.type)) data = { ...data, protocol: window.djust.PROTOCOL };
         const message = JSON.stringify(data);
         const messageBytes = message.length;
 
@@ -3134,6 +3207,7 @@ class LiveViewSSE {
         urlParams.set('view', viewPath);
         urlParams.set('_djust_url', window.location.pathname);
         urlParams.set('_djust_tab', djustTabId());
+        urlParams.set('protocol', String(window.djust.PROTOCOL));
         // #2966: dj-track-static. The stream GET is the mount, and an
         // EventSource auto-reconnect re-requests this same URL, so the page's
         // tracked asset URLs ride it (a POSTed mount frame would be a no-op).
@@ -3616,6 +3690,7 @@ class LiveViewSSE {
     sendMessage(data, keepalive = false) {
         if (!this.enabled) return false;
 
+        if (_PROTOCOL_VERBS.has(data.type)) data = { ...data, protocol: window.djust.PROTOCOL };
         const body = JSON.stringify(data);
         this.stats.sent++;
         this.stats.sentBytes += body.length;
@@ -3626,7 +3701,7 @@ class LiveViewSSE {
         fetch(`${this.sseBaseUrl}message/`, {
             method: 'POST',
             keepalive,
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', 'X-Djust-Protocol': String(window.djust.PROTOCOL) },
             // Explicit credentials: 'include' to mirror the EventSource
             // GET's withCredentials: true. Without this, the Django session
             // cookie isn't sent on the message POST and dispatch fails
@@ -3634,7 +3709,12 @@ class LiveViewSSE {
             credentials: 'include',
             body,
         })
-            .then(r => {
+            .then(async r => {
+                // #3658: the server speaks another protocol.
+                if (r.status === 409 && (await r.clone().json().catch(() => null))?.code === 'protocol_mismatch') {
+                    protocolMismatch(this);
+                    return null;
+                }
                 if (!r.ok) throw new Error(`HTTP ${r.status}`);
                 return r.json();
             })
@@ -8566,6 +8646,7 @@ async function _httpFallbackResync() {
                 'X-Djust-Resync': '1',
                 // The tab whose saved state the page is to be rendered from (#4106).
                 'X-Djust-Tab': djustTabId(),
+                'X-Djust-Protocol': String(window.djust.PROTOCOL),
                 ..._parameterContractHeader()
             },
             body: '{}'
@@ -9027,6 +9108,7 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
                 'Content-Type': 'application/json',
                 'X-CSRFToken': csrfToken,
                 'X-Djust-Event': eventName,
+                'X-Djust-Protocol': String(window.djust.PROTOCOL),
                 'X-Djust-Tab': djustTabId(),
                 ..._parameterContractHeader(),
                 ...(sentDigest ? {'X-Djust-Render-Digest': sentDigest} : {})
@@ -9041,6 +9123,11 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
                 let detail = {error: `HTTP error! status: ${response.status}`, traceback: null};
                 try {
                     const body = await response.json();
+                    // #3658: this page's bundle is older or newer than the server.
+                    if (response.status === 409 && body && body.code === 'protocol_mismatch') {
+                        protocolMismatch(null);
+                        return;
+                    }
                     if (body && typeof body.error === 'string') {
                         detail = {
                             error: body.error,
@@ -9063,6 +9150,12 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
         if (!teardown) notifyHooksReconnected();
         // This response belongs to the outgoing view; never patch the new one.
         if (teardown || !ownsHttpResponse()) return;
+        // #3658: an answer in another protocol's frames is not applied.
+        const serverProtocol = response.headers?.get?.('X-Djust-Protocol');
+        if (serverProtocol != null && protocolDiffers(serverProtocol)) {
+            protocolMismatch(null);
+            return;
+        }
         const data = await response.json();
         // Parsing can yield after headers arrived; navigation during either
         // await invalidates every response effect, including metadata/cache.

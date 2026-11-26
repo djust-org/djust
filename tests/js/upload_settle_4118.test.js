@@ -11,6 +11,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { PROTOCOL } from './_helpers.js';
 import { JSDOM } from 'jsdom';
 import fs from 'fs';
 
@@ -62,7 +63,7 @@ async function startUpload() {
     const page = createPage();
     await tick();
     const socket = page.sockets[0];
-    socket.onmessage({ data: JSON.stringify({ type: 'connect', session_id: 's1' }) });
+    socket.onmessage({ data: JSON.stringify({ type: 'connect', protocol: PROTOCOL, session_id: 's1' }) });
     await tick();
     socket.onmessage({ data: JSON.stringify({
         type: 'mount', view: 'app.Page', version: 1, html: '<p dj-id="1">page</p>', has_ids: true,

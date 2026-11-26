@@ -526,7 +526,10 @@ class LiveViewWebSocket {
             if (this.ws !== socket) return;
             if (globalThis.djustDebug) console.log('[LiveView] WebSocket disconnected');
             this.viewMounted = false;
-            const authRefused = event.code === 4401 || event.code === 4403;
+            // 4409: the server speaks another protocol (#3658). Its `reload`
+            // frame came first; reconnecting would only be refused again.
+            // (Named for the auth codes; a 4409 dispatches no auth event.)
+            const authRefused = event.code === 4401 || event.code === 4403 || event.code === 4409;
             // Disable before notifying hooks: a refused session must not retry
             // the socket, host-root path, or SSE transport (#3265).
             if (authRefused) this.enabled = false;
@@ -584,7 +587,7 @@ class LiveViewWebSocket {
                 // code of the refusal frame that preceded it, if one did (#3319).
                 const refusalCode = this._lastRefusalCode || null;
                 this._lastRefusalCode = null;
-                window.dispatchEvent(new CustomEvent('djust:auth-refused', {
+                if (event.code !== 4409) window.dispatchEvent(new CustomEvent('djust:auth-refused', {
                     detail: { code: event.code, reason: event.reason || '', error_code: refusalCode }
                 }));
                 return;
@@ -1541,6 +1544,8 @@ class LiveViewWebSocket {
      * @param {Object} data - Data to send (will be JSON stringified)
      */
     sendMessage(data) {
+        // #3658: every mount verb names the protocol this bundle speaks.
+        if (_PROTOCOL_VERBS.has(data.type)) data = { ...data, protocol: window.djust.PROTOCOL };
         const message = JSON.stringify(data);
         const messageBytes = message.length;
 

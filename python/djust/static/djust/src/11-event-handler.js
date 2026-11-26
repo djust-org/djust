@@ -132,6 +132,7 @@ async function _httpFallbackResync() {
                 'X-Djust-Resync': '1',
                 // The tab whose saved state the page is to be rendered from (#4106).
                 'X-Djust-Tab': djustTabId(),
+                'X-Djust-Protocol': String(window.djust.PROTOCOL),
                 ..._parameterContractHeader()
             },
             body: '{}'
@@ -593,6 +594,7 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
                 'Content-Type': 'application/json',
                 'X-CSRFToken': csrfToken,
                 'X-Djust-Event': eventName,
+                'X-Djust-Protocol': String(window.djust.PROTOCOL),
                 'X-Djust-Tab': djustTabId(),
                 ..._parameterContractHeader(),
                 ...(sentDigest ? {'X-Djust-Render-Digest': sentDigest} : {})
@@ -607,6 +609,11 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
                 let detail = {error: `HTTP error! status: ${response.status}`, traceback: null};
                 try {
                     const body = await response.json();
+                    // #3658: this page's bundle is older or newer than the server.
+                    if (response.status === 409 && body && body.code === 'protocol_mismatch') {
+                        protocolMismatch(null);
+                        return;
+                    }
                     if (body && typeof body.error === 'string') {
                         detail = {
                             error: body.error,
@@ -629,6 +636,12 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
         if (!teardown) notifyHooksReconnected();
         // This response belongs to the outgoing view; never patch the new one.
         if (teardown || !ownsHttpResponse()) return;
+        // #3658: an answer in another protocol's frames is not applied.
+        const serverProtocol = response.headers?.get?.('X-Djust-Protocol');
+        if (serverProtocol != null && protocolDiffers(serverProtocol)) {
+            protocolMismatch(null);
+            return;
+        }
         const data = await response.json();
         // Parsing can yield after headers arrived; navigation during either
         // await invalidates every response effect, including metadata/cache.

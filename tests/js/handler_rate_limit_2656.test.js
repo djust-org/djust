@@ -14,6 +14,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { PROTOCOL } from './_helpers.js';
 import { JSDOM } from 'jsdom';
 import { openContracts } from './_open_contracts.js';
 import fs from 'fs';
@@ -627,7 +628,7 @@ describe('#2721 — a sibling mount is not a view-replacement boundary', () => {
         // The PAGE view mounts via the real `connect` -> `autoMount` route,
         // which is what marks `test.V` as the primary view.
         h.mountPage = async () => {
-            ws.ws.onmessage({data: JSON.stringify({type: 'connect', session_id: 's2721'})});
+            ws.ws.onmessage({data: JSON.stringify({type: 'connect', protocol: PROTOCOL, session_id: 's2721'})});
             await ws._inflight;
             await h.deliverMount({
                 view: 'test.V',
@@ -781,7 +782,7 @@ describe('#2705 — live_redirect is the view-replacement boundary', () => {
             // frame, or the frame lands on the pre-init instance and the
             // mount reply on its replacement, one await later.
             await Promise.resolve();
-            await h.deliver({type: 'connect', session_id: 's2705'});
+            await h.deliver({type: 'connect', protocol: PROTOCOL, session_id: 's2705'});
             await h.deliver({type: 'mount', version: 1, view: 'test.V',
                 handler_config: {search: {debounce: {wait: 5}}},
                 cache_config: {search: {ttl: 60}},
@@ -878,7 +879,7 @@ describe('#2705 — back/forward is the same boundary as live_redirect (#1646 tw
             await live()._inflight;
         };
         await Promise.resolve();   // settle the deferred djustInit() (see redirectHarness)
-        await deliver({type: 'connect', session_id: 's2705b'});
+        await deliver({type: 'connect', protocol: PROTOCOL, session_id: 's2705b'});
         await deliver({type: 'mount', version: 1, view: 'test.V'});
         // Forward to B, whose handler is debounced; arm a timer there.
         await deliver({type: 'navigation', action: 'live_redirect', path: '/b/'});
@@ -933,7 +934,7 @@ it('#2705 a timer armed on view A cannot fire in the window between live_redirec
     const frames = [];
     Object.getPrototypeOf(live().ws).send = raw => frames.push(JSON.parse(raw));
     await Promise.resolve();
-    live().ws.onmessage({data: JSON.stringify({type: 'connect', session_id: 's2705w'})});
+    live().ws.onmessage({data: JSON.stringify({type: 'connect', protocol: PROTOCOL, session_id: 's2705w'})});
     await live()._inflight;
     live().ws.onmessage({data: JSON.stringify({type: 'mount', version: 1, view: 'test.V',
         handler_config: {search: {debounce: {wait: 5}}}})});

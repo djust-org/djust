@@ -17,6 +17,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { PROTOCOL } from './_helpers.js';
 import { JSDOM } from 'jsdom';
 import fs from 'fs';
 
@@ -75,7 +76,7 @@ const sentOf = (socket, type) => socket.sent.filter((f) => f.type === type);
 async function connected(page) {
     await tick();
     const socket = page.sockets[0];
-    socket.onmessage({ data: JSON.stringify({ type: 'connect', session_id: 's1' }) });
+    socket.onmessage({ data: JSON.stringify({ type: 'connect', protocol: PROTOCOL, session_id: 's1' }) });
     await tick();
     return socket;
 }
@@ -342,7 +343,7 @@ describe('a new socket', () => {
         await tick(1700);
         const second = sockets[1];
         expect(second).toBeDefined();
-        second.onmessage({ data: JSON.stringify({ type: 'connect', session_id: 's2' }) });
+        second.onmessage({ data: JSON.stringify({ type: 'connect', protocol: PROTOCOL, session_id: 's2' }) });
         await tick();
         const mounts = second.sent.filter((f) => f.type === 'mount');
         expect(mounts.map((m) => [m.view, m.target_id || null, m.has_prerendered])).toEqual([
