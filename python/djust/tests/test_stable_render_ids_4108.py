@@ -7,6 +7,10 @@ tags below now derive their default id from the call (``_render_id``): equal
 on every render of the same template, different for two identical calls in
 one render. An explicit ``id=`` is used as given.
 
+``{% toolbar %}`` derives its default id from its arguments alone since #4331 (one renderer on
+both engines: the native handler has no per-render count), so two identical calls share it;
+``test_toolbar_default_ids_repeat_across_renders`` holds the rest.
+
 ``{% filter_bar %}`` is not among them: on the Rust engine, which renders
 LiveViews, its native handler already uses a constant id, and the Django tag's
 output is held to that handler's by the parity baseline
@@ -47,11 +51,17 @@ def _flat(pairs: list) -> list[str]:
     return [a or b for a, b in pairs]
 
 
-@pytest.mark.parametrize(
-    "source, role",
-    [(TOOLBAR, "toolbar"), (TOOLTIP, "tooltip")],
-    ids=["toolbar", "theme_tooltip"],
-)
+def test_toolbar_default_ids_repeat_across_renders():
+    first = _flat(_ids(TOOLBAR, "toolbar"))
+    assert len(first) == 4, first
+    assert first == _flat(_ids(TOOLBAR, "toolbar"))
+    # Derived from the arguments: identical calls share an id, other arguments get another.
+    assert first[0] == first[1] and first[0].startswith("toolbar-")
+    assert first[2] != first[0]
+    assert first[3] == "mine"
+
+
+@pytest.mark.parametrize("source, role", [(TOOLTIP, "tooltip")], ids=["theme_tooltip"])
 def test_default_ids_repeat_across_renders_and_differ_within_one(source, role):
     first = _flat(_ids(source, role))
     second = _flat(_ids(source, role))

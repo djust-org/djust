@@ -39,6 +39,7 @@ sys.modules["parity_gateoff"] = base
 _spec.loader.exec_module(base)
 
 TAGS = ROOT / "python/djust/components/templatetags/djust_components.py"
+HANDLERS = ROOT / "python/djust/components/rust_handlers.py"
 UTILS = ROOT / "python/djust/components/utils.py"
 COMP = ROOT / "python/djust/components/components"
 SWEEP = ROOT / "scripts/lib/template_library_parity/url_sweep.py"
@@ -60,9 +61,9 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str, str, str]] = [
     # --- the fixes: each reverted alone, caught by the fast tests
     (
         "avatar tag: src printed as given (the issue)",
-        TAGS,
-        '        "src": data_url_attr(src, image=True),',
-        '        "src": src,',
+        HANDLERS,
+        'src="{data_url_attr(src, image=True)}" alt="{alt}">',
+        'src="{src}" alt="{alt}">',
         AVATAR,
         "",
     ),
@@ -225,14 +226,6 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str, str, str]] = [
         "url_attr(avatar, image=True, honor_safe=False)",
         "url_attr(avatar, image=True)",
         SINKS,
-        "",
-    ),
-    (
-        "avatar tag hands the template plain text (double escaping)",
-        TAGS,
-        '        "src": data_url_attr(src, image=True),',
-        '        "src": "".join([data_url_attr(src, image=True)]),',
-        AVATAR,
         "",
     ),
     # --- #3677: theming judges URLs with the components allowlist, not a list of its own
@@ -513,9 +506,9 @@ MUTATIONS: list[tuple[str, pathlib.Path, str, str, str, str]] = [
     # --- the sweep must itself notice a reverted fix, through its own path
     (
         "sweep (tags): the avatar fix reverted, the SWEEP must go red",
-        TAGS,
-        '        "src": data_url_attr(src, image=True),',
-        '        "src": src,',
+        HANDLERS,
+        'src="{data_url_attr(src, image=True)}" alt="{alt}">',
+        'src="{src}" alt="{alt}">',
         SWEEPTEST,
         SWEEP_K,
     ),

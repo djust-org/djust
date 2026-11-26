@@ -46,7 +46,26 @@ def render_tag(src, ctx=None):
 _TPL_DIR = Path(__file__).resolve().parents[2] / "components" / "templates" / "djust_components"
 
 
+class _TagTemplate:
+    """``render(Context)`` of a tag the one handler draws (#4331): the template files this module
+    used to read are gone, so the context's own keys are the tag's keyword arguments."""
+
+    def __init__(self, tag):
+        self.tag = tag
+
+    def render(self, context):
+        values = {
+            k: v
+            for k, v in context.flatten().items()
+            if k not in ("pages", "True", "False", "None")
+        }
+        args = " ".join(f"{k}={k}" for k in values)
+        return render_tag("{% load djust_components %}{% " + self.tag + " " + args + " %}", values)
+
+
 def _engine_template(name):
+    if name in ("pagination.html", "progress.html", "badge.html", "avatar.html"):
+        return _TagTemplate(name[: -len(".html")])
     engine = Engine(
         libraries={"djust_components": "djust.components.templatetags.djust_components"}
     )

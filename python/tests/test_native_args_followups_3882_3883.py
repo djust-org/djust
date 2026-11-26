@@ -34,7 +34,9 @@ def test_pagination_takes_page_numbers_as_strings() -> None:
         {"p": 2, "t": 5},
     )
     html = _rust("{% pagination page=p total_pages=t %}", {"p": "2", "t": "5"})
-    assert "Page 2 of 5" in html, html
+    # page 2 is the current one of five (the BEM markup says it with aria-current, #4331)
+    assert 'aria-current="page" aria-label="Page 2"' in html, html
+    assert 'aria-label="Page 5"' in html and 'aria-label="Page 6"' not in html, html
 
 
 def test_pagination_refuses_text_that_is_not_a_number_by_name() -> None:
@@ -281,11 +283,11 @@ def test_a_resolved_fallback_is_not_rendered_as_a_template_name() -> None:
     rust_handlers.register_with_rust_engine()
     engine = DjustTemplateBackend({"NAME": "s3882c", "DIRS": [], "APP_DIRS": True, "OPTIONS": {}})
     src = '{% dj_suspense await="job" fallback=f %}BODY{% enddj_suspense %}'
-    html = str(engine.from_string(src).render({"f": "djust_components/pagination.html"}))
-    assert "dj-pagination" not in html and "djust-suspense-fallback" in html, html
-    literal = '{% dj_suspense await="job" fallback="djust_components/pagination.html" %}'
+    html = str(engine.from_string(src).render({"f": "djust_components/markdown_controls.html"}))
+    assert "dj-markdown-controls" not in html and "djust-suspense-fallback" in html, html
+    literal = '{% dj_suspense await="job" fallback="djust_components/markdown_controls.html" %}'
     html = str(engine.from_string(literal + "BODY{% enddj_suspense %}").render({}))
-    assert "dj-pagination" in html, html
+    assert "dj-markdown-controls" in html, html
 
 
 @pytest.mark.parametrize("text", ["--5", "²", "9" * 4301, "1_000", "٢"], ids=str.__len__)

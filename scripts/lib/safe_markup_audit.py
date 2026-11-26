@@ -354,23 +354,6 @@ AUDITED: dict[tuple[str, str], Audit] = {
         (DC, "_THEME_TOGGLE_MODES = (", "<module>"),
         (DC, "e_current = attr_text(current)"),
     ),
-    (DC, "PageHeaderNode.render"): S(
-        1,
-        "title, subtitle, description and class escaped (attr_text / escape in an attribute, conditional_escape in text: #4009); the breadcrumb and actions slots are rendered nodelists",
-        (DC, "e_title = conditional_escape(str(title))"),
-        (DC, "breadcrumb_content = self.nodelist.render(context)"),
-    ),
-    (DC, "SidebarNode.render"): S(
-        1,
-        "title, class, ids and events escaped (attr_text / escape in an attribute, conditional_escape in text: #4009); items come from _render_item (labels escaped, hrefs through safe_url)",
-        (DC, 'menu_html = f\'<ul class="dj-sidebar__menu">{"".join(parts)}</ul>\''),
-        (
-            DC,
-            "def _render_item(self, item: Any, context: Any, active_path: Any, level: Any = 0) -> Any:",
-            "SidebarNode._render_item",
-        ),
-        (DC, "f'href=\"{safe_url(href)}\">'", "SidebarNode._render_item"),
-    ),
     (DC, "render_dropdown_menu"): S(
         1,
         "label, event, class and align escaped (attr_text / escape in an attribute, conditional_escape in text: #4009); items come from render_menu_item (labels escaped, href through url_attr); a block body is the rendered tag body",
@@ -385,6 +368,12 @@ AUDITED: dict[tuple[str, str], Audit] = {
     # --- the Rust-native handlers (#3820): `_safe(...)` is a sink since the wrapper sinks, so
     # these are the handlers whose markup the guard still cannot prove. Every other handler
     # (about 90 call sites) is proved by the guard. ---
+    (RH, "render_page_header"): S(
+        1,
+        "title, subtitle, description and class escaped (attr_text / conditional_escape: #4009); the breadcrumb and actions slots are rendered tag bodies (#4331)",
+        (RH, 'e_title = conditional_escape(str(kw.get("title", "")))'),
+        (RH, 'e_custom_class = attr_text(str(kw.get("custom_class", "")))'),
+    ),
     (RH, "_root_layout_html"): S(
         1,
         "the one renderer of the four core layout handlers (AppShell, AppSidebar, AppHeader, AppContent): it joins, in the order `_render_root_parts` lists them, byte slices of `content` and wrapper text. `content` is the block body the engine hands a handler as an already-rendered SafeString (registry.rs, call_block_handler_with_py_sidecar and call_core_root_layout, #2379; pinned by test_safe_markup_guard_3820.py), and a slice is cut where `_layout_body_part` put it: at the UTF-8 offsets of str positions, so no character is split. The wrapper text is constant markup, except AppShellHandler's opening tag, whose id and class are escaped with attr_text (whatever they are marked as, #4009)",
@@ -392,9 +381,9 @@ AUDITED: dict[tuple[str, str], Audit] = {
         (
             RH,
             'shell_id = attr_text(kw.get("id", "app-shell"))',
-            "AppShellHandler._render_root_parts",
+            "AppShellHandler._root_parts",
         ),
-        (RH, 'cls += f" {attr_text(custom_class)}"', "AppShellHandler._render_root_parts"),
+        (RH, 'cls += f" {attr_text(custom_class)}"', "AppShellHandler._root_parts"),
         (
             RH,
             'return (len(content[:start].encode()), len(content[:end].encode())), ""',
@@ -442,27 +431,76 @@ AUDITED: dict[tuple[str, str], Audit] = {
     # a slice of it, or a replacement inside it, at a position it cannot read is reported rather
     # than assumed. Escaped data cannot hold `<`, so each literal these search for is markup the
     # engine or a sibling handler wrote. ---
-    (RH, "AccordionHandler.render"): S(
+    (RH, "AccordionHandler.render_kwargs"): S(
         1,
-        "the id is attr_text; `content` is the rendered block body (a SafeString, see `_root_layout_html`), into which component_id_attr's output (one whole data-component-id attribute, value through attr_text, or '') is inserted at each offset `_accordion_trigger_ends` returns: the end of a literal `<button class=\"accordion-trigger\"` that AccordionItemHandler wrote, i.e. between that tag's attributes; nested accordions are skipped and only offsets come back (#4134)",
-        (RH, 'accordion_id = attr_text(kw.get("id", "accordion"))'),
+        "the one renderer of the tag on both engines (#4331). The id is attr_text; `content` is the rendered block body (a SafeString, see `_root_layout_html`), copied in slices cut at the markers AccordionItemHandler writes (`<!--djust-accordion-item:` + a hex payload: escaped data cannot spell `<!--`). A marked item is replaced only when the bytes after its marker are exactly the standalone markup `_accordion_item_standalone` rebuilds from the payload around the item's own body, whose length the payload carries; the replacement is `_accordion_item_parts` again (every value in it through attr_text or escape, component_id through component_id_attr) around that same body slice. Anything else is copied as it is",
+        (RH, 'accordion_id = attr_text(kw.get("id", _ACCORDION_DEFAULT_ID))'),
         (RH, 'cid_attr = component_id_attr(kw.get("component_id"))'),
-        (RH, "content = content[:end] + cid_attr + content[end:]"),
-        (RH, "for match in _ACCORDION_TOKEN.finditer(content):", "_accordion_trigger_ends"),
+        (RH, "content.startswith(before, match.end())"),
+        (RH, "parts.append(content[body_start:body_end])"),
+        (RH, 'iid = attr_text(item_id or f"item-{index}")', "_accordion_item_parts"),
+        (RH, 'f"<span>{escape(title)}</span>"', "_accordion_item_parts"),
     ),
-    (RH, "NavMenuHandler.render"): S(
+    (RH, "AccordionItemHandler.render_kwargs"): S(
         1,
-        'class, id and toggle event escaped (attr_text / escape in an attribute); brand and hamburger built from escaped values and component_id_attr; `content` is the rendered block body, in which the marker NavItemHandler writes right after an item\'s `<li class="...` is replaced by literal text (`">` or ` dj-nav__item--active">`); the marker carries conditional_escape of a hex key and starts with `<!--`, which escaped data cannot spell',
+        "the marker is a literal around the hex of a JSON payload (only 0-9a-f); `before` / `after` are `_accordion_item_parts` (every value through attr_text or escape, #4331); `content` is the rendered block body (a SafeString, see `_root_layout_html`), placed in element text as the engine rendered it",
+        (RH, 'key = text.encode("utf-8").hex()'),
+        (RH, "before, after = _accordion_item_standalone(_json.loads(text))"),
+        (RH, 'iid = attr_text(item_id or f"item-{index}")', "_accordion_item_parts"),
+    ),
+    (RH, "FormArrayHandler.render_kwargs"): S(
+        1,
+        "the one renderer of the tag's markup on both engines (#4331): name, events and class through attr_text, the add label through conditional_escape (text), min / max int()-coerced, a default row's value through attr_text (#3904). `row_bodies` are the tag's body rendered once per row by the template engine (FormArrayNode, which the Rust engine runs too through the raw-body route), placed in element text as rendered, as any block body is",
+        (RH, "cell = row_bodies[i]"),
+        (RH, "e_name = attr_text(name)"),
+        (RH, "e_class = attr_text(custom_class)"),
+        (DC, "row_bodies.append(self.nodelist.render(context))", "FormArrayNode.render"),
+    ),
+    (RH, "NavMenuHandler.render_kwargs"): S(
+        1,
+        'the one implementation of the tag on both engines since #4331: `render` parses the Rust engine\'s operands, the Django node hands `render_kwargs` the same operands as Python values (`python_operands`) and its `self.nodelist.render(context)`, so `content` is the rendered block body on both engines (a SafeString: `_root_layout_html` for the engine side); the guard trusts that parameter only on `render(self, args, content, context)`. class, id and toggle event escaped (attr_text / escape in an attribute); brand and hamburger built from escaped values and component_id_attr; in `content` the marker NavItemHandler writes right after an item\'s `<li class="...` is replaced by literal text (`">` or ` dj-nav__item--active">`); the marker carries conditional_escape of a hex key and starts with `<!--`, which escaped data cannot spell',
         (RH, "for key in _nav_active_keys(content):"),
         (RH, "' dj-nav__item--active\">' if hit else '\">',"),
         (RH, 'return payload.encode("utf-8").hex()', "_nav_active_key"),
     ),
+    (RH, "NavItemHandler.render_kwargs"): S(
+        1,
+        "the one implementation of the tag on both engines since #4331: `render` parses the Rust engine's operands, the Django node hands `render_kwargs` the same operands as Python values (`python_operands`) and its `self.nodelist.render(context)`, so `content` is the rendered block body on both engines (a SafeString: `_root_layout_html` for the engine side); the guard trusts that parameter only on `render(self, args, content, context)`. label through conditional_escape, the event through attr_text, the href through data_url_attr; `mark` is a literal comment around conditional_escape of the hex of a JSON pair (only 0-9a-f); `content` is the rendered body, placed whole inside the dropdown list",
+        (RH, 'label = conditional_escape(kw.get("label", ""))'),
+        (RH, 'return payload.encode("utf-8").hex()', "_nav_active_key"),
+        (RH, "has_children = _NAV_ITEM_MARKUP in content"),
+    ),
+    (RH, "SidebarHandler.render_kwargs"): S(
+        1,
+        "the one implementation of the tag on both engines since #4331: `render` parses the Rust engine's operands, the Django node hands `render_kwargs` the same operands as Python values (`python_operands`) and its `self.nodelist.render(context)`, so `content` is the rendered block body on both engines (a SafeString: `_root_layout_html` for the engine side); the guard trusts that parameter only on `render(self, args, content, context)`. id, class and toggle event through attr_text, the title through conditional_escape, the toggle's component id through component_id_attr; `content` is the rendered body, in which `_SIDEBAR_ACTIVE_MARK` (a literal `<!--djust-sidebar-key:` + hex + `-->` followed by the literal opening of a link SidebarItemHandler wrote) is replaced by literal text only (`_link` returns one of four constant strings); escaped data cannot spell `<!--`",
+        (RH, 'sidebar_id = attr_text(kw.get("id", "sidebar"))'),
+        (RH, "content = _SIDEBAR_ACTIVE_MARK.sub(_link, content)"),
+        (
+            RH,
+            'element = "a" if match.group(2) == "a" else "button"',
+            "SidebarHandler.render_kwargs._link",
+        ),
+    ),
+    (RH, "SidebarItemHandler.render_kwargs"): S(
+        1,
+        "the one implementation of the tag on both engines since #4331: `render` parses the Rust engine's operands, the Django node hands `render_kwargs` the same operands as Python values (`python_operands`) and its `self.nodelist.render(context)`, so `content` is the rendered block body on both engines (a SafeString: `_root_layout_html` for the engine side); the guard trusts that parameter only on `render(self, args, content, context)`. label and icon through conditional_escape, the event through attr_text, the href through data_url_attr; `mark` is a literal comment around conditional_escape of the hex of a JSON pair (only 0-9a-f, `_nav_active_key`); `content` is the rendered body, placed whole inside the submenu",
+        (RH, 'label = conditional_escape(kw.get("label", ""))'),
+        (RH, '"<!--djust-sidebar-key:"'),
+        (RH, 'return payload.encode("utf-8").hex()', "_nav_active_key"),
+    ),
+    (RH, "ToolbarHandler.render_kwargs"): S(
+        1,
+        "the one implementation of the tag on both engines since #4331: `render` parses the Rust engine's operands, the Django node hands `render_kwargs` the same operands as Python values (`python_operands`) and its `self.nodelist.render(context)`, so `content` is the rendered block body on both engines (a SafeString: `_root_layout_html` for the engine side); the guard trusts that parameter only on `render(self, args, content, context)`. id, class, size and variant through attr_text (a default id is `_stable_id`: a prefix and hex digest); `body` is `_toolbar_groups(content)`: slices of the rendered body cut at the offsets `_ToolbarPartsParser` finds (the start and end of a top-level element, so each slice starts and ends between elements), joined with the literal group wrapper",
+        (RH, 'toolbar_id = attr_text(kw["id"])'),
+        (RH, "body = _toolbar_groups(content)"),
+        (RH, 'out.append(\'<div class="dj-toolbar__group">\' + run + "</div>")', "_toolbar_groups"),
+    ),
     (RH, "PageHeaderHandler.render"): S(
         1,
-        'title, subtitle and description through conditional_escape (text), the class through attr_text; `content` (the rendered block body) is cut at the first literal `<div class="dj-page-header__actions">` (the wrapper page_header_actions renders), so each half starts or ends at that tag and escaped data cannot spell it',
-        (RH, "actions_marker = '<div class=\"dj-page-header__actions\">'"),
-        (RH, "breadcrumb_content = content[:idx]"),
-        (RH, "e_custom_class = attr_text(str(custom_class))"),
+        'html is render_page_header output (its operands escaped, its own audited sink); `content` (the rendered block body) is cut at the first literal `<div class="dj-page-header__actions">` (the wrapper page_header_actions renders), and the actions half is spliced in only before the fixed closing tail, so escaped data cannot spell either boundary (#4331)',
+        (RH, "marker = '<div class=\"dj-page-header__actions\">'"),
+        (RH, 'html = render_page_header(kw, breadcrumb_content, "")'),
+        (RH, 'tail = "</div></header>"'),
     ),
     (RH, "DataTableHandler.render_kwargs"): S(
         1,

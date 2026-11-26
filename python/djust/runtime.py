@@ -3009,13 +3009,7 @@ _CHILDLESS_TAG_LIBRARIES = frozenset(
 #: first. ``python/djust/tests/test_mount_template_work_4298_4299.py`` keeps this in step
 #: with the libraries' source.
 _LIBRARY_RENDERED_TEMPLATES: Dict[str, Tuple[str, ...]] = {
-    "djust_components": (
-        "djust_components/toast.html",
-        "djust_components/progress.html",
-        "djust_components/badge.html",
-        "djust_components/pagination.html",
-        "djust_components/avatar.html",
-    ),
+    "djust_components": ("djust_components/toast.html",),
     "theme_tags": (
         "djust_theming/theme_head.html",
         "djust_theming/theme_switcher.html",

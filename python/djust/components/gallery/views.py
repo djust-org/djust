@@ -597,9 +597,13 @@ def _render_scripts() -> str:
             if (action === 'accordion_toggle') {
                 const item = el.closest('.dj-accordion-item');
                 if (item) {
-                    item.classList.toggle('dj-accordion-item--open');
+                    const open = item.classList.toggle('dj-accordion-item--open');
+                    el.setAttribute('aria-expanded', open ? 'true' : 'false');
                     const chevron = el.querySelector('.dj-accordion__chevron');
                     if (chevron) chevron.classList.toggle('dj-accordion__chevron--open');
+                    // The panel is always drawn, hidden while closed (#4331).
+                    const panel = item.querySelector('.dj-accordion__content');
+                    if (panel) panel.hidden = !open;
                 }
             }
 

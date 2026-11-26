@@ -1066,6 +1066,7 @@ To open or close from your own handler, set the state:
 | The `djust_components/table.html` override point and the filters `table_cell`, `table_href`, `table_has_href`, `table_width`, `table_width_attrs` | Read the row in your own template. `{% data_table %}` is drawn by the native handler on both engines; the row-click script is `/static/djust_components/data-table-row-click.js` (serve it from `/static/` or load it yourself). |
 | `window.djust.extractTypedParams` and `data-*` attributes as event arguments | `dj-value-*` attributes (`dj-value-item-id:int="4"`); the browser sends only what the handler's signature declares ([#4205](https://github.com/djust-org/djust/issues/4205)) |
 | `{% static 'djust_theming/css/base.css' %}`, a one-line `@import` of `scaffold.css` | `{% static 'djust_theming/css/scaffold.css' %}` ([#4207](https://github.com/djust-org/djust/issues/4207)) |
+| The `djust_components/badge.html`, `avatar.html`, `progress.html` and `pagination.html` override points | Style the `dj-badge`, `dj-avatar`, `dj-progress` and `dj-pagination` classes the tags draw. `{% badge %}`, `{% avatar %}`, `{% progress %}` and `{% pagination %}` are drawn by one native handler on both engines, so a project template of the same name no longer takes effect. |
 
 <!-- END GENERATED removed-table:templates -->
 
@@ -1187,6 +1188,41 @@ The other simple classes (`Accordion`, `Avatar`, `Breadcrumb`, `ButtonGroup`,
 `Checkbox`, `Divider`, `Icon`, `Input`, `ListGroup`, `NavBar`, `Offcanvas`,
 `Pagination`, `Radio`, `Range`, `Select`, `Switch`, `Table`, `Tabs`, `TextArea`,
 `Toast`, `Tooltip`) have no twin in `djust.components.ui` and draw what they drew.
+
+### Markup that changed: one renderer per component tag
+
+Every `djust_components` tag now has one renderer, so both template engines
+draw the same bytes ([#4331](https://github.com/djust-org/djust/issues/4331)).
+Where the two engines used to disagree, one side's markup is gone. A stylesheet or
+test that targets the old markup needs the new selector:
+
+- **Rust engine, `badge`, `avatar`, `progress`, `pagination`.** They draw the
+  `dj-*` BEM markup the Django engine drew. The old Rust classes `badge-*`,
+  `avatar-image`, `progress-wrapper` and `pagination-btn` are gone from these
+  tags. The inclusion templates `djust_components/badge.html`, `avatar.html`,
+  `progress.html` and `pagination.html` are removed, so a project template of
+  the same name no longer overrides them.
+- **Django engine, `sidebar`, `nav_menu`, `toolbar`, `filter_bar`, `app_shell`.**
+  They draw the native markup. `toolbar` groups its children between separators
+  in `dj-toolbar__group`; the default `filter_bar` id is `filter-bar`; the
+  default `toolbar` id is `toolbar-<hash>` of its arguments, the same on every
+  render, so two toolbars with identical arguments share it (pass `id=`). Nested
+  sidebar links no longer carry `dj-sidebar__item--level-N`; indentation comes from
+  `dj-sidebar__submenu`.
+- **`accordion`.** The Rust engine renamed its classes to the `dj-accordion*`
+  BEM classes the Django engine draws. The panel is always drawn and a closed one
+  carries `hidden`; the header button has `aria-controls` and the panel
+  `role="region"`. Under the Django engine the bodies of closed panels are now
+  rendered and sent too, so do not put content there that the page must not see.
+- **`pagination`.** The Rust engine no longer draws the "Page X of Y" text.
+- **Standalone `sidebar_item`, `nav_item`, `accordion_item`.** Outside their
+  parent tag they carry an invisible marker comment, so the Rust engine can tell
+  where the item sits.
+- **Marked-safe operands.** A `mark_safe` value passed as a tag argument is
+  escaped by both engines, as it already was in an attribute.
+- **`form_array`.** Its body is compiled by Django's engine on both engines, so a
+  Rust-only tag inside it (`{% call %}`, `{% component %}`) is no longer
+  available there.
 
 ### State a legacy view no longer keeps
 
@@ -1527,4 +1563,4 @@ removed setting at startup, and `exposure_policy = "legacy"`,
 module that states it is imported. `djust_exposure_inventory` lists any view
 still on `[policy: legacy]`; run `--fix` on it.
 
-<!-- generated-doc prose-sha256: f57b6679be0e -->
+<!-- generated-doc prose-sha256: bf007fb2bd43 -->

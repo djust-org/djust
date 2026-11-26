@@ -1,32 +1,38 @@
 """Rust template engine registration for djust-components.
 
-One render path per component tag where it costs nothing (S3 of
-``docs/reviews/2026-11-11-djust-2-consolidated.md``, decided 2026-11-12): a ``djust_components`` tag
-renders under the Rust engine through the ``{% load %}`` bridge (#2547, ``djust.template_libraries``),
-which runs the Python tag's OWN compile function and renders the Django node it returns, so the output
-is the Python tag's by construction. The tags are registered here, at ``ready()``, so a Rust template
-uses them without ``{% load djust_components %}``.
+One render path per component tag (S3 of ``docs/reviews/2026-11-11-djust-2-consolidated.md``, decided
+2026-11-12, completed by #4331): every ``djust_components`` tag has exactly one renderer, and no tag
+is drawn by two implementations that can drift. Either
 
-A native twin (a hand-written handler in this module) is kept only where a benchmark earns it or the
-bridge lacks a capability the tag needs, and each kept twin is pinned against its Python tag
-(``python/tests/test_component_single_render_path.py``), its known divergences listed there:
+* the tag renders under the Rust engine through the ``{% load %}`` bridge (#2547,
+  ``djust.template_libraries``), which runs the Python tag's OWN compile function and renders the
+  Django node it returns, so the output is the Python tag's by construction (registered here, at
+  ``ready()``, so a Rust template uses the tag without ``{% load djust_components %}``); or
+* the tag has a native handler in this module, and the Django tag is a thin wrapper: it resolves its
+  operands, renders its body where it has one, and calls the handler (``render_kwargs`` /
+  ``python_operands``), so both engines draw the same bytes. These are:
 
-* the core layout tags (``app_shell``, ``app_sidebar``, ``app_header``, ``app_content``): the
-  root-proof protocol (``_render_root_parts``, ``core_root_layout_object`` in
-  ``crates/djust_templates/src/registry.rs``), which a bridged node cannot take part in;
-* the inclusion tags ``badge``, ``avatar``, ``progress``, ``pagination``: through the
-  bridge each use renders an inclusion template through the backend, measured 4 to 8x slower;
-* ``data_table``: the one implementation on both engines (#3869). The Django engine's tag is a
-  simple tag that calls :func:`render_data_table`, which hands :class:`DataTableHandler` the same
-  operands the Rust engine does, so a template draws the same table (and every native feature:
-  expandable rows, editable columns, export ...) under either engine; there is no
-  ``djust_components/table.html``;
-* the block tags whose Django node reads its children (``accordion``, ``sidebar``, ``nav_menu``,
-  ``toolbar``, ``filter_bar``, ``form_array``, ``page_header``) and their child tags: the bridge can
-  only serve them by handing the body to Django's engine, which cannot compile a Rust-only tag
-  (``{% call %}``, ``{% component %}``, ``{% slot %}``, ``{% dj_suspense %}``) and loses the
-  ``{% if %}`` boundary markers the Rust renderer emits. ``tabs`` and ``split_pane`` already took that
-  raw-body route before (``RAW_BODY_TAGS``).
+  * the core layout tags (``app_shell``, ``app_sidebar``, ``app_header``, ``app_content``): the
+    root-proof protocol (``_render_root_parts``, ``core_root_layout_object`` in
+    ``crates/djust_templates/src/registry.rs``), which a bridged node cannot take part in;
+  * ``badge``, ``avatar``, ``progress``, ``pagination``: through the bridge each use rendered an
+    inclusion template through the backend, measured 4 to 8x slower; the templates are gone;
+  * ``data_table`` (#3869): the Django tag calls :func:`render_data_table`, which hands
+    :class:`DataTableHandler` the same operands the Rust engine does; there is no
+    ``djust_components/table.html``;
+  * the block tags whose node reads its children (``accordion``, ``sidebar``, ``nav_menu``,
+    ``toolbar``, ``filter_bar``, ``page_header``) and their child tags: the bridge can only serve
+    them by handing the body to Django's engine, which cannot compile a Rust-only tag
+    (``{% call %}``, ``{% component %}``, ``{% slot %}``, ``{% dj_suspense %}``) and loses the
+    ``{% if %}`` boundary markers the Rust renderer emits.
+
+``tabs``, ``split_pane`` and ``form_array`` take the raw-body route (``RAW_BODY_TAGS``): Django's
+engine compiles the body. ``form_array`` repeats its body once per row with the row pushed, which a
+body rendered once cannot do; its markup is drawn by one handler, :class:`FormArrayHandler`.
+
+The parity ratchet (``scripts/template-library-parity-baseline.csv``) is ``IDENTICAL`` for every tag
+but ``filter_search`` outside a bar (``KNOWN_DIVERGENCES`` in
+``python/tests/test_component_single_render_path.py``).
 
 Inline handlers implement: render(self, args, context) -> str
 Block handlers implement:  render(self, args, content, context) -> str
@@ -374,134 +380,261 @@ def _with_typed_block_operands(handler: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 
-#: What an accordion's own markup is made of, for stamping its triggers (#4134): a ``<div>``
-#: opening (a nested accordion's is told apart), a ``</div>``, and an item's trigger.
-_ACCORDION_TOKEN = _re_filters.compile(
-    r'<div class="accordion"[ >]|<div\b|</div\s*>|<button class="accordion-trigger"'
-)
+#: How an ``{% accordion_item %}`` hands the ``{% accordion %}`` that holds it what it was given
+#: (#4331). The items render before the accordion, and the parent decides what an item cannot:
+#: the accordion's ``id`` (the trigger / panel ids), its ``active`` (which item is open), its
+#: ``event`` (the default for an item without one), its ``component_id=`` and an item's position
+#: (the ``item-N`` id of an item without one). So each item writes this comment, carrying the hex
+#: of a JSON list (only ``0-9a-f``: no value can end the comment, open another or read as markup),
+#: then draws itself as a standalone item; the accordion redraws every item it finds whose
+#: standalone markup follows its comment exactly. Outside an accordion the comment is invisible.
+_ACCORDION_ITEM_MARK = _re_filters.compile(r"<!--djust-accordion-item:([0-9a-f]*)-->")
+
+#: The id a standalone item's trigger and panel ids start with: the accordion's default ``id``.
+_ACCORDION_DEFAULT_ID = "accordion"
+_ACCORDION_DEFAULT_EVENT = "accordion_toggle"
 
 
-def _accordion_trigger_ends(content: str) -> list[int]:
-    """Where THIS accordion's item triggers' ``<button class="accordion-trigger"`` end (#4134).
+def _accordion_item_parts(
+    accordion_id: str,
+    index: int,
+    item_id: object,
+    title: str,
+    is_open: bool,
+    event: object,
+    cid_attr: str,
+) -> tuple[str, str]:
+    """The markup of one accordion item around its body: ``(before, after)``.
 
-    The items render before the accordion, so only it knows its ``component_id=``, which it
-    inserts at these offsets. A trigger inside a nested ``{% accordion %}`` (already rendered,
-    and stamped by that one) is skipped: the scan counts ``<div>`` depth and leaves out
-    everything inside a nested accordion. Only offsets come back, never markup.
+    WAI-ARIA accordion pattern: the trigger names the panel it controls (``aria-controls``), and
+    that panel is always drawn, ``hidden`` while closed, so the reference never dangles (#4331:
+    the Django tag pointed at a panel it drew only when open; the native one had no
+    ``aria-controls``, panel ``id`` or ``role="region"``). ``accordion_id`` is escaped already.
     """
-    nested: list[bool] = []  # one entry per open <div>: is it a nested accordion?
-    ends: list[int] = []
-    for match in _ACCORDION_TOKEN.finditer(content):
-        token = match.group(0)
-        if token.startswith("</div"):
-            if nested:
-                nested.pop()
-        elif token.startswith("<div"):
-            nested.append(token.startswith('<div class="accordion"'))
-        elif not any(nested):
-            ends.append(match.end())
-    return ends
+    iid = attr_text(item_id or f"item-{index}")
+    trigger_id = f"{accordion_id}-trigger-{iid}"
+    panel_id = f"{accordion_id}-panel-{iid}"
+    open_cls = " dj-accordion-item--open" if is_open else ""
+    chevron_cls = " dj-accordion__chevron--open" if is_open else ""
+    before = (
+        f'<div class="dj-accordion-item{open_cls}">'
+        f'<button class="dj-accordion__trigger" id="{trigger_id}" '
+        f'aria-expanded="{"true" if is_open else "false"}" aria-controls="{panel_id}" '
+        f'dj-click="{attr_text(event)}" dj-value-value="{iid}"{cid_attr}>'
+        f"<span>{escape(title)}</span>"
+        f'<span class="dj-accordion__chevron{chevron_cls}" aria-hidden="true">&#9662;</span>'
+        f"</button>"
+        f'<div class="dj-accordion__content" id="{panel_id}" role="region" '
+        f'aria-labelledby="{trigger_id}"{"" if is_open else " hidden"}>'
+    )
+    return before, "</div></div>"
+
+
+def _accordion_item_standalone(payload: list[Any]) -> tuple[str, str]:
+    """An item as it draws itself, outside any accordion, from its marker's payload."""
+    item_id, title, own_open, own_event, _length = payload
+    return _accordion_item_parts(
+        _ACCORDION_DEFAULT_ID,
+        0,
+        item_id,
+        title,
+        bool(own_open),
+        own_event or _ACCORDION_DEFAULT_EVENT,
+        "",
+    )
+
+
+def _accordion_item_payload(text: str) -> list[Any] | None:
+    """The marker's payload, or ``None`` when it is not one an item wrote."""
+    try:
+        payload = _json.loads(bytes.fromhex(text).decode("utf-8"))
+    except (ValueError, TypeError):
+        return None
+    if (
+        isinstance(payload, list)
+        and len(payload) == 5
+        and isinstance(payload[1], str)
+        and isinstance(payload[4], int)
+        and not isinstance(payload[4], bool)
+        and payload[4] >= 0
+    ):
+        return payload
+    return None
 
 
 class AccordionHandler:
+    """``{% accordion %}``: the one renderer on both engines (#4331).
+
+    The Django node renders its body and calls :meth:`render_kwargs`, as the Rust engine calls
+    :meth:`render`. Every item of THIS accordion (at any depth of its body, inside ``{% if %}`` or
+    ``{% for %}`` too, but not inside a nested accordion, which redrew its own) is redrawn with the
+    accordion's ids, ``active``, ``event`` and ``component_id=``; any other body is kept as it is.
+    An item is open when the accordion's ``active`` names it or its own ``open=`` is true; its own
+    ``event=`` overrides the accordion's.
+    """
+
     def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
-        kw = _parse_args(args, context)
-        accordion_id = attr_text(kw.get("id", "accordion"))
-        # The triggers carry ``component_id=`` as the Django tag's do (#4134): only
-        # component_id_attr's output is inserted, every other byte of ``content`` is kept.
+        return self.render_kwargs(_parse_args(args, context), content)
+
+    def render_kwargs(self, kw: dict[str, object], content: str) -> str:
+        accordion_id = attr_text(kw.get("id", _ACCORDION_DEFAULT_ID))
+        active = kw.get("active", "")
+        event = kw.get("event", _ACCORDION_DEFAULT_EVENT)
         cid_attr = component_id_attr(kw.get("component_id"))
-        if cid_attr:
-            for end in reversed(_accordion_trigger_ends(content)):
-                content = content[:end] + cid_attr + content[end:]
-        return _safe(f'<div class="accordion" id="{accordion_id}">{content}</div>')
+        parts: list[str] = []
+        pos = 0
+        index = 0
+        while True:
+            match = _ACCORDION_ITEM_MARK.search(content, pos)
+            if match is None:
+                break
+            payload = _accordion_item_payload(match.group(1))
+            if payload is None:
+                parts.append(content[pos : match.end()])
+                pos = match.end()
+                continue
+            before, after = _accordion_item_standalone(payload)
+            body_start = match.end() + len(before)
+            body_end = body_start + payload[4]
+            if not (
+                content.startswith(before, match.end()) and content.startswith(after, body_end)
+            ):
+                # Not the markup the marker's item drew: kept as it is.
+                parts.append(content[pos : match.end()])
+                pos = match.end()
+                continue
+            item_id, title, own_open, own_event, _length = payload
+            is_open = bool(own_open) or (item_id or f"item-{index}") == active
+            new_before, new_after = _accordion_item_parts(
+                accordion_id, index, item_id, title, is_open, own_event or event, cid_attr
+            )
+            parts.append(content[pos : match.start()])
+            parts.append(new_before)
+            parts.append(content[body_start:body_end])
+            parts.append(new_after)
+            pos = body_end + len(after)
+            index += 1
+        parts.append(content[pos:])
+        return _safe(f'<div class="dj-accordion" id="{accordion_id}">{"".join(parts)}</div>')
 
 
 class AccordionItemHandler:
+    """``{% accordion_item %}``: the one renderer on both engines (#4331). It draws itself as a
+    standalone item behind a marker its ``{% accordion %}`` reads (``_ACCORDION_ITEM_MARK``)."""
+
     def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
-        kw = _parse_args(args, context)
-        title = conditional_escape(kw.get("title", ""))
-        item_id = attr_text(kw.get("id", ""))
-        event = attr_text(kw.get("event", "accordion_toggle"))
-        is_open = kw.get("open", False)
-        open_cls = "accordion-item--open" if is_open else ""
-        expanded = "true" if is_open else "false"
-        panel_hidden = "" if is_open else " hidden"
-        return _safe(
-            f'<div class="accordion-item {open_cls}">'
-            f'<button class="accordion-trigger" aria-expanded="{expanded}" '
-            f'dj-click="{event}" dj-value-value="{item_id}">'
-            f'<span class="accordion-title">{title}</span>'
-            f'<svg class="accordion-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">'
-            f'<polyline points="6 9 12 15 18 9"></polyline></svg>'
-            f"</button>"
-            f'<div class="accordion-panel"{panel_hidden}>{content}</div>'
-            f"</div>"
+        return self.render_kwargs(_parse_args(args, context), content)
+
+    def render_kwargs(self, kw: dict[str, object], content: str) -> str:
+        title = kw.get("title", "")
+        own_event = kw.get("event") or None
+        text = _json.dumps(
+            [kw.get("id", ""), str(title), bool(kw.get("open", False)), own_event, len(content)],
+            default=str,
+            separators=(",", ":"),
         )
+        # Drawn from the payload read back, as the accordion reads it, so the two always agree.
+        before, after = _accordion_item_standalone(_json.loads(text))
+        key = text.encode("utf-8").hex()
+        return _safe(f"<!--djust-accordion-item:{key}-->{before}{content}{after}")
+
+
+_CLASS_TOKEN = _re_filters.compile(r"[A-Za-z0-9_-]+")
+
+
+def _modifier(value: object, default: str) -> str:
+    """``value`` as the suffix of a BEM modifier class (``dj-progress__fill--<value>``).
+
+    One class token, escaped. A value that is not a token (a hex colour ``#336699``, a name with
+    a space, markup) would leak into the class list as junk or as extra classes (#4331), so the
+    ``default`` is drawn and the value is ignored: a colour is chosen by the theme's modifier
+    classes, never by an arbitrary string."""
+    from djust.components.utils import _exact_str
+
+    text = _exact_str(value)
+    return text if _CLASS_TOKEN.fullmatch(text) else default
+
+
+def progress_value(value: object) -> int:
+    """The percentage ``{% progress %}`` draws: ``value`` clamped to 0..100 (#3667).
+
+    A ``value`` that is not a number is refused (``None``: TypeError, ``"abc"``: ValueError)
+    and not drawn as 0%; text that spells a number is that number (#3883)."""
+    return max(0, min(100, int(cast("str | int | float", _number(value, "progress", "value")))))
 
 
 class ProgressHandler:
-    def render(self, args: list[str], context: dict[str, object]) -> str:
-        from djust.components.templatetags.djust_components import progress as _progress
+    """``{% progress %}``: the one implementation of the tag (#4331). The Rust engine calls
+    :meth:`render`; the Django engine's simple tag calls :func:`render_progress`."""
 
-        kw = _parse_args(args, context)
-        # The Python tag's own clamp, so a ``value`` it refuses (``None``: TypeError, ``"abc"``:
-        # ValueError) is refused here and not drawn as 0% (#3667). ``int()`` says which key of the
-        # tag's context this is: the clamped number, not one of the raw ones beside it (#3847).
-        value = int(_progress(value=_number(kw.get("value", 0), "progress", "value"))["value"])
-        label = conditional_escape(kw.get("label", ""))
+    def render(self, args: list[str], context: dict[str, object]) -> str:
+        return self.render_kwargs(_parse_args(args, context), context)
+
+    def render_kwargs(self, kw: dict[str, object], context: dict[str, object]) -> str:
+        value = progress_value(kw.get("value", 0))
+        raw_label = kw.get("label", "")
+        label = conditional_escape(raw_label)
         size = attr_text(kw.get("size", "md"))
-        color = attr_text(kw.get("color", "primary"))
+        color = attr_text(_modifier(kw.get("color", "primary"), "primary"))
         show_label = kw.get("show_label", True)
-        label_row = ""
-        if label or show_label:
-            label_part = f'<span class="progress-label">{label}</span>' if label else ""
-            pct_part = f'<span class="progress-value">{value}%</span>' if show_label else ""
-            label_row = f'<div class="progress-label-row">{label_part}{pct_part}</div>'
-        track_size = {"sm": "progress-track-sm", "lg": "progress-track-lg"}.get(str(size), "")
-        color_class = "" if color == "primary" else color
+        header = ""
+        if raw_label or show_label:
+            label_part = f'<span class="dj-progress__label">{label}</span>' if raw_label else ""
+            pct_part = f'<span class="dj-progress__value">{value}%</span>' if show_label else ""
+            header = f'<div class="dj-progress__header">{label_part}{pct_part}</div>'
         # The fill's width is a class, not ``style="width:N%"``: a ``style-src`` without
         # ``'unsafe-inline'`` refuses the attribute and the bar drew empty (#3969). The track
-        # carries the role, the value and a name, as the Python tag's does.
-        # An attribute, so ``escape`` (always) and not ``conditional_escape`` (#3898). Named by
-        # the label only when there is one, as the Python tag's is.
-        name = escape(str(kw.get("label", "")))
-        name_attr = f' aria-label="{name}"' if name else ""
+        # carries the role, the value and a name (an attribute: ``escape`` always, #3898).
+        name_attr = f' aria-label="{attr_text(raw_label)}"' if raw_label else ""
         return _safe(
-            f'<div class="progress-wrapper">'
-            f"{label_row}"
-            f'<div class="progress-track {track_size}" role="progressbar" '
-            f'aria-valuenow="{value}" aria-valuemin="0" aria-valuemax="100"{name_attr}>'
-            f'<div class="progress-bar {color_class} dj-progress-w-{value}"></div>'
-            f"</div>"
-            f"</div>"
+            f'<div class="dj-progress dj-progress--{size}">{header}'
+            f'<div class="dj-progress__track" role="progressbar" aria-valuenow="{value}" '
+            f'aria-valuemin="0" aria-valuemax="100"{name_attr}>'
+            f'<div class="dj-progress__fill dj-progress__fill--{color} dj-progress-w-{value}">'
+            f"</div></div></div>"
         )
 
 
 class BadgeHandler:
+    """``{% badge %}``: the one implementation of the tag (#4331)."""
+
     def render(self, args: list[str], context: dict[str, object]) -> str:
-        kw = _parse_args(args, context)
+        return self.render_kwargs(_parse_args(args, context), context)
+
+    def render_kwargs(self, kw: dict[str, object], context: dict[str, object]) -> str:
         label = conditional_escape(kw.get("label", ""))
-        status = attr_text(kw.get("status", "default"))
-        pulse = kw.get("pulse", False)
-        pulse_cls = " badge-pulse" if pulse else ""
+        raw_status = kw.get("status", "default")
+        status = attr_text(raw_status)
+        pulse_cls = " dj-badge__dot--pulse" if kw.get("pulse", False) else ""
+        # Colour alone does not say what a badge means: a status other than the default is
+        # also written for a screen reader (the native markup dropped it, #4331).
+        sr = (
+            f'<span class="sr-only">Status: {conditional_escape(raw_status)}</span>'
+            if raw_status and raw_status != "default"
+            else ""
+        )
         return _safe(
-            f'<span class="badge badge-{status}{pulse_cls}">'
-            f'<span class="badge-dot"></span>{label}'
-            f"</span>"
+            f'<span class="dj-badge dj-badge--{status}">'
+            f'<span class="dj-badge__dot{pulse_cls}" aria-hidden="true"></span>{sr}'
+            f'<span class="dj-badge__label">{label}</span></span>'
         )
 
 
 class PaginationHandler:
+    """``{% pagination %}``: the one implementation of the tag (#4331)."""
+
     def render(self, args: list[str], context: dict[str, object]) -> str:
+        return self.render_kwargs(_parse_args(args, context), context)
+
+    def render_kwargs(self, kw: dict[str, object], context: dict[str, object]) -> str:
         from djust.components.templatetags.djust_components import pagination_pages
 
-        kw = _parse_args(args, context)
+        kw = dict(kw)
         for numeric in ("page", "total_pages"):
             if numeric in kw:
                 kw[numeric] = _number(kw[numeric], "pagination", numeric)
-        # The Python tag's own page list, first: whatever it raises for these numbers
-        # (``total_pages=None``: ``None + 1``) is raised here too (#3667), and the buttons
-        # drawn below are the ones it draws (#3669).
+        # The page list first: whatever it raises for these numbers (``total_pages=None``:
+        # ``None + 1``) is raised here too (#3667).
         shown = pagination_pages(kw.get("page", 1), kw.get("total_pages", 1))
         try:
             page = int(cast("str | int | float", _number(kw.get("page", 1))))
@@ -512,54 +645,64 @@ class PaginationHandler:
         next_event = attr_text(kw.get("next_event", "page_next"))
         prev_disabled = " disabled" if page <= 1 else ""
         next_disabled = " disabled" if page >= total_pages else ""
-        # One button per page number, wired like the Python tag's: ``next_event`` carrying the
-        # page number as ``dj-value-value`` (that is the event the Python template fires for a
-        # number, and the native markup had no numbered buttons at all, #3669).
         numbered = ""
         for p in shown:
             if p == "...":
-                numbered += '<span class="pagination-ellipsis" aria-hidden="true">&hellip;</span>'
+                numbered += (
+                    '<span class="dj-pagination__ellipsis" aria-hidden="true">&hellip;</span>'
+                )
                 continue
-            active = " active" if p == page else ""
+            active = " dj-pagination__btn--active" if p == page else ""
             current = ' aria-current="page"' if p == page else ""
             number = conditional_escape(p)
             a_number = attr_text(p)
             numbered += (
-                f'<button class="pagination-btn{active}"{current} '
+                f'<button class="dj-pagination__btn{active}"{current} aria-label="Page {a_number}" '
                 f'dj-click="{next_event}" dj-value-value="{a_number}">{number}</button>'
             )
         return _safe(
-            f'<div class="pagination">'
-            f'<button class="pagination-btn"{prev_disabled} dj-click="{prev_event}">&#8592;</button>'
+            f'<nav class="dj-pagination" aria-label="Pagination">'
+            f'<button class="dj-pagination__btn" aria-label="Previous page" '
+            f'dj-click="{prev_event}"{prev_disabled}>&larr;</button>'
             f"{numbered}"
-            f'<span class="pagination-info">Page {page} of {total_pages}</span>'
-            f'<button class="pagination-btn"{next_disabled} dj-click="{next_event}">&#8594;</button>'
-            f"</div>"
+            f'<button class="dj-pagination__btn" aria-label="Next page" '
+            f'dj-click="{next_event}"{next_disabled}>&rarr;</button></nav>'
         )
 
 
 class AvatarHandler:
+    """``{% avatar %}``: the one implementation of the tag (#4331)."""
+
     def render(self, args: list[str], context: dict[str, object]) -> str:
-        kw = _parse_args(args, context)
+        return self.render_kwargs(_parse_args(args, context), context)
+
+    def render_kwargs(self, kw: dict[str, object], context: dict[str, object]) -> str:
         src = kw.get("src", "")
-        raw_alt = kw.get("alt", "")
+        raw_alt = kw.get("alt", "") or ""
         alt = attr_text(raw_alt)
         # The initials are taken from the text, then escaped: slicing the ESCAPED text cut an
-        # entity in half (``O'Brien`` -> ``O&``), and a string arrives with its quotes now (#3883).
-        initials = conditional_escape(
-            kw.get("initials", "") or (str(raw_alt)[:2].upper() if raw_alt else "")
-        )
+        # entity in half (``O'Brien`` -> ``O&``, #3883).
+        raw_initials = kw.get("initials", "") or (str(raw_alt)[:2].upper() if raw_alt else "")
+        initials = conditional_escape(raw_initials)
         size = attr_text(kw.get("size", "md"))
         status = attr_text(kw.get("status", ""))
-        img_html = (
-            f'<img class="avatar-image" src="{data_url_attr(src, image=True)}" alt="{alt}">'
-            if src
-            else f'<span class="avatar-initials">{initials}</span>'
-        )
+        if src:
+            body = (
+                f'<img class="dj-avatar__img" src="{data_url_attr(src, image=True)}" alt="{alt}">'
+            )
+        else:
+            name = attr_text(raw_alt or raw_initials)
+            body = (
+                f'<span class="dj-avatar__initials" role="img" aria-label="{name}">'
+                f"{initials}</span>"
+            )
         status_html = (
-            f'<span class="avatar-status avatar-status-{status}"></span>' if status else ""
+            f'<span class="dj-avatar__status dj-avatar__status--{status}" aria-hidden="true">'
+            f"</span>"
+            if status
+            else ""
         )
-        return _safe(f'<div class="avatar avatar-{size}">{img_html}{status_html}</div>')
+        return _safe(f'<div class="dj-avatar dj-avatar--{size}">{body}{status_html}</div>')
 
 
 # Backward-compatible aliases — delegated to djust_components.utils
@@ -1989,6 +2132,32 @@ def render_data_table(**params: object) -> str:
     return DataTableHandler().render_kwargs(kw, {TYPED_ARGS_KEY: typed})
 
 
+def _render_simple(handler: Any, params: dict[str, object]) -> str:
+    """One Django-engine call of a single-implementation tag: ``params`` as Python values, handed
+    to the handler as the Rust engine's resolved operands are (``_python_operand``, #4331)."""
+    return cast(str, handler.render_kwargs({k: _python_operand(v) for k, v in params.items()}, {}))
+
+
+def render_badge(**params: object) -> str:
+    """The Django engine's ``{% badge %}``: the Rust engine's markup, one renderer (#4331)."""
+    return _render_simple(BadgeHandler(), params)
+
+
+def render_avatar(**params: object) -> str:
+    """The Django engine's ``{% avatar %}`` (#4331)."""
+    return _render_simple(AvatarHandler(), params)
+
+
+def render_progress(**params: object) -> str:
+    """The Django engine's ``{% progress %}`` (#4331)."""
+    return _render_simple(ProgressHandler(), params)
+
+
+def render_pagination(**params: object) -> str:
+    """The Django engine's ``{% pagination %}`` (#4331)."""
+    return _render_simple(PaginationHandler(), params)
+
+
 class PageHeaderActionsHandler:
     """Block handler for {% page_header_actions %}...{% endpage_header_actions %}"""
 
@@ -1997,78 +2166,104 @@ class PageHeaderActionsHandler:
         return _safe(f'<div class="dj-page-header__actions">{content}</div>')
 
 
+_EMPTY_ACTIONS = _re_filters.compile(r'<div class="dj-page-header__actions">\s*</div>\s*')
+
+
+def render_page_header(kw: Mapping[str, object], breadcrumb_content: str, actions_html: str) -> str:
+    """The one ``{% page_header %}`` renderer, called by the handler and the Django tag (#4331).
+
+    ``kw`` holds plain operands (a ``mark_safe`` title is escaped, D3). ``actions_html`` is the
+    inner content of the actions slot; a slot that drew nothing draws no ``<div>`` at all."""
+    e_title = conditional_escape(str(kw.get("title", "")))
+    e_subtitle = conditional_escape(str(kw.get("subtitle", "")))
+    e_description = conditional_escape(str(kw.get("description", "")))
+    e_custom_class = attr_text(str(kw.get("custom_class", "")))
+
+    cls = "dj-page-header"
+    if e_custom_class:
+        cls += f" {e_custom_class}"
+
+    breadcrumb_html = ""
+    if breadcrumb_content.strip():
+        breadcrumb_html = f'<div class="dj-page-header__breadcrumb">{breadcrumb_content}</div>'
+    title_html = f'<h1 class="dj-page-header__title">{e_title}</h1>' if e_title else ""
+    subtitle_html = f'<p class="dj-page-header__subtitle">{e_subtitle}</p>' if e_subtitle else ""
+    description_html = (
+        f'<p class="dj-page-header__description">{e_description}</p>' if e_description else ""
+    )
+    actions_section = ""
+    if actions_html.strip():
+        actions_section = PageHeaderActionsHandler().render([], actions_html, {})
+
+    return _safe(
+        f'<header class="{cls}">'
+        f"{breadcrumb_html}"
+        f'<div class="dj-page-header__row">'
+        f'<div class="dj-page-header__text">'
+        f"{title_html}"
+        f"{subtitle_html}"
+        f"{description_html}"
+        f"</div>"
+        f"{actions_section}"
+        f"</div>"
+        f"</header>"
+    )
+
+
 class PageHeaderHandler:
     """Block handler for {% page_header title=... %}...{% endpage_header %}"""
 
     def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
-        title = kw.get("title", "")
-        subtitle = kw.get("subtitle", "")
-        description = kw.get("description", "")
-        custom_class = kw.get("custom_class", "")
+        # In the Rust engine, nested block tags render inline: page_header_actions draws its own
+        # wrapper div, so the actions are told from the breadcrumb content by that wrapper.
+        marker = '<div class="dj-page-header__actions">'
+        breadcrumb_content, actions_section = content, ""
+        if marker in content:
+            idx = content.index(marker)
+            breadcrumb_content, actions_section = content[:idx], content[idx:]
+        if _EMPTY_ACTIONS.fullmatch(actions_section):
+            actions_section = ""
+        html = render_page_header(kw, breadcrumb_content, "")
+        # The slot sits last in the row, after the text block.
+        tail = "</div></header>"
+        if actions_section and html.endswith(tail):
+            html = html[: -len(tail)] + actions_section + tail
+        return _safe(html)
 
-        e_title = conditional_escape(str(title))
-        e_subtitle = conditional_escape(str(subtitle))
-        e_description = conditional_escape(str(description))
-        e_custom_class = attr_text(str(custom_class))
 
-        cls = "dj-page-header"
-        if e_custom_class:
-            cls += f" {e_custom_class}"
+def python_operands(params: Mapping[str, object]) -> dict[str, object]:
+    """A Django node's resolved arguments as a native handler's ``render_kwargs`` reads them
+    (#4331): what ``_parse_args`` makes of the same operands under the Rust engine (a scalar, a
+    tuple, a lazy or marked-safe string through ``plain_operand``; a list, dict or object as the
+    JSON-able value of the engine's text for it). An unresolved variable is ``""`` on both sides.
+    """
+    return {key: _python_operand(value) for key, value in params.items()}
 
-        # In the Rust engine, nested block tags render inline.
-        # page_header_actions renders its own wrapper div, so we need to
-        # separate actions from breadcrumb content.
-        actions_marker = '<div class="dj-page-header__actions">'
-        actions_section = ""
-        breadcrumb_content = content
-        if actions_marker in content:
-            idx = content.index(actions_marker)
-            breadcrumb_content = content[:idx]
-            actions_section = content[idx:]
 
-        # Breadcrumb slot
-        breadcrumb_html = ""
-        if breadcrumb_content.strip():
-            breadcrumb_html = f'<div class="dj-page-header__breadcrumb">{breadcrumb_content}</div>'
-
-        # Title
-        title_html = f'<h1 class="dj-page-header__title">{e_title}</h1>' if e_title else ""
-
-        # Subtitle
-        subtitle_html = ""
-        if e_subtitle:
-            subtitle_html = f'<p class="dj-page-header__subtitle">{e_subtitle}</p>'
-
-        # Description
-        description_html = ""
-        if e_description:
-            description_html = f'<p class="dj-page-header__description">{e_description}</p>'
-
-        return _safe(
-            f'<header class="{cls}">'
-            f"{breadcrumb_html}"
-            f'<div class="dj-page-header__row">'
-            f'<div class="dj-page-header__text">'
-            f"{title_html}"
-            f"{subtitle_html}"
-            f"{description_html}"
-            f"</div>"
-            f"{actions_section}"
-            f"</div>"
-            f"</header>"
-        )
+#: How a ``{% sidebar_item %}`` with no ``active=`` of its own asks the ``{% sidebar %}`` that
+#: holds it whether the sidebar's ``active`` names it (#4331), as ``{% nav_item %}`` asks its menu
+#: (``_NAV_ACTIVE_MARK``). The item is rendered before the sidebar, so it leaves the hex of its
+#: ``[id, href]`` pair (only ``0-9a-f``: no value can end the comment, open another, or read as
+#: markup) in a comment right before its link; the sidebar reads and removes every one, adding the
+#: active class to the matching links. Outside a sidebar the comment is invisible.
+_SIDEBAR_ACTIVE_MARK = _re_filters.compile(
+    r'<!--djust-sidebar-key:([0-9a-f]*)--><(a|button) class="dj-sidebar__link"'
+)
 
 
 class SidebarHandler:
     """Block handler for {% sidebar %}...{% endsidebar %}
 
     Renders a collapsible sidebar navigation with menu items, sections,
-    and mobile drawer support.
+    and mobile drawer support. The one renderer of the tag on both engines (#4331): the
+    Django node hands ``render_kwargs`` its resolved arguments and rendered body.
     """
 
     def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
-        kw = _parse_args(args, context)
+        return self.render_kwargs(_parse_args(args, context), content)
+
+    def render_kwargs(self, kw: Mapping[str, object], content: str) -> str:
         sidebar_id = attr_text(kw.get("id", "sidebar"))
         collapsed = kw.get("collapsed", False)
         title = kw.get("title", "")
@@ -2093,6 +2288,20 @@ class SidebarHandler:
 
         backdrop = f'<div class="dj-sidebar__backdrop" dj-click="{toggle_event}"{cid_attr}></div>'
 
+        # The sidebar's ``active`` reaches the items that left a marker: each marker and the
+        # opening of the link after it become that opening, with the active class for a match.
+        # Only literals are written, so ``content`` stays the rendered body.
+        active = kw.get("active", "")
+
+        def _link(match: Any) -> str:
+            hit = _nav_key_matches(match.group(1), active)
+            element = "a" if match.group(2) == "a" else "button"
+            return f'<{element} class="dj-sidebar__link' + (
+                ' dj-sidebar__item--active"' if hit else '"'
+            )
+
+        content = _SIDEBAR_ACTIVE_MARK.sub(_link, content)
+
         return _safe(
             f'<nav class="{cls}" id="{sidebar_id}" role="navigation">'
             f"{header_html}"
@@ -2102,10 +2311,18 @@ class SidebarHandler:
 
 
 class SidebarItemHandler:
-    """Block handler for {% sidebar_item %}...{% endsidebar_item %}"""
+    """Block handler for {% sidebar_item %}...{% endsidebar_item %}
+
+    A non-blank body is the item's submenu, whatever it holds (nested items at any depth, or
+    other markup). The item is active when its own ``active=`` is ``True`` or names its ``id`` /
+    ``href``; without ``active=`` the enclosing ``{% sidebar active=... %}`` decides
+    (``_SIDEBAR_ACTIVE_MARK``). One renderer on both engines (#4331).
+    """
 
     def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
-        kw = _parse_args(args, context)
+        return self.render_kwargs(_parse_args(args, context), content)
+
+    def render_kwargs(self, kw: Mapping[str, object], content: str) -> str:
         label = conditional_escape(kw.get("label", ""))
         href = conditional_escape(kw.get("href", "#"))
         icon = kw.get("icon", "")
@@ -2113,8 +2330,18 @@ class SidebarItemHandler:
         event = kw.get("event", "")
         active = conditional_escape(kw.get("active", ""))
 
-        is_active = (item_id and item_id == active) or (href and href == active)
+        is_active = (
+            kw.get("active") is True or (item_id and item_id == active) or (href and href == active)
+        )
         active_cls = " dj-sidebar__item--active" if is_active else ""
+        # No ``active=`` of its own: the enclosing sidebar's ``active`` decides. Written as a
+        # literal around the escaped hex key, which only holds ``0-9a-f``.
+        mark = ""
+        if "active" not in kw:
+            mark = (
+                "<!--djust-sidebar-key:"
+                f"{conditional_escape(_nav_active_key(kw.get('id', ''), kw.get('href', '#')))}-->"
+            )
 
         icon_html = ""
         if icon:
@@ -2137,18 +2364,20 @@ class SidebarItemHandler:
         if has_children:
             return _safe(
                 f'<li class="dj-sidebar__item dj-sidebar__item--parent">'
-                f"{trigger}"
+                f"{mark}{trigger}"
                 f'<ul class="dj-sidebar__submenu">{content}</ul></li>'
             )
 
-        return _safe(f'<li class="dj-sidebar__item">{trigger}</li>')
+        return _safe(f'<li class="dj-sidebar__item">{mark}{trigger}</li>')
 
 
 class SidebarSectionHandler:
     """Inline handler for {% sidebar_section label="..." %}"""
 
     def render(self, args: list[str], context: dict[str, object]) -> str:
-        kw = _parse_args(args, context)
+        return self.render_kwargs(_parse_args(args, context))
+
+    def render_kwargs(self, kw: Mapping[str, object]) -> str:
         label = conditional_escape(kw.get("label", ""))
         return _safe(
             f'<li class="dj-sidebar__section">'
@@ -2160,11 +2389,13 @@ class NavMenuHandler:
     """Block handler for {% nav_menu %}...{% endnav_menu %}
 
     Renders a top horizontal navigation bar with brand, hamburger toggle,
-    and responsive mobile collapse.
+    and responsive mobile collapse. The one renderer on both engines (#4331).
     """
 
     def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
-        kw = _parse_args(args, context)
+        return self.render_kwargs(_parse_args(args, context), content)
+
+    def render_kwargs(self, kw: Mapping[str, object], content: str) -> str:
         nav_id = attr_text(kw.get("id", "nav-menu"))
         brand = kw.get("brand", "")
         brand_href = data_url_attr(kw.get("brand_href", "/"))
@@ -2252,10 +2483,13 @@ class NavItemHandler:
     """Block handler for {% nav_item %}...{% endnav_item %}
 
     Renders a navigation item. If content is present, it becomes a dropdown parent.
+    The one renderer on both engines (#4331).
     """
 
     def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
-        kw = _parse_args(args, context)
+        return self.render_kwargs(_parse_args(args, context), content)
+
+    def render_kwargs(self, kw: Mapping[str, object], content: str) -> str:
         label = conditional_escape(kw.get("label", ""))
         href = conditional_escape(kw.get("href", "#"))
         event = kw.get("event", "")
@@ -2276,13 +2510,12 @@ class NavItemHandler:
             )
 
         # A dropdown parent only when the body holds nav ITEMS (this handler's own ``<li>``).
-        # The Python tag counts child ``{% nav_item %}`` nodes and ignores any other body, so
-        # an item with an ``event`` and a text body stays a clickable button there; "any
-        # non-blank body" dropped that ``dj-click`` (#3669).
-        # A block handler is handed rendered HTML, so a child is recognised by the markup this
-        # handler draws (a literal ``<li class="dj-nav__item">`` in the body matches too). A
-        # sub-item at any depth, or inside ``{% if %}`` / ``{% for %}``, counts; the Django node
-        # renders its body the same way since #3873 / #3878.
+        # Any other body is ignored, so an item with an ``event`` and a text body stays a
+        # clickable button; "any non-blank body" dropped that ``dj-click`` (#3669).
+        # The body is rendered HTML (on both engines: the Django node calls ``render_kwargs``,
+        # #4331), so a child is recognised by the markup this handler draws (a literal
+        # ``<li class="dj-nav__item">`` in the body matches too). A sub-item at any depth, or
+        # inside ``{% if %}`` / ``{% for %}``, counts (#3873 / #3878).
         has_children = _NAV_ITEM_MARKUP in content
 
         if has_children:
@@ -2410,7 +2643,9 @@ class AppShellHandler:
     def _render_root_parts(
         self, args: list[str], content: str, context: dict[str, object]
     ) -> _RootLayoutParts:
-        kw = _parse_args(args, context)
+        return self._root_parts(_parse_args(args, context), content)
+
+    def _root_parts(self, kw: dict[str, object], content: str) -> _RootLayoutParts:
         # The Python tag's markup (``AppShellNode``): an attribute value is escaped whatever it
         # is marked as (#4009), and a falsy ``class`` adds no class (``class=None`` added "None").
         shell_id = attr_text(kw.get("id", "app-shell"))
@@ -2441,6 +2676,12 @@ class AppShellHandler:
 
     def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         return _root_layout_html(content, self._render_root_parts(args, content, context))
+
+    def render_kwargs(self, kw: dict[str, object], content: str) -> str:
+        """The Django engine's ``{% app_shell %}`` (#4331): the same markup from the tag's operands
+        as Python values. It takes no part in the Rust engine's root-proof protocol, which calls
+        ``_render_root_parts`` on the Rust engine's own render of the tag."""
+        return _root_layout_html(content, self._root_parts(kw, content))
 
 
 class AppSidebarHandler:
@@ -2491,15 +2732,105 @@ class AppContentHandler:
         return _root_layout_html(content, self._render_root_parts(args, content, context))
 
 
+class _ToolbarPartsParser(HTMLParser):
+    """The top-level ``{% toolbar_separator %}`` / ``{% toolbar_overflow %}`` elements of a
+    rendered toolbar body, as ``(start, end)`` offsets (#4331).
+
+    Only an element at the top of the body counts: a separator a template puts inside its own
+    ``<span>`` belongs to that element. The body is read, never reserialized; an element left
+    open runs to the end of the body.
+    """
+
+    _VOID_TAGS = _AppShellSlotParser._VOID_TAGS
+    _CLASSES = frozenset({"dj-toolbar__separator", "dj-toolbar__overflow"})
+
+    def __init__(self, content: str) -> None:
+        super().__init__(convert_charrefs=False)
+        self._content = content
+        self._line_offsets = [0]
+        for line in content.split("\n"):
+            self._line_offsets.append(self._line_offsets[-1] + len(line) + 1)
+        self._stack: list[str] = []
+        self._open: int | None = None
+        self.parts: list[tuple[int, int]] = []
+
+    def _offset(self) -> int:
+        line, column = self.getpos()
+        return self._line_offsets[line - 1] + column
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in self._VOID_TAGS:
+            return
+        if not self._stack and tag == "div" and dict(attrs).get("class") in self._CLASSES:
+            self._open = self._offset()
+        self._stack.append(tag)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag not in self._stack:
+            return
+        index = len(self._stack) - 1 - self._stack[::-1].index(tag)
+        del self._stack[index:]
+        if not self._stack and self._open is not None:
+            end = self._content.find(">", self._offset())
+            self.parts.append((self._open, len(self._content) if end < 0 else end + 1))
+            self._open = None
+
+    def finish(self) -> list[tuple[int, int]]:
+        self.feed(self._content)
+        self.close()
+        if self._open is not None:
+            self.parts.append((self._open, len(self._content)))
+            self._open = None
+        return self.parts
+
+
+#: An HTML comment in a toolbar body: the Rust engine's ``{% if %}`` boundary markers, an author's.
+_HTML_COMMENT = _re_filters.compile(r"<!--.*?-->", _re_filters.DOTALL)
+
+
+def _toolbar_groups(content: str) -> str:
+    """``content`` with each run of children between two separators (or a separator and an
+    overflow menu, or an end of the body) wrapped in one ``dj-toolbar__group`` (#4331). A run that
+    is only whitespace and HTML comments draws no group: an ``{% if %}`` that rendered nothing
+    leaves the Rust engine's ``<!--dj-if ...-->`` pair there, which is kept (VDOM patching reads
+    it) but not wrapped, so no empty group is drawn where the Django engine draws none. The
+    separators and the overflow menu stay where they are, outside every group. Only literal
+    markup is added around slices of ``content``."""
+    out: list[str] = []
+    pos = 0
+    for start, end in [*_ToolbarPartsParser(content).finish(), (len(content), len(content))]:
+        run = content[pos:start]
+        if _HTML_COMMENT.sub("", run).strip():
+            out.append('<div class="dj-toolbar__group">' + run + "</div>")
+        else:
+            out.extend(_HTML_COMMENT.findall(run))
+        out.append(content[start:end])
+        pos = end
+    return "".join(out)
+
+
 class ToolbarHandler:
     """Block handler for {% toolbar %}...{% endtoolbar %}
 
-    Horizontal action bar with grouped buttons, separators, overflow menu.
+    Horizontal action bar with grouped buttons, separators, overflow menu. The one renderer
+    on both engines (#4331): the children between two ``{% toolbar_separator %}`` form one
+    ``dj-toolbar__group``. With no ``id=`` the id is derived from the arguments
+    (``toolbar-<hash>``), so it repeats on every render of the same call (#4108) and is the same
+    on both engines.
     """
 
     def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
-        kw = _parse_args(args, context)
-        toolbar_id = attr_text(kw.get("id", "toolbar"))
+        return self.render_kwargs(_parse_args(args, context), content)
+
+    def render_kwargs(self, kw: Mapping[str, object], content: str) -> str:
+        if "id" in kw:
+            toolbar_id = attr_text(kw["id"])
+        else:
+            # The Django tags' rule for a default id (#4108), over the operands as both engines
+            # hand them here; there is no per-render count to tell two identical calls apart.
+            from djust.components.templatetags.djust_components import _stable_id
+
+            toolbar_id = attr_text(_stable_id("toolbar", sorted(kw.items(), key=repr)))
         custom_class = attr_text(kw.get("class", ""))
         size = attr_text(kw.get("size", "md"))
         variant = attr_text(kw.get("variant", "default"))
@@ -2508,7 +2839,8 @@ class ToolbarHandler:
         if custom_class:
             cls += f" {custom_class}"
 
-        return _safe(f'<div class="{cls}" id="{toolbar_id}" role="toolbar">{content}</div>')
+        body = _toolbar_groups(content)
+        return _safe(f'<div class="{cls}" id="{toolbar_id}" role="toolbar">{body}</div>')
 
 
 class ToolbarSeparatorHandler:
@@ -2616,10 +2948,19 @@ class FilterBarHandler:
 
 
 class FormArrayHandler:
-    def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
-        kw = _parse_args(args, context)
+    """``{% form_array %}``: the one renderer of its markup on both engines (#4331).
+
+    The tag repeats its body once per row, with ``row``, ``row_index`` and ``forloop`` pushed
+    (#930), so its body cannot be rendered first: it takes the raw-body route on the Rust engine
+    (``RAW_BODY_TAGS``), where the Django node renders each row's body and hands the rendered rows
+    to :meth:`render_kwargs`, as it does under Django's engine. ``row_bodies`` is ``None`` for a
+    blank body: each row is then the default text input.
+    """
+
+    def render_kwargs(
+        self, kw: dict[str, object], rows: list[Any], row_bodies: list[str] | None
+    ) -> str:
         name = kw.get("name", "items")
-        rows = kw.get("rows", [{"value": ""}])
         min_rows = kw.get("min", 1)
         max_rows = kw.get("max", 10)
         add_event = kw.get("add_event", "add_row")
@@ -2627,11 +2968,11 @@ class FormArrayHandler:
         add_label = kw.get("add_label", "Add row")
         custom_class = kw.get("class", "")
 
-        e_name = escape(str(name))
-        e_add_event = escape(str(add_event))
-        e_remove_event = escape(str(remove_event))
+        e_name = attr_text(name)
+        e_add_event = attr_text(add_event)
+        e_remove_event = attr_text(remove_event)
         e_add_label = conditional_escape(str(add_label))
-        e_class = escape(str(custom_class))
+        e_class = attr_text(custom_class)
 
         try:
             min_rows = int(cast("str | int | float", _number(min_rows)))
@@ -2641,9 +2982,6 @@ class FormArrayHandler:
             max_rows = int(cast("str | int | float", _number(max_rows)))
         except (ValueError, TypeError):
             max_rows = 10
-
-        if not isinstance(rows, list):
-            rows = [{"value": ""}]
 
         classes = ["dj-form-array"]
         if e_class:
@@ -2656,9 +2994,6 @@ class FormArrayHandler:
 
         rows_html = []
         for i, row in enumerate(rows):
-            # ``value="..."`` is an attribute: escaped whatever the member is marked (a tuple
-            # ``rows=`` hands the handler its members as they are).
-            val = escape(str(row.get("value", "") if isinstance(row, dict) else row))
             remove_html = ""
             if can_remove:
                 remove_html = (
@@ -2666,10 +3001,18 @@ class FormArrayHandler:
                     f'dj-click="{e_remove_event}" dj-value-value="{i}" '
                     f'aria-label="Remove row {i + 1}">&times;</button>'
                 )
+            if row_bodies is not None:
+                # The row's body, rendered by the template engine with the row pushed.
+                cell = row_bodies[i]
+            else:
+                # ``value="..."`` is an attribute: escaped whatever the member is marked (#3904).
+                val = attr_text(row.get("value", "") if isinstance(row, Mapping) else row)
+                cell = (
+                    f'<input type="text" name="{e_name}[{i}]" value="{val}" '
+                    f'class="dj-form-array__input">'
+                )
             rows_html.append(
-                f'<div class="dj-form-array__row" data-index="{i}">'
-                f'<input type="text" name="{e_name}[{i}]" value="{val}" '
-                f'class="dj-form-array__input">{remove_html}</div>'
+                f'<div class="dj-form-array__row" data-index="{i}">{cell}{remove_html}</div>'
             )
 
         add_disabled = "" if can_add else " disabled"
@@ -2712,17 +3055,18 @@ NATIVE_BLOCK_HANDLERS = [
     ("toolbar", "endtoolbar", ToolbarHandler()),
     ("toolbar_overflow", "endtoolbar_overflow", ToolbarOverflowHandler()),
     ("filter_bar", "endfilter_bar", FilterBarHandler()),
-    ("form_array", "endform_array", FormArrayHandler()),
     ("page_header", "endpage_header", PageHeaderHandler()),
     ("page_header_actions", "endpage_header_actions", PageHeaderActionsHandler()),
 ]
 
 #: Block tags that take the raw-body route (their Django node reads its children, so the Rust engine
 #: cannot render the body first): ``tabs`` keeps only its ``tab`` children, ``split_pane`` parses two
-#: segments. Both were already registered this way before 2.0. The other children-reading parents
-#: keep their native twins (see the module docstring). Pinned by
+#: segments (both registered this way before 2.0), ``form_array`` renders its body once per row with
+#: the row pushed (#930; its native twin, which drew an input and dropped the body, is gone,
+#: #4331). The other children-reading parents keep their native twins (see the module docstring).
+#: Pinned by
 #: ``test_raw_body_tags_are_exactly_the_bridged_tags_that_read_their_children``.
-RAW_BODY_TAGS = frozenset({"split_pane", "tabs"})
+RAW_BODY_TAGS = frozenset({"form_array", "split_pane", "tabs"})
 
 #: Separator tokens of a raw-body tag (``{% pane %}`` inside ``{% split_pane %}``). For template path
 #: extraction the segments are one body rendered with the same context, so the separator is dropped.

@@ -277,6 +277,11 @@ class TestKwGetDefaultsAndDescriptorMeta:
         defaults = mod.extract_event_defaults(
             root / "python/djust/components/templatetags/djust_components.py"
         )
+        # #4331: the native handlers hold the defaults of the tags they now render alone.
+        for name, sites in mod.extract_event_defaults(
+            root / "python/djust/components/rust_handlers.py"
+        ).items():
+            defaults.setdefault(name, []).extend(sites)
         handlers = set()
         for f in sorted((root / "python/djust/components/descriptors").glob("*.py")):
             handlers |= mod.extract_handler_names(f)
@@ -317,6 +322,11 @@ class TestUiStateEvents4126:
         defaults = mod.extract_event_defaults(
             root / "python/djust/components/templatetags/djust_components.py"
         )
+        # #4331: the native handlers hold the defaults of the tags they now render alone.
+        for name, sites in mod.extract_event_defaults(
+            root / "python/djust/components/rust_handlers.py"
+        ).items():
+            defaults.setdefault(name, []).extend(sites)
         handlers = set()
         for f in sorted((root / "python/djust/components/descriptors").glob("*.py")):
             handlers |= mod.extract_handler_names(f)

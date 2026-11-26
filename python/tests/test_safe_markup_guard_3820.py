@@ -2604,8 +2604,12 @@ class TestTheRealTree:
         # the value where it is written; 42 since #3864 reports the three handlers that rewrite a
         # rendered block body at an offset only their own code finds (audited); 49 since #3864 also
         # reads the arguments of ``format_html`` at their positions, which reports seven sites that
-        # put a developer-configured URL at a URL attribute's start (audited)
-        assert sinks <= 49, sinks
+        # put a developer-configured URL at a URL attribute's start (audited); 53 since #4331 moved the
+        # markup of nine tags into the one handler both engines call (``render_kwargs`` /
+        # ``render_page_header``), which the guard reports as audited sinks in place of the Django
+        # nodes' own (``PageHeaderNode``, ``SidebarNode``, ``AccordionHandler.render``,
+        # ``NavMenuHandler.render``)
+        assert sinks <= 53, sinks
 
     def test_the_wrappers_are_scanned_in_every_file_that_calls_them(self, tree_scan):
         files = {path for (path, _fn) in tree_scan}
