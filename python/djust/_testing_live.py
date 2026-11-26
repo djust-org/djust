@@ -40,6 +40,8 @@ from html import unescape
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple, TypeVar
 from urllib.parse import parse_qs, urlsplit
 
+from ._protocol import PROTOCOL_HEADER, PROTOCOL_QUERY_PARAM, PROTOCOL_VERSION
+
 __all__ = [
     "LivePage",
     "LiveSSE",
@@ -407,6 +409,8 @@ class LivePage:
             "params": _query_params(self.url) if params is None else dict(params),
             "tab": self.tab,
             "has_prerendered": True,
+            # The client names its wire protocol (#3658).
+            "protocol": PROTOCOL_VERSION,
         }
 
     # -- HTTP fallback --------------------------------------------------------
@@ -460,7 +464,11 @@ class LivePage:
             full: Send no render digest, so the answer is the whole page.
             **extra: More request extras; they replace the ones above.
         """
-        headers: Dict[str, Any] = {**self.extra, "HTTP_X_DJUST_EVENT": event}
+        headers: Dict[str, Any] = {
+            **self.extra,
+            "HTTP_X_DJUST_EVENT": event,
+            "HTTP_X_DJUST_PROTOCOL": str(PROTOCOL_VERSION),
+        }
         if self.tab:
             headers["HTTP_X_DJUST_TAB"] = self.tab
         token = self.csrf_token
@@ -612,7 +620,13 @@ class LivePage:
         )
         client.cookies = self.client.cookies  # one browser: the same cookie jar
         query: Dict[str, Any] = _query_params(self.url) if params is None else dict(params)
-        query.update({"view": self._view(view_path), "_djust_url": self.path})
+        query.update(
+            {
+                "view": self._view(view_path),
+                "_djust_url": self.path,
+                PROTOCOL_QUERY_PARAM: str(PROTOCOL_VERSION),
+            }
+        )
         if self.tab:
             query["_djust_tab"] = self.tab
         stream = LiveSSE(self, session_id, client, message_url, timeout=timeout)
@@ -1117,7 +1131,11 @@ class LiveSSE(_Transport):
     def _headers(self) -> Dict[str, str]:
         # The test client sends the host (testserver) itself; a page opened
         # with ``HTTP_HOST`` sends that one through the extras.
-        return {**_http_headers(self.page.extra), "Origin": self.page.origin}
+        return {
+            **_http_headers(self.page.extra),
+            "Origin": self.page.origin,
+            PROTOCOL_HEADER: str(PROTOCOL_VERSION),
+        }
 
     def _start(self, response: Any) -> None:
         self.response = response
