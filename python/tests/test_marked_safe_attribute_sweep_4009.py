@@ -352,21 +352,28 @@ def test_no_inclusion_tag_lets_a_marked_safe_argument_out_of_an_attribute(name):
 
 
 def test_the_inclusion_sweep_sees_a_raw_attribute():
-    """Gate-off for the inclusion sweep: with ``force_escape`` taken out of ``progress.html``'s
-    ``aria-label`` (a copy of the template, rendered the same way), the payload breaks out."""
+    """Gate-off for the inclusion sweep: with ``force_escape`` taken out of ``toast.html``'s
+    ``dj-click`` (a copy of the template, rendered the same way), the payload breaks out.
+    (``progress.html`` was the subject until #4331 made ``progress`` a simple tag over its
+    native handler; ``toast_container`` is the remaining inclusion tag.)"""
     from django.template import engines
 
-    from djust.components.templatetags.djust_components import progress
+    from djust.components.templatetags.djust_components import toast_container
 
     template = (
-        '{% load djust_components %}<div{% if label %} aria-label="{{ label }}"{% endif %}></div>'
+        "{% load djust_components %}{% for toast in toasts %}"
+        '<button dj-click="{{ dismiss_event }}"></button>{% endfor %}'
     )
-    ctx = progress(value=3, label=safe_sweep.SAFE_PAYLOAD)
+    ctx = toast_container(
+        toasts=[{"id": 1, "type": "info", "message": "m"}], dismiss_event=safe_sweep.SAFE_PAYLOAD
+    )
     raw = engines["django"].from_string(template).render(ctx)
     from payload_sweep_3774 import injections
 
     assert any("onmouseover" in hit for hit in injections(raw))
-    shipped = safe_sweep.render_inclusion("progress", "label", safe_sweep.SAFE_PAYLOAD)
+    shipped = safe_sweep.render_inclusion(
+        "toast_container", "dismiss_event", safe_sweep.SAFE_PAYLOAD
+    )
     assert not any("onmouseover" in hit for hit in injections(shipped)), shipped
 
 
