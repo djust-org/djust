@@ -315,7 +315,7 @@ dependencies = [
 
 [[package]]
 name = "djust_base"
-version = "2.0.0-rc.5"
+version = "2.0.0-rc.6"
 dependencies = [
  "pyo3",
  "thiserror",
@@ -323,7 +323,7 @@ dependencies = [
 
 [[package]]
 name = "djust_core"
-version = "2.0.0-rc.5"
+version = "2.0.0-rc.6"
 dependencies = [
  "ahash",
  "criterion",
@@ -340,7 +340,7 @@ dependencies = [
 
 [[package]]
 name = "djust_live"
-version = "2.0.0-rc.5"
+version = "2.0.0-rc.6"
 dependencies = [
  "criterion",
  "dashmap",
@@ -359,7 +359,7 @@ dependencies = [
 
 [[package]]
 name = "djust_templates"
-version = "2.0.0-rc.5"
+version = "2.0.0-rc.6"
 dependencies = [
  "ahash",
  "criterion",
@@ -387,7 +387,7 @@ dependencies = [
 
 [[package]]
 name = "djust_vdom"
-version = "2.0.0-rc.5"
+version = "2.0.0-rc.6"
 dependencies = [
  "ahash",
  "criterion",

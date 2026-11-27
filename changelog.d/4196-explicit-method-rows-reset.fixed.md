@@ -1,1 +1,0 @@
-- **An explicit view no longer keeps stale QuerySet-method rows across renders** — the evaluated rows behind `{{ qs.count }}`-style reads (`_all_method_rows`) are rebuilt on every real context evaluation, so a name that stops holding a QuerySet releases them instead of answering a later value from them (#4196)

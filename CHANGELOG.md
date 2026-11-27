@@ -7,6 +7,459 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0rc6] - 2026-11-27
+
+> **Upgrading from rc5.** The legacy modes are gone: `exposure_policy = "legacy"`
+> and `parameter_policy="legacy"` now raise `ImproperlyConfigured` naming the
+> replacement (#4199), and the legacy code paths, checks and 1.x shims behind
+> them are deleted (#4200-#4207); run `djust_exposure_inventory --fix` on any
+> view not yet migrated. `djust.react` is removed (#4006). The wire protocol
+> moves to one `render` frame per turn with `effects[]` (#3658): a browser
+> still holding an rc5 client reloads once. State saves are deferred by default
+> (`DJUST_STATE_SAVE_INTERVAL` = 2 s, #4164), the client loads as a core bundle
+> plus chunks (#4007), and several `djust.components.ui` components and
+> component tags now draw one shared markup on both engines, so their HTML
+> changes (#4002, #4331). Security: `dj-model` accepts only bindings that
+> rendered for the current state (new check `djust.T030` lists fields that need
+> `allowed_model_fields`), component and embedded-child events run the page's
+> object-permission check, and anonymous presence ids no longer expose the
+> session key. See the
+> [2.0 migration guide](docs/website/guides/migrating-to-2.0.md).
+
+### Added
+
+- **A turn benchmark over all three transports (#3657).** `make benchmark-transports`
+  (`scripts/bench_turn_transports.py`) times complete event turns through the real
+  stack over WebSocket, SSE and the HTTP fallback, for five workloads (form, 1,000-row
+  table, dashboard, server push, editor), with and without the session save, at
+  simulated round-trip times of 0, 20, 100 and 250 ms. It reports p50/p95 latency, CPU
+  per turn, event-loop lag, wire bytes and retained memory per page, writes JSON, and
+  `--compare` prints ratios against a saved run. The baseline and method are in
+  `docs/performance/turn-transports-baseline.md`; the measured run is committed as
+  `docs/performance/turn-transports-baseline.json` for later performance work to
+  compare against.
+- **A wire-protocol version, and a self-reload for outdated tabs (#3658).** The
+  server and the client bundle name a protocol version (`2`). The client sends it
+  with every mount verb, on the SSE stream GET and in the `X-Djust-Protocol`
+  header of its POSTs. A tab running an older cached bundle (1.x, or a 2.0
+  release candidate) is told to reload: WebSocket close code 4409 after a
+  `reload` frame, an SSE `reload` frame, or HTTP 409 `protocol_mismatch`. The
+  bundle URLs carry `?v=<djust version>` so the reload fetches the new bundle. A
+  third refusal of the same session within 30 seconds sends no `reload` frame,
+  so a service worker that keeps serving the old page shell cannot make the tab
+  reload forever; unregister it or clear the site's data. Clients that send no
+  version (scripts, hand-built test frames) can be accepted with
+  `DJUST_ALLOW_MISSING_PROTOCOL = True`.
+- **Outbound limits for slow clients (#3658).** Each WebSocket now holds the frames
+  that wait while the client reads slowly in a buffer bounded in bytes,
+  `LIVEVIEW_CONFIG["max_outbound_buffer_bytes"]` (default 4 MiB, `0` = no limit).
+  Over the bound the socket is closed with code 1013 and the client reconnects and
+  remounts through the ordinary recovery path; frames keep their order, one frame
+  is always sent whatever its size, and a `close()` sends the frames queued before
+  it first. An SSE session's queue has the same byte bound: past it the backlog is
+  dropped and the stream ends, so `EventSource` reconnects and the reconnect mount
+  resyncs the page. The limits per transport are in the reconnection guide.
+- **`djust_audit --a11y --url`: a rendered-page accessibility pass with
+  axe-core (#3700).** The `Y` rules scan template text, so they cannot check
+  contrast (WCAG 1.4.3, 1.4.11), landmarks, heading order or names that exist
+  only after render. `--a11y --url <url>` (repeatable) loads each page in
+  headless Chromium and runs axe-core over it; with `--base-url` and no
+  `--url`, it audits a route of every view a `permissions.yaml` declares.
+  Normal mode stays warning-only; `--strict` exits 1 on a serious or critical
+  violation, and a page that could not be audited exits 1. `--json` is
+  supported. The browser tooling is the new optional extra `djust[a11y]`
+  (Playwright plus `axe-playwright-python`, which ships `axe.min.js`); without
+  it the command exits 2 and names the extra. `--header` values reach only the
+  audited origin. 33 tests in
+  `python/tests/test_audit_a11y_rendered_3700.py`, plus a real-browser check
+  in `tests/playwright/test_a11y_rendered_3700.py`.
+- **`allow_upload(timeout=seconds)` (#4118).** An upload still unfinished that many seconds after the browser registered it (or resumed it) is cancelled: its writer is aborted with a `TimeoutError`, its entry dropped, and the browser gets status `cancelled` with "Upload timed out after N seconds.", which rejects its `uploadFile()` promise. Default `None`: no limit.
+- **A reconnect that restores an older state than its page showed now says so
+  (#4164).** Reply and mount frames of a view whose state is saved carry
+  `state_serial`, the turn serial of the state they show; a reconnecting page
+  sends it back. When storage is behind it, the reconnect first asks the tab's
+  other connection, if it is still open, to save (through the channel layer,
+  waiting up to one second), and if storage is still behind the page gets a
+  transient `state_not_restored` notice ("Your most recent changes could not
+  be restored."), shown in the save-status corner and dispatched as
+  `djust:error`. A page whose saves fail three times in a row is told once
+  that its recent changes are not saved yet.
+- **An explicit {% live_render %} child takes events over the HTTP fallback (#4173).**
+  An explicit page's explicit child was refused on the page POST (`Embedded view
+  not found`). Its auto-assigned id is now named for the child on both exposure
+  policies (and at any depth), so the GET and the POST agree; the POST re-mounts
+  it under its own request and runs the socket runtime's event checks against
+  that request (ownership, schema, reuse identity, state binding, view auth for
+  an event, and the object permission again after the handler). A sticky child
+  keeps its `persist="server"` fields between POSTs. A child the page did not
+  render, and a mixed-policy pair, are still refused with `Embedded view not found`.
+- **An explicit dj-lazy view fills and takes events over the page-POST fallback (#4174).**
+  `<div dj-view="..." dj-lazy>` on an explicit page was never registered over
+  HTTP, so a browser with neither WebSocket nor `EventSource` left it empty. A
+  same-policy container is now registered and mounted with the checks of an
+  eager explicit `{% live_render %}` child, under its lazy address. It keeps
+  exactly its `persist="server"` fields between POSTs; its other state starts
+  again from `mount()`. A container whose exposure policy differs from the
+  page's is still not registered.
+- **An upload in flight on an explicit view resumes after a WebSocket reconnect (#4175).** The resume record is bound to the session, user, tenant and page and is checked on resume, on every upload frame and by `UploadStatusView`; another session or user gets `not_found`. Code using `ResumableUploadWriter` with `allow_upload(..., resumable=True)` needs no change.
+- **`sw_cacheable = True` lets an explicit page's HTML be cached by the service worker (#4176).** Explicit pages are sent `no-store` by default; a public page whose HTML is the same for every visitor opts in on the view class (every child view must opt in too), and `djust.V037` reports an opted-in view that reads the user, the session or persisted state.
+- **`LIVEVIEW_CONFIG["log_exception_detail"] = True` keeps exception text and tracebacks in production server logs and fires `got_request_exception` (Sentry) for explicit views on WebSocket, SSE and the HTTP fallback (#4180).** Off by default; client frames and HTTP responses stay generic either way.
+
+- **sticky_update_inputs: an explicit sticky child keeps its state when updatable inputs change (#4181).**
+  An explicit sticky child's `{% live_render %}` inputs were all part of its
+  identity, so any change remounted it. Name the inputs that may change in
+  `sticky_update_inputs`; a change to one reuses the child and calls
+  `_on_sticky_update(changed)`, and its state (`persist="server"` fields too)
+  survives. Any other input still remounts the child. This holds across
+  `live_redirect`: the carried child is updated and re-rendered after the mount
+  frame. From 1.3:
+
+  ```python
+  class Sidebar(LiveView):
+      sticky = True
+      sticky_id = "sidebar"
+      sticky_update_inputs = ("section",)  # new in 2.0
+      section = state("home")              # was: self.section set in mount()
+
+      def mount(self, request, section="home", **kwargs):
+          self.section = section
+
+      def _on_sticky_update(self, changed):
+          if "section" in changed:
+              self.section = changed["section"]
+  ```
+
+- **`start_async(fn, ..., survive_disconnect=True)` and `@background(survive_disconnect=True)` let background work finish after the user disconnects (#4182).** The task runs to completion when its view is disposed; its result is not rendered, and setting declared state, pushing or scheduling on the disposed view raises `ViewDisposedError`. Work without the opt-in is still cancelled.
+- **Upgrade checks for the legacy removal (#4190).** `djust.V033` (a legacy handler strict would refuse), `djust.T028` (a binding a legacy handler accepts that strict would refuse, in `{% extends %}` templates too), `djust.V034` (`_target`), `djust.V035` (`_on_sticky_update` on an explicit view) and `djust.T029` (`data-*` arguments in Python-built markup) report what a 1.3 project must change.
+- **`manage.py djust_exposure_inventory --fix` makes the mechanical 2.0 upgrade changes (#4209).** It deletes `exposure_policy = "legacy"`, supplies the names each template reads from `get_context_data()`, annotates unannotated handler parameters as `Any` and renames `data-*` event arguments to `dj-value-*` in templates whose handler declares them, then lists what needs a person (`state()` or context, real parameter types, `_target`, `data-*` built in Python). `--dry-run` prints the diff; it never writes `state()` or a `persist=` grant.
+- **Opt-in `id` diff keys for HTML rendered without `dj-if` markers (#4228).**
+  `diff_html(old, new, id_keys=True)` and the Rust `djust_vdom::key_by_id`
+  key every element that has no `dj-key` / `data-key` by its `id` (as
+  `#<id>`), so an unkeyed conditional that appears no longer rewrites the
+  siblings after it and wipes their form input. Children of `dj-update` and
+  `dj-virtual` containers are exempt. The default is unchanged: `id` is still
+  not a diff key, and djust's own render path (which emits `dj-if` markers)
+  does not use the opt-in. See "Opt-in: `id` as a fallback key" in the VDOM
+  architecture guide.
+- **A tag library can vouch that it mounts no child view with
+  `register.djust_childless = True` (#4302).** It has the same effect as listing
+  the library in `childless_tag_libraries`, without a project setting. New DEBUG
+  check `djust.C044` warns when such a library registers an `inclusion_tag`,
+  whose template the page-shell scan does not read.
+- **Upload hooks in the view (#4312).** A view can define `handle_upload_started(name, entry)`,
+  `handle_upload_finished(name, entry)` and `handle_upload_failed(name, entry, reason)`, and,
+  on a slot with `allow_upload(..., progress_hook=True)`, `handle_upload_progress(name, entry)`
+  at the 10% steps the browser gets. Each runs as a turn of the view (in order on its lane,
+  with a render and the usual end-of-turn drains); a hook that raises is logged and the upload
+  goes on. `reason` is `refused`, `too_large`, `timeout`, `cancelled` or `error`; a writer
+  refusal's message is `entry.error`. A resume calls `handle_upload_started` again. A view
+  without hooks pays nothing. On a socket with several views a hook is queued on its view's
+  lane, so a slow hook never delays another view. The browser's `upload_progress` frames are
+  now sent once per 10% step too (tiny chunks of a large file used to repeat a step on every
+  chunk). WebSocket only, like uploads.
+- **More of the client loads on demand, and the first render preloads what it
+  uses (#4320, #4007 slices 2-3).** Ten more feature modules are client chunks
+  the core bundle loads only on pages that use them: `component-behaviors`
+  (the `djust.components` widgets), `keyboard-nav`, `error-overlay` (Django
+  `DEBUG` only; the deferred-save status stays core), `dj-style` (strict CSP
+  styles), `flip`, `transitions` (`dj-transition`, `dj-remove`,
+  `dj-transition-group`), `infinite-scroll`, `prefetch`, `track-static` and
+  `dialog`. The injected core drops from ~81 KB to ~68 KB gzipped; the SSE <!-- size-claim: historical -->
+  transport stays in core (see the client-bundle guide). The LiveView now puts
+  `<link rel="preload" as="script">`, with the CSP nonce, in the head for each
+  chunk the first render uses, so a page that uses one costs no extra round
+  trip before it binds, and `generate_sw` precaches the bundle actually
+  injected and every chunk at the URLs the page requests instead of
+  a hard-coded client.js URL. `LIVEVIEW_CONFIG['client_bundle'] = 'full'` still injects
+  the single bundle. Tests in `tests/unit/test_client_chunks_4320.py` and
+  `tests/js/client-chunks-4007.test.js`; the moved modules' suites join the
+  `split-build` vitest project.
+- **The JavaScript widget contract (#4322, after the hook lifecycle of #3656).**
+  "The widget contract" in `docs/website/guides/hooks.md` defines what a widget
+  owns (a `dj-update="ignore"` subtree, `dj-ignore-attrs`, a canvas's buffer),
+  how props reach it and what it may write back, focus / selection / IME across
+  updates, strict nonce CSP, and local drafts across patches, reconnects and
+  navigation; it also settles the open `updated()` scoping question (not
+  scoped further, not paired with `beforeUpdate()`). A hook's
+  `this.pushEvent(event, payload, {outcome: true})` now resolves with
+  `{status, reply, error}`, status `ok` / `error` / `rejected` (strict
+  parameters) / `rate_limited` / `cancelled` / `disconnected`, matched by `ref`
+  and settled after the reply is applied; without the option it still resolves
+  with the reply or `null`. The server echoes the event's `ref` on error frames
+  sent during its turn (a handler that raised included, with or without DEBUG
+  detail) and on turn rate-limit refusals, and codes a per-handler
+  `@rate_limit` drop `rate_limited`. On an HTTP-only page a hook's event is now
+  a page POST instead of being dropped. Also fixed on the way: an SSE reconnect
+  morphs the page back (widgets keep their instances, as over WebSocket)
+  instead of re-rendering it; the route-map script of
+  `{% djust_client_config %}` carries the CSP nonce inside a LiveView's own
+  template; a morph no longer re-runs a `{% colocated_hook %}` body (which
+  failed under a nonce CSP); the Chart.js adapter ignores `dj-id` when deciding
+  to redraw. Proved in Chromium by `tests/playwright/test_widget_contract_4322.py`
+  with the shipped Chart.js adapter and an in-repo contenteditable
+  editor fixture (Chart.js is a test-only devDependency) over WebSocket, SSE, HTTP-only and a nonce-only CSP.
+- **`djust_vdom` builds without Python.** The crate's PyO3 bindings are now behind a default-on `python` feature, and the pieces it shared with `djust_core` (the error type, the HTML whitespace and raw-text rules) moved to a new Python-free `djust_base` crate. A Rust host can depend on `djust_vdom` with `default-features = false` and get the parser, the differ and the patch types with no Python interpreter in the build. Nothing changes for djust itself: `djust_core` re-exports every moved item under its old path. CI checks that PyO3 stays out of that dependency graph and runs the VDOM tests against it.
+
+### Changed
+
+- **`dj-hook` lifecycle contract (#3656).** The hooks guide now states when each callback runs ("The lifecycle contract": one instance per element node, `mounted()` / `destroyed()` exactly once, `beforeUpdate()` before an update's first DOM change, `updated()` after it, `destroyed()` before `mounted()` / `updated()` in document order, `dj-update="ignore"` regions, connection callbacks, error isolation), and the client follows it, under the full and the core bundle. Changes: a hook nested in a hook element that an update inserted no longer also gets `updated()` in that update; `destroyed()` can no longer run twice when it re-enters `djust.updateHooks()`; a hook removed with a `dj-remove` exit transition gets `destroyed()` when the element is finally removed rather than at the next update; `disconnected()` runs once per lost connection instead of once per failed reconnect attempt, `reconnected()` only on hooks that got `disconnected()`, and both now also run over SSE (and when the client falls back from WebSocket to SSE); `reconnected()` also runs on the first WebSocket open after a failed first handshake, and on the first answered event of the page-POST HTTP fallback; a hook mounted while offline gets `disconnected()` after `mounted()`; a hook registry entry that is not an object no longer stops the other hooks from mounting. `djust.updateHooks(root)` with a root other than the document no longer destroys the hooks outside that root.
+- **One `render` frame per turn, with `effects[]` (#3658).** Every turn result now
+  reaches the client as one `{"type": "render", ...}` frame on the WebSocket, over
+  SSE and as the HTTP answer body. Its DOM part is at most one of `patches`,
+  `html`, or `view_id` + `html` (an embedded child); a frame with none of them
+  acknowledges a turn that changed nothing. The side effects a handler queued
+  (`push_event()`, `put_flash()`, `page_title` / `page_meta`, `set_layout()`,
+  `live_patch()` / `live_redirect()`, and the auth or refusal redirect) ride in its
+  `effects` list, always in the order push events, flash, page metadata, layout,
+  navigation. A skip-render turn now sends its effects in the same order as any
+  other turn. Effects queued by a `defer()` callback are sent in the same turn, in
+  one extra effects-only frame (`source: "deferred"`) that the client applies after
+  any server frame it is still holding; before, a `push_event()` from a deferred
+  callback waited for the next turn. `flush_push_events()` sends a
+  `source: "flush"` frame, which the client applies on arrival. The views queue
+  every effect on one outbound queue (`CommandsMixin`); the public methods are
+  unchanged. Custom JavaScript that read the old frames or the `_*` answer keys
+  must read the `render` frame's DOM part and `effects` (hooks, `djust:*` events
+  and `{% dj_flash %}` are unchanged), and tests that read frames match `"render"`
+  and read `effects`. See "The wire format changed" in the 2.0 migration guide and
+  the new Wire Protocol page.
+- **A connected view keeps a 16-byte digest per attribute for change detection, not two fingerprint trees (#3998).** The dirty-tracking baseline, the last render's fingerprints, the request-scoped fingerprints and `@computed`'s dependency key now hold a BLAKE2b-128 digest of each structural fingerprint instead of the tree itself, so what change detection keeps no longer grows with the state: for a 1,000-row table it fell from 370 KB to 1.5 KB, and the Python heap one open page retains (`tracemalloc`) from 907 KB to 548 KB. Every change the tree comparison detected is still detected (equal digests mean equal fingerprints); `0.0` against `-0.0` is now also seen as a change. A set is fingerprinted in a canonical order, and a `str` / `int` / `float` / `bytes` subclass by its builtin value. The scaling guide publishes per-view memory against page size and two ceilings, both test-backed: under 2 MB for a view of a 100 KB page of markup, under 4.5 MB for a 100 KB table whose rows are all in state.
+- **The Rust sync takes the post-event snapshot's walk of a list instead of walking it again (#3999).** When a handler changes a container, the snapshot taken after the handler has already walked it; the state sync now uses that walk as the container's fingerprint, and as the answer to "is this plain data", so it skips both its own fingerprint walk and the `_collect_sub_ids` walk, and converts a changed list for the renderer in a walk that builds no fingerprint. A turn that changes something else no longer walks the list in the sync at all. The reuse applies only when no application code runs between the snapshot and the sync (no `get_context_data` or `get_render_only_context` override, template property, class-level component or `sync_turn_wrapper`), and only to the very object the snapshot walked, in the same turn; otherwise the sync walks as before. One changed cell in a 1,000-row list: the sync's Python time fell from 7.8 ms to 4.5 ms and the turn from about 24 ms to 21 ms (p50, `nosave`, WebSocket); the issue's 10 ms target is not met, and the rest (item-level deltas for keyed lists, a two-region Rust fast path, per-render state-backend serialization) is follow-up work. Numbers in `docs/performance/turn-transports-baseline.md`.
+- **The HTTP fallback's DOM shape follows the change (#4001).** `domShape`, which the page-POST fallback computes before every request and again before it applies a patch answer (#4108), keeps each element's piece of the shape with its CRC-32 and Adler-32 and combines them (zlib's `crc32_combine` / `adler32_combine`); a `MutationObserver` forgets the pieces a change makes stale (and every piece in a subtree that is inserted again), and nothing in or around a `<template>` is kept, since its content is not observed. The value is byte-identical to the server's `dom_shape`, held there by seeded random pages and edits. On a 1,000-row table (6,000 elements) a fallback turn's send goes from 9.5 to 1.3 ms p50 in headless Chromium and the check before applying from 9.5 to 0.8 ms.
+- **Client work per patch follows the change, not the page (#4001, slice 1).** `applyPatches(patches, rootEl, applyIf, changes)` fills `changes` with what the batch changed (inserted and removed roots, changed attributes, text-only updates; recorded with a `MutationObserver`, so every insertion path is covered) and still resolves to its boolean. After a patch frame, `reinitAfterDOMUpdate` scans only those for `dj-window-*` / `dj-document-*` declarations and `dj-model` bindings instead of walking the whole page (`querySelectorAll('*')` plus an attribute loop per element); a change that adds, removes or re-marks a LiveView root still scans the page, as do mount, morph and navigation. A `SetText` patch now carries `parent_d` (the parent element's dj-id) and `index` (the text node's place among its significant children), so the client finds the node with one id lookup instead of walking `path` from the root; a `SetText` without them still resolves by `path`, and the page-POST fallback strips both, as it strips the other id hints. Measured with the new `scripts/bench_client_patch_turn.py` (headless Chromium, unrelated counter update, p50): 0.2 / 0.6 / 6.0 ms at 100 / 1,000 / 10,000 elements before, 0.2 / 0.3 / 1.6 ms after. One behaviour change: a `dj-window-*` / `dj-model` attribute that page JavaScript (not a patch) adds to an untouched element is no longer picked up by the next patch's rescan; it is at the next full scan (mount, morph, navigation).
+- **One renderer per `djust.components.ui` simple component; the Rust simple-component crate is removed (#4002).** `Alert`, `Avatar`, `Badge`, `Button`, `Card`, `Divider`, `Icon`, `Modal`, `Progress`, `Range`, `Spinner`, `Switch`, `TextArea`, `Toast` and `Tooltip` rendered through a native class from the `djust_components` crate, fell back to an inline `template` when the crate refused a value (a lazy string), and carried per-framework `_render_custom` f-strings no render reached. Each now has one renderer, a Python `_render_custom` that draws the crate's markup byte for byte (pinned against 284 renders captured from the crate, `python/tests/test_ui_simple_golden_4002.py`). `Checkbox`, `Input`, `ButtonGroup` and `Offcanvas` keep their template and lose the unreachable `_render_custom`. The crate (about 4k lines) and the 15 `djust._rust.Rust*` classes are gone: measured per construct-and-render the Python renderer is 1.6x-2.9x faster than the crate path was (`docs/components/RUST_COMPONENTS.md`, `scripts/bench_ui_simple_components.py`). Three fixes come with it: `Tooltip` writes the space before `title=` the crate dropped, and an explicit `id=` on `Range`, `Switch` and `TextArea` is the element's `id` and the label's `for` (the crate used `name`). `Component.__init__` now sets the constructor kwargs as attributes whether or not the class names a `_rust_impl_class`, and `update()` no longer passes `state` to a native constructor.
+- **`Alert`, `Badge`, `Button`, `Card`, `Dropdown`, `Modal`, `Progress` and `Spinner` in `djust.components.ui` render through their ui `*Component` twin, so their HTML changed (#4002).** Each maps its arguments onto its twin's (`AlertComponent`, `BadgeComponent`, ...) and returns the twin's markup, which follows `css_framework`. Every simple argument still works: one the twin has no equivalent for (`Badge.size`, `Card.variant`, `Modal.centered`, `Modal.dismissable=False`, `Spinner.sr_text`, an `Alert` variant outside info/success/warning/danger/error, a `Badge` or `Button` variant outside the eight Bootstrap colours, `link` included) raises a `DeprecationWarning` from the constructor and from `update()`, and is not drawn. Text is still escaped whatever it is marked as. What changes on a page: each element carries an `id` (the class's `id`); a shown `Modal` is `show d-block` with a backdrop and always draws its header and a default "Close" footer; a `Card` header is the card title; the default `Badge` loses `fs-6`. To keep the simple classes working without a view, the twins gained three things: `DropdownItem(url=..., disabled=...)` (the URL checked and escaped like any other; a `data` value with a `javascript:`, `vbscript:` or `data:` scheme, under any key, is written as `#`), and `standalone=True` on `AlertComponent` / `ModalComponent`, which the simple classes pass, so the Bootstrap close controls are `data-bs-dismiss` and a hidden Bootstrap modal is drawn hidden for `data-bs-toggle` instead of as nothing; under Tailwind and plain a standalone alert or modal draws no close controls, and a hidden standalone modal renders nothing with a `UserWarning`. A registered component's output is unchanged. `SpinnerComponent`'s Bootstrap class list no longer has a doubled space. The per-class list is under "Markup that changed" in `docs/website/guides/migrating-to-2.0.md`. The other 21 simple classes have no ui twin and are unchanged.
+- **The injected client is a core bundle plus chunks loaded on use (#4007).** The LiveView now injects `client-core.min.js` (about 11 KB smaller gzipped than the single bundle; `make sizes` prints both) and loads the uploads, virtual-list (`dj-virtual`), cursor-overlay, tutorial-bubble and service-worker modules from `static/djust/chunks/` only on pages that use them, before the client binds and connects; a page that uses none loads none. Each chunk `<script>` carries the client tag's CSP nonce, and its URL comes from `static()` (hashed names under `ManifestStaticFilesStorage`). `djust.uploads` and `djust.registerServiceWorker()` work as before: until the chunk loads they are stubs that load it and forward. A feature that a patch or `live_redirect` renders after init loads its chunk then, and a view that declares uploads loads the uploads chunk when it mounts. A chunk request that fails or stalls for 10 s is reported once and the page starts without it. `LIVEVIEW_CONFIG = {"client_bundle": "full"}` injects the single `client.min.js` instead; a hand-written `<script src="{% static 'djust/client.js' %}">` keeps loading the full bundle. See the [client bundle guide](docs/website/guides/client-bundle.md).
+- **`max_entries` now counts finished uploads that have not been consumed (#4118).** A slot holds a finished upload against `max_entries` until the view consumes it with `consume_uploaded_entries()` or drops it with `cancel_upload()`; a failed upload does not count. Before, only uploads in flight counted, so a slot accepted any number of finished files. An app that never consumes its entries (common with `writer=`, where the writer already stored the file) and uses `max_entries=1` now refuses the second upload on the same connection ("Upload rejected"). Consume or cancel entries once you have handled them, or raise `max_entries`.
+- **`DJUST_STATE_SAVE_INTERVAL` defaults to 2 seconds (#4164).** WebSocket and SSE turns now answer before their state is saved, and the state reaches storage within 2 seconds of the first unsaved change, at the connection's close, before a navigation, and at the ASGI `lifespan` shutdown. Measured with `tests/benchmarks/test_explicit_turn_cost_3997.py`, a turn with an interval costs about what a turn with no save costs: 3.4 ms instead of 5.2 (counter), 5.0 instead of 7.9 (dashboard), 18.6 instead of 26.6 (500-row table). The gain is the same for any interval above 0; 2 seconds keeps what a killed process (or a daphne stop) can lose to about one user action and a busy connection's writes to one per 2 seconds. Turns that navigate, write `request.session` or ask (`@event_handler(save=True)`, `self.save_state()`), views with `persist=` fields, `DJUST_STATE_STORE_STRICT` and the HTTP fallback still save before the reply. Set `DJUST_STATE_SAVE_INTERVAL = 0` (or a view's `state_save_interval = 0`) for the 1.x behaviour.
+- **Strict event parameters are the default (#4189).** `LIVEVIEW_CONFIG["event_parameter_policy"]` now defaults to `"strict"`: a handler whose parameters are unannotated, start with `_` or are named `view_id` / `component_id` is refused until it is converted (`djust.V033` lists them).
+- **`@event_handler(parameter_policy="strict")` is accepted and does nothing (#4205).** Strict is the only policy, so the argument is informational and no longer published to the browser. A binding whose handler the mount's contract does not list sends only its `dj-value-*` and positional arguments (never `data-*` or generated values); the server refuses an unknown handler. A `data-view-id` attribute is no longer a `djust.T022` finding, since strict never sends `data-*` (`dj-value-view-id` still is).
+- **`djust_exposure_inventory` reports what a djust 1.3 view exposed, not a legacy runtime (#4206).** Its JSON loses each name's `conditional` key and the per-view `persists_today` flag, the text report loses its `reconnect: fresh mount` note and is headed "Names a djust 1.3 view exposes implicitly", and both destinations are described as 1.3 behaviour; `--fix` is unchanged. The last internal legacy-exposure predicates (`uses_legacy_exposure`, `require_legacy_state_api`) are deleted, and a sticky or embedded child's ancestry now accepts only explicit-policy ancestors.
+- **The SignaturePad's `max_bytes` default and ceiling is 60,000 (#4207).** The strict event collector refuses a text value over 65,536 characters, so the old 200 KB default produced a "Signature saved" status for a frame that never left the browser. The hook now clamps its cap, reports a refused send in its status region, and a `dj-poll` inside a component reaches the host view again unless the component's own contract lists the handler.
+- **Partial render reuses the children of a top-level `{% if %}`, `{% with %}` or `{% block %}`, and a tag that reads only its arguments (#4315).** A wrapper that re-renders (its condition read a changed key, or it holds a custom tag or `{% include %}`) now renders its body child by child, reusing each child whose own inputs did not change, so a `{% for %}` nested in `{% if show %}` is no longer redrawn when only a sibling's key changed (the #4124 repro: 21 filter calls on a `count` change, now 0). A binding child (`as <name>`, an assign tag, an include) or an earlier binding node still re-renders the children after it. A tag handler can declare `READS_ONLY_ARGS = True` (with `ALSO_READS` for any context name it reads besides its arguments); a use that binds nothing then depends on its operands instead of re-rendering on every partial render. `{% url %}` (which also reads `request`) and `{% static %}` declare it; `{% now %}`, `takes_context` tags, raw `@register.tag` nodes and Django library `simple_tag`s do not.
+- **A connected view holds about a third less memory (#4319).** The Rust
+  side keeps the same data in smaller shapes: an element's attributes are a
+  sorted vector rather than a hash table (`djust_vdom::Attrs`, the same map
+  API, iterating in name order); a node's `text`, `key`, `djust_id` and
+  `cached_html` are `Option<Box<str>>` rather than `Option<String>`; a value
+  and a dict key in the Rust copy of the state are 40 and 32 bytes rather
+  than 80 and 48 (`Value::Object` and the name and fields of
+  `Value::NamedTuple` are boxed, as is `ObjectKey::Other`); and the
+  text-region index keeps positions only and reads each node's text from the
+  tree. A ~100 KB table with its 880 rows in state went from 4.19 MB to
+  2.69 MB per view and a ~100 KB page of markup from 1.49 MB to 1.03 MB; the
+  table's ceiling in `test_view_memory.py` drops from 4.5 MB to 3.0 MB, and
+  the scaling guide's per-view memory formula and tables are re-measured.
+  Nothing sent to the browser changed: patches, wire snapshots and the
+  regenerated VDOM diff fixtures are byte-identical (the provenance
+  site inventory, `provenance_flatten_sites.txt`, changed only because the
+  source lines it lists did). The target for a ~100 KB table is revised from
+  the provisional 2 MB to the 3.0 MB ceiling (measured 2.69 MB): the Rust
+  copy of the state that remains is deliberate, since rebuilding it from
+  Python on every turn would cost about 3.7 ms for 1,000 rows, against the
+  one changed row a list-item delta converts now.
+- **Change detection digests plain data natively (#4325).** The pre/post event snapshot and the Rust state sync no longer build a Python fingerprint tree and BLAKE2b-hash it for a container of plain data (exact `dict` / `list` / `tuple` of builtin scalars): one Rust walk (`djust._rust.plain_digest`) returns a keyed 128-bit digest, plus per-row digests a list's item delta compares. Anything else (a model, a set, a subclass, an oversized or too-deep value) is walked in Python as before, so a value's kept fingerprint is always the same kind. On the 1,000-row one-cell benchmark the WebSocket turn p50 drops by about 5.5 ms (15.6 to 10.0 ms, interleaved runs on a shared 4-vCPU container). The `native_fingerprints` per-turn switch turns it off for the frame oracle.
+- **A `{% for %}` re-renders only the items that changed (#4325).** Rust keeps the HTML of each item of an outermost loop from the previous render, keyed by index and a 128-bit keyed hash of the item value, and reuses it when the item, the list length, the render settings (autoescape, `string_if_invalid`, l10n, timezone, dj-if markers) and the loop's place in the template are all unchanged. A body that reads anything but the loop variables and `forloop`, uses `cycle`, `ifchanged`, `regroup`, `include`, a nested loop that reads anything but the loops' own variables (see the nested-loop entry), a custom or time-dependent filter, or a value with a safe/unsafe mark, always renders; so does an item whose render read Python live. A loop not rendered for 64 renders is dropped. Switch: `djust._per_turn` `loop_item_render`. A seeded differential fuzz (`DJUST_FUZZ_4325_SEEDS`) checks it against a full render and catches a deliberately broken store.
+- A turn no longer scans a context list for a Model or QuerySet when the post-event snapshot already proved that very list is plain data (`plain_model_scans` per-turn switch). Saves about 0.5 ms per turn on a 1,000-row list (#4325).
+- **The per-item loop store keeps rows with nested loops (#4325).** A `{% for %}` whose body holds a nested `{% for %}` reading only the loops' own variables (and `forloop`) now has its unchanged rows served from the previous render, as a flat body already had; before, such a table re-rendered every row on every change. A loop nested in a row being stored renders without the per-item content cache, so its parse placeholders are never stored. On a 1,000-row table with a nested loop per row, one changed cell takes about 17 ms per turn instead of about 30 ms. Switched by `djust._per_turn` (`loop_item_nested`) for the frame oracle.
+- **Cheaper render tail for a one-cell change in a large list (#4325).** The text-region fast paths of `render_with_diff` now decide against the previous VDOM without touching it and then rewrite its changed text nodes in place, instead of cloning the whole tree (about 6,000 nodes for a 1,000-row table) and dropping the old one. The per-item loop store hashes each item in one walk that feeds both of its keyed hashers, and appends a stored item's HTML without copying it first. Output, patches and store hits are unchanged. On the 1,000-row table with one changed row, `RustLiveView.render_with_diff` drops from about 3.4 ms to about 1.6 ms (parse phase 0.9 ms to 0.05 ms).
+- **A handler that changes a few rows of a long list sends Rust only those rows, and a render that changes several text nodes skips the parse (#4325).** When the event snapshots show that only some rows of a list changed in place (at least 16 rows, at most a quarter changed, same object and length), the state sync converts just those rows and replaces them with the new `RustLiveView.update_state_items`, instead of converting and sending the whole list. Any other change, or a refusal from Rust, takes the whole-list path (switch: `djust._per_turn` `list_item_deltas`). The text fast path in `render_with_diff` now also takes a diff that touches up to eight text nodes, not only one, and falls back to the full parse on any doubt. One changed cell in a 1,000-row list: turn p50 about 22 ms to 20.5 ms over the WebSocket, with the sync's Python time down from 5.1 ms to 2.3 ms; a two-cell change renders in about 8 ms instead of 15 ms. The per-render state-backend serialization the issue asked about no longer happens (measured: 0 calls per turn). Numbers in `docs/performance/turn-transports-baseline.md`.
+- **Post-patch rescans and hook updates follow the change (#4328, #4001 slices 2 and 3).** After an incremental patch, every rescan in `reinitAfterDOMUpdate` / `bindLiveViewEvents` (dj-poll, dj-click-away, dj-shortcut, dj-mouseenter/leave, dj-mounted, dj-loading registration, native dropdown observers, dj-upload / dj-upload-drop, dj-patch / dj-navigate and `aria-current`, draft fields and `data-draft-clear`, colocated hook scripts, offline indicators, dj-scroll-into-view, chunk loading) visits only the subtrees the patch inserted and the elements whose attributes it changed; dj-virtual and dj-viewport-* rescans are skipped on a page that tracks none and the patch inserts none. The page is still scanned on mount, morph, navigation, a reconnect, a patch that adds/removes/re-marks a LiveView root, and the first patch after a batch applied without a change record (a child or sticky view's update, a cached answer). **Hook contract change:** after an incremental patch, `updated()` runs only for hooks whose element or subtree the patch changed; a hook definition with `updateOn: 'render'` keeps getting it after every render, and a full morph still updates every hook (docs/website/guides/hooks.md, rule 4). What changed between patches is bound by the next one, as when every patch scanned the page: one long-lived observer adds the elements inserted or re-attributed outside any patch (by a hook's `mounted()`, app code, a virtual list's scroll render) to the next patch's record, and a `dj-hook` element seen before its hook was registered mounts on the next update once it is. Also: a `SetText` resolved by `parent_d` looks the parent up inside its own view (a `{% live_render %}` child or sticky view numbering the same dj-id is skipped) and leaves a parent inside a `[dj-virtual]` list to the path; the page-POST fallback strips id hints inside `VirtualUpdate` patches too; the scoped dj-model rebind binds `dj-model.debounce-N` only on the elements the full scan does. Unrelated counter update, headless Chromium, p50: 0.2 / 0.3 / 1.6 ms at 100 / 1,000 / 10,000 elements after slice 1, 0.1 / 0.2 / 0.2 ms now.
+- **`accordion`, `accordion_item`, `form_array` and `app_shell` draw through one renderer on both engines (#4331).** The Django nodes render their body and call the native handler, so a template draws the same bytes under Django's engine and the Rust engine. An accordion item opens when the accordion's `active` names it or its own `open=` is true, takes the accordion's `event` unless it sets its own, and body that is not an item is kept. The accordion uses the `dj-accordion*` markup on both engines (the Rust engine drew `accordion-item` / `accordion-trigger`), always draws each panel (`hidden` while closed), and escapes a marked-safe title. `form_array` takes the raw-body route on the Rust engine, so its body repeats once per row there too (the body is compiled by Django's engine, as `tabs`' is, so it cannot hold a Rust-only tag such as `{% call %}`).
+- **`{% badge %}`, `{% avatar %}`, `{% progress %}` and `{% pagination %}` are one implementation on both engines (#4331, #4002)**: the native handler draws the `dj-*` BEM markup (`dj-badge`, `dj-avatar__img`, `dj-progress__fill`, `dj-pagination__btn` ...) and the Django tags are simple tags that call it, as `{% data_table %}` has since #3869. The Rust engine's output moves off the old `badge-<status>`, `avatar-image`, `progress-wrapper` and `pagination-btn` classes (the pager's "Page N of M" text is gone); the Django engine now escapes a marked-safe operand and no longer reproduces the inclusion templates' newlines.
+- **`filter_bar`, `filter_select`, `filter_date_range`, `filter_search` and `page_header` draw through one renderer on both engines (#4331, #4002 slice 4).** The Django `{% filter_bar %}` default id is now the constant `filter-bar` (it was random per render), a marked-safe or lazy operand is escaped like any other string (as the Rust engine always did), and a `{% page_header_actions %}` that draws nothing leaves no empty `dj-page-header__actions` div on either engine.
+- **Layout tags draw through one renderer (#4331).** `app_sidebar`, `app_header`, `app_content`, `toolbar_separator`, `toolbar_overflow` and `page_header_actions` are thin Django wrappers over their native handlers, as `data_table` is (#3869); the markup is unchanged. Standalone, the Django `app_*`, `toolbar_separator`, `toolbar_overflow` and `page_header_actions` tags now draw their own element instead of an empty string.
+- **`sidebar`, `nav_menu` and `toolbar` draw through one renderer (#4331).** `sidebar`, `sidebar_item`, `sidebar_section`, `nav_menu`, `nav_item` and `toolbar` are thin Django wrappers over their native handlers, so both engines draw the same bytes. Under the Django engine: body content in a `{% sidebar %}` that is not an item is kept, a `{% sidebar_item %}` body is its submenu whatever it holds, the `dj-sidebar__item--level-N` class is gone, a marked-safe `sidebar_section` label or `nav_menu` brand is escaped, a `{% nav_item %}` outside a menu draws its item, and an item without an `id` is no longer drawn active when the sidebar has no `active=`. Under the Rust engine the sidebar's `active=` now reaches its items, and `sidebar_item active=True` marks that item. A `{% toolbar %}` with no `id=` gets `toolbar-<hash of its arguments>` on both engines (it was the constant `toolbar` natively); two identical calls in one Django render no longer get a `-2` suffix.
+- **Rust dependencies: PyO3 0.30.1, smallvec 1.16.6, stacker 0.1.25, uuid 1.29.3.** No API changes in djust; the SBOM (`djust.cdx.json`) is regenerated.
+
+### Fixed
+
+- **QuerySet: `{{ u.groups.all.0.name }}` reads one row, and `{{ u.groups.all|length }}` / `{% if u.groups.all %}` build no row text (#3862).** The template extractor keeps an index read off a related manager's `all` when it is the only read of that `all` (`groups.all.0.name`), and both queryset serializers read `all()[:index + 1]` (a SQL `LIMIT`, or a slice of a prefetched cache) instead of serializing every row of the relation. A read of an `all` for its length or truthiness only (`|length`, a bare `{% if %}` / `{% if not %}`, `|length` in a comparison) is filed as `groups.all.__len__` and ships the QuerySet's `count()` as placeholders, so `str(row)` no longer runs per row; for `Permission` rows, whose `__str__` reads `content_type`, that removes one query per permission. Beside any other read of the same `all` both reads keep their previous shape. `template_paths()` and `djust_audit` still report the plain read (`groups.all`, `groups.all.name`).
+- **Uploads: `max_entries` counts finished uploads, a writer's refusal reaches the browser, and the view's `cancel_upload()` settles the browser's upload (#4118).** `max_entries` now counts every entry the slot holds, finished ones too, until they are consumed or cancelled, as documented (a slot with `max_entries=5` used to accept any number of finished uploads); a failed upload does not count. A new `djust.uploads.UploadRefused` (an `UploadError` subclass) raised from a writer's `open()`, `write_chunk()` or `close()` is a refusal: it is logged at WARNING without a traceback, and its `message`, one line of at most 200 characters, becomes the upload's error, the `error` in the `djust:upload:progress` detail and the `uploadFile()` rejection message (never `sdk_exc`). Every other exception, including the object-storage backends' `UploadCredentialError` / `UploadNetworkError` / `UploadQuotaError`, keeps the fixed text and the logged traceback. `UploadMixin.cancel_upload()` now tells the browser at the end of the turn (status `cancelled`, "Upload cancelled by the server."); the client rejects the pending `uploadFile()` promise on a `cancelled` status and stops sending chunks for an upload the server ended.
+- **Theming: a design system can now set the monospace font (#4119)** — `TypographyStyle.mono_font` (default unchanged) is written to `--font-mono`, and the base `code, .code` rule uses `var(--font-mono)` so a theme or app override reaches `<code>` as it does `.kbd` and `.font-mono`.
+- **A `start_async` / `@background` result that changed nothing no longer renders the whole template (#4123).** The result paths (the runtime's `_render_async_result` and the consumer's background render) synced and rendered unconditionally; with no changed key Rust took its "no change info" branch and rendered the full template to send `patches: []`, which happened on every later completion when several tasks finished close together. `_sync_state_to_rust()` now returns whether the next render has anything to do (`False` only when no key changed or was removed since the last sync, no render was requested, and no context value is an object the change detector compares only by `id()`), and an async result (and its error arm, when a `handle_async_result` ran) skips the render and the frame when it says no and the frame's snapshot fields hold nothing new (no client-persisted token, same turn serial as before the commit). The rule for the skip: it never drops what the unconditional render delivered, so an opaque value (a plain object whose attribute a callback writes in place) always renders, as before; a failed task with no handler and a cancelled task's settle frame are still always sent. Pending work (push events, deferred callbacks) is still flushed, and the client's loading state still ends with the batch's `async_complete` frame. A result that changes state, through `handle_async_result` or by mutating a list in place in the callback, still patches.
+- Partial render no longer redraws an unchanged `{% for %}` (or any later node whose inputs did not change) after an inline `{% url %}`, `{% static %}`, `{% now %}`, `{% querystring %}`, context-free `simple_tag`/`inclusion_tag` or component tag used without `as`. "Reads unknown keys" (the tag re-renders itself) is now separate from "may bind names" (later siblings re-render); assign tags, `as <name>` forms, raw `@register.tag` nodes, `takes_context` tags and `{% include %}` still re-render what follows. Handlers opt in with the new `TagHandler.BINDS_ONLY_AS_VAR` declaration (#4124).
+- **With `DJUST_STATE_SAVE_INTERVAL` set, an HTTP fallback request that changes
+  nothing no longer takes the tab from its socket (#4164).** It used to record a
+  holder token on restore, which `SessionMiddleware` stored, so the socket's
+  later flush of its newer, unsaved changes was refused and the page told to
+  reload. A fallback request now claims the tab only with a save that changes
+  the stored state; one that does still fences the older socket out.
+- **A reconnect's request to save reaches the old connection in the same process without a channel layer, and its failures no longer drop the change (#4164).** The holder in this process is asked directly; one in another process still needs a shared channel layer, and new system check `djust.C046` (info, `DEBUG` off) says so when the interval is on and the layer is missing or in-memory. A flush request is now retried like the interval's (one refusal keeps the change owed) and waits at most 0.5 s for the turn locks. A reconnect whose storage already caught up reads its session again, a `state_serial` more than one past the store is ignored, and an SSE stream's close untracks presence before its state flush.
+- **The session write of an over-limit turn is ordered with the connection's
+  other saves and bounded by the save deadline (#4164).** With
+  `DJUST_STATE_SAVE_INTERVAL` set, a turn that asked for its save (`save=True`,
+  `save_state()`, a `request.session` write) and whose state was over its size
+  limit stored its session writes outside the runtime's save queue, with no
+  deadline: it could land before an earlier save still running. It now goes
+  through the same queue; past the deadline the turn is served and the write
+  lands in order.
+- **An event queued on a hidden activity inside an embedded child is delivered to the child (#4179).**
+  A `{% live_render %}` child's event sent to a hidden `{% dj_activity %}` of the
+  child ran at once, and a child's queue was never drained. It is now queued on
+  the child and released by the `db_notify` drain and the event-turn drain (the
+  child's own handler, the page's handler or `handle_info` showing the panel),
+  with the checks of the child's own events, an `embedded_update` answer and the
+  socket kept open. A release for a child no longer on the page is dropped.
+- **Debug logging no longer aborts event dispatch.** `djLog` swallows a throwing page-installed `console.log` hook; strict event params are null-prototype objects that a hook doing `args.join(" ")` cannot stringify, which dropped every event under `djustDebug`. (#4189)
+- `run_pre_mount_auth` no longer resolves and binds the tenant a second time on an explicit view that mounts: the tenant is resolved once, before authorization.
+- **An explicit view no longer keeps stale QuerySet-method rows across renders** — the evaluated rows behind `{{ qs.count }}`-style reads (`_all_method_rows`) are rebuilt on every real context evaluation, so a name that stops holding a QuerySet releases them instead of answering a later value from them (#4196)
+- **An `AudioMixin` view's `_audio_` attributes are never saved by automatic state (#4197).**
+  The mixin documents its `_audio_` namespace (scope, cursors, the manifest cache)
+  as ephemeral, but only the legacy private-state API honoured that: on an explicit
+  view an application cursor such as `self._audio_cursor` set in `mount()` was saved
+  with the automatic state and put back on the next request. A mixin can now declare
+  `_djust_unsaved_prefixes`, a tuple of private-name prefixes automatic state
+  neither saves nor restores; `AudioMixin` declares `("_audio_",)`.
+- **`date`/`time` match Django at DST gaps and folds, for local-mean-time offsets and at the ends of the calendar (#4222).** A wall clock that falls in a DST gap or fold (in the active zone, or in the value's own zone after `|timezone:`, inside `{% localtime off %}` or under `USE_TZ = False`) now renders `e`, `T`, `O`, `Z` and `I` empty, as Django does, and `U`/`r` read it with the pre-transition offset (previously `EDT`/`-0400` for a fold and `+0000` for a gap). `O` truncates a seconds offset while `c` and `r` print it (`-04:56:02`), `Y` is zero-padded (`0001`), and `U` is exactly `int(dt.timestamp())`: correctly rounded, then truncated toward zero.
+- A patch-compression `html_update` (more than 100 patches, HTML smaller) no longer drops the VDOM baseline, so the next event is answered with patches instead of full HTML again. Over SSE the follow-on frame also kept a consecutive version (the reset restarted it at 1 and the client fell back to recovery). The page-POST fallback keeps its renderer's baseline the same way (#4229).
+- On the page-POST fallback, a whole-page answer chosen for its size after the client's render token matched is marked `whole_page: "size"`, and the client no longer counts it as a digest miss, so two such answers in a row no longer withhold the token for the next eight events (#4229).
+- **`djust.V002` no longer reports a view with no `mount()` that declares
+  `state()` fields (#4233).** Such a view initialises its state through the
+  descriptors, so the "define mount()" advice did not apply.
+- **`djust.T010` also flags `dj-click` with `dj-value-view`, `-tab`, `-page` and
+  `-section` (#4237).** These send the same navigation state as the `data-*`
+  forms. The match now stops at the end of the attribute name, so
+  `data-viewport`, `data-views`, `data-tab-id`, `data-page-number` and
+  `data-view-id` style names no longer trigger a false positive (no template in
+  this repository was affected).
+- **_on_sticky_update works for explicit sticky children; the Sidebar example is fixed (#4238).**
+  The hook was never reached for an explicit sticky child (every input change
+  remounted it), and the sticky guide's `Sidebar` example set `self.section`
+  without `state()`, which an explicit view never renders. The child now names
+  its updatable inputs in `sticky_update_inputs`, and the example declares
+  `section = state("home")`.
+- **The binding check models `dj-value-*` on fixed-payload directives (#4240).**
+  `dj-viewport-top`, `dj-viewport-bottom`, `dj-mutation`, `dj-copy-event`,
+  `dj-dialog-close-event`, `dj-auto-recover` and `dj-paste` collect the element's
+  `dj-value-*` on the strict path, so `djust.T020` now reports a name the
+  directive generates itself (the browser rejects it), an undeclared value, and a
+  required parameter a `dj-value-*` supplies. Legacy handlers are unchanged.
+- **`dictsort` / `dictsortreversed` by a method key the template also prints renders empty, as on Django (#4267).** `{% for u in users|dictsort:'get_username' %}{{ u.get_username }}{% endfor %}` sorted the rows by the called value, because a path-JIT row files a called method's result where a column would be; Django's `dictsort` never calls a method key, compares bound methods and renders `""` (one row is never compared and still renders). For a template that sorts by a method it also prints (the new `extract_printed_item_key_reads`, or a `dictsort:<variable>` naming a method), the JIT re-keys that entry of each row as a `djust.serialization.CalledName` (a `str` subclass), which the engine reads as `ObjectKey::Method`: a `str` key everywhere except the engine's `dictsort`, which hands Django an unorderable object for it. Rows of every other template are untouched. Explicit LiveViews and `DjustTemplateBackend`, `QuerySet` and `list[Model]` rows.
+- **A related object printed whole beside a field read off it prints its text, not a partial dict
+  (#4269).** `{% for p in perms %}{{ p.content_type }} {{ p.content_type.model }}{% endfor %}`
+  printed `{'model': 'logentry'}` where Django prints the object's `__str__`: the extractor filed a
+  whole read only for a one-segment variable, so the nested dict carried `model` alone. A dotted
+  whole read is now filed too and settled into `content_type.__str__` when the same path is read by
+  field (not when it is iterated, tested in a condition, bound by `{% with %}`, indexed, or a
+  relation's `all` / `first` / `last`); both row serializers already answer it with the floored
+  model identity.
+  A non-model value read whole beside a field (`{{ u.date_joined }}` with
+  `{{ u.date_joined.year }}`) prints Django's localized text.
+- **`{% for u in users.all %}` and `{{ users.all.count }}` over a top-level QuerySet in LiveView
+  state render Django's rows and count (#4270).** They rendered empty on both exposure policies:
+  the JIT serialized each row with an `all` subtree no row has, and the render sidecar held the
+  QuerySet only for `count` / `exists` / `first` / `last`. `all` is now a QuerySet root method
+  the sidecar answers (`QUERYSET_ROOT_METHODS`), and the row paths read `all.x` as `x`.
+  The sidecar's `all()` answers from the rows the JIT already fetched (with their prefetched
+  relations), so `{{ users.all.count }}` adds no query and a nested `u.groups.all` loop under
+  `users.all` costs what it does under `users`.
+- **A legacy LiveView renders `.values()` / `.values_list()` rows held in state like Django
+  (#4271).** `{% for r in rows %}{{ r.username }}{% endfor %}` over `User.objects.values("username")`
+  printed `;;;` on `exposure_policy = "legacy"`: the legacy context serializer handed every
+  QuerySet to the JIT's model serializer, which reads a dict row empty. A projection now skips the
+  JIT and is listed by the normalize pass, as on an explicit view; its `<name>_count` key stays.
+  A projection names its columns, so it prints every column it names, as explicit views and Django
+  do: a legacy `.values("password")` now prints the hash it used to drop (projections never had the
+  serialization floor).
+- **A method-read QuerySet whose rows read a related model whole no longer runs a query per row
+  (#4272).** `{{ perms.count }}` beside `{% for p in perms %}{{ p.content_type }}{% endfor %}`
+  filed `count` with the row paths, so every row took the codegen fallback, which shipped the
+  `ContentType` itself; `normalize_django_value` then auto-called its `get_*` methods (6 queries
+  for 5 rows, 1 without the `.count`). The method paths a QuerySet answers are dropped from the
+  row paths, and the codegen leaf ships a related model's text as the Rust serializer does. A
+  QuerySet read only through its methods ships identity rows instead of building a serializer
+  every render, and the expected-key count is computed from the row paths (its cache was keyed by
+  template and name only).
+- A page that extends a base template answers its first HTTP-fallback event with patches on Django 6.0, not the whole page (#4283): the page GET now carries the render digest on the authenticated-root path, and the tracking flag alone no longer reads as an embedded child. The `test_the_markdown_stream_starts[http]` demo test failed on 6.0 because of it.
+- **A page with many interactive components no longer fails, and a small HTTP answer no longer carries the whole parameter-contract manifest (#4307).**
+  Under strict parameters each DropdownMenu row repeated its handlers' contracts in the page's manifest,
+  so past about 90 rows the manifest went over its 64 KB limit and the page answered 500. The manifest
+  (wire version 2) now lists each distinct contract and handler table once, and each component only
+  names its table: a 500-row collection's manifest is about 9 KB instead of about 360 KB, and the page
+  renders and posts. A manifest the browser already holds is sent as its digest instead of in full, on
+  the HTTP fallback (the browser names it in `X-Djust-Parameter-Contracts`), the WebSocket and SSE.
+  A counter's patch answer goes from 875 bytes to 243. Bundle: `client.min.js.gz` 88,622 → 88,916 bytes.
+- **An event released from a hidden `dj_activity` now answers with its own `ref`, and every `async_pending` names its `async_batch`** (#4309). A queued event (the root's or an embedded child's, released by an event turn or a `db_notify`) was answered without the `ref` it was sent with, and the `db_notify` drain's `async_pending` had no batch token and its work sent no `async_complete`. The client matched such frames by guessing from the last event sent, so a released answer could settle an unrelated pending request. The guess is gone: the client settles a request only by its `ref`, and ends background loading only on its batch's `async_complete`. An answer that sends `async_pending` without a batch token now ends the loading state right away instead of leaving it on.
+- **A rate-limited WebSocket event no longer leaves its request pending** (#4309). The global rate-limit gate now puts the dropped event's `ref` on its `rate_limit_exceeded` frame, and the client settles that request: its loading state ends, its `sendEvent` promise resolves, and the tick, broadcast and async frames held back behind it are applied.
+- `{{ v }}` of an `OrderedDict` through `DjustTemplateBackend` now renders what Django renders (`OrderedDict({...})`) instead of a plain dict; key lookup, iteration and `|dictsort` are unchanged (#4313).
+- **A `{% for %}` loop variable is never reported as an unsupplied name (#4318).** With `DJUST_UNSUPPLIED_NAMES = "error"`, `{% for head in items %}{{ head }}` failed every real request: `template_paths()` lists a loop variable as a root of its own, and Django's `View.setup()` sets `self.head` on every view, so the check took `head` for a name the view holds. `template_paths()` now folds a loop variable onto its iterable as its docstring says, and the attributes `View.setup()` adds (`head`, `request`, `args`, `kwargs`) no longer count as held by the view. The test client never calls `setup()`, which is why only a real request showed it.
+- **`cached_db` sessions: a late save can no longer leave an older copy in the cache (#4324).** The merging save writes the database under the row lock and touches the cache after the commit, outside the lock. It used to write the merged session there, so a late writer's cache write could land after a newer one's, and reads returned state one save older than the database until the entry expired. It now deletes the cache entry, which is the same in either order; the next read refills it from the database. Measured on PostgreSQL 16 with the late writer's cache step delayed: 0 stale caches in 20 rounds, where the old write was stale every time.
+- **An inline if's filter argument is now a dependency (#4325).** In `{{ a if c else b|add:x }}` the template analysis ignored `x`, so a partial render after only `x` changed kept the old text. It is now tracked like a `{{ b|add:x }}` argument (#787).
+- **A text value holding a NUL character now renders the same through the parse-skipping text paths as through a full parse (#4325 review).** The parser drops a NUL in body text, but the fragment and single-span text paths of `render_with_diff` sent it as is, so the page and the server's tree disagreed (`q\x00` against `q`). Those paths now leave such a change to the full parse.
+- **A text change that adds or removes the newline opening `<pre>` or `<textarea>` text, or contains a CR, now reaches the browser as the parser reads it (#4325).** The parse-skipping text paths of `render_with_diff` sent such a value raw (`SetText "\nx"`), where a full parse drops that newline and turns CR into LF, so the page and the server's tree could disagree. They now leave those changes to the full parse.
+- **QuerySet `.all` follow-ups (#4326).**
+  - A QuerySet held inside a dict or a list of dicts now renders on a LiveView when the template reads its own `all` or one of its methods: `{{ d.users.all|length }}`, `{% if d.users.all %}`, `{{ d.users.all.1.username }}`, `{{ d.users.count }}`. Reading a QuerySet method next to a loop over a relation of its rows also renders (`{{ x.groups.all.count }}` beside `{% for g in x.groups.all %}`, with `x` from `d.users`). Before, these rendered empty or `0`. The container now keeps a raw copy for the render sidecar, built from the rows the JIT already fetched, so no query runs twice.
+  - A to-many relation read only through a method, by index or for its length is no longer prefetched whole when the parent QuerySet is sliced and (parent rows) x (distinct light reads of that relation) is at most `LIVEVIEW_CONFIG['queryset_light_relation_max_parents']`. Each parent row then runs its own `COUNT` / `LIMIT` query instead. The default `1` never runs more queries than the prefetch would: one parent and one read replace one query with one. `0` always prefetches.
+  - `{{ d.users.count }}` / `{{ d.users.exists }}` on a QuerySet inside a container runs one `COUNT` / `EXISTS` query, as Django does, instead of fetching every row.
+  - `{% with n=u.groups.all|length %}` is read as a length, so no row text is built.
+  - `{{ u.groups.all.0 }}` reads one row instead of the whole relation.
+  - A relation's manager methods read without `.all` render on a LiveView: `{{ u.groups.first.name }}`, `{{ u.groups.last.name }}` and `{{ u.groups.first }}` beside a field of it. Before, the JIT shipped `{}` for `first` / `last` and they rendered empty. They now run under the same call guard and serialization gate as `.all.first`, in the Rust serializer and the codegen fallback alike. `count` and `exists` already worked and are now pinned too.
+- **Accordion ARIA, the Rust engine's `form_array` body and Django's `app_shell` body (#4331).** An accordion trigger's `aria-controls` named a panel Django's engine did not draw while the item was closed, and the Rust engine's items had no `aria-controls`, panel `id` or `role="region"`: every trigger now controls a drawn panel with `id`, `role="region"` and `aria-labelledby`. The Rust engine's `form_array` ignored its body and drew a text input per row; it now repeats the body per row with `row`, `row_index` and `forloop`. Django's `app_shell` dropped content outside the slot tags; it now keeps it, as the Rust engine did.
+- **Badge, progress and pagination fixes from the single renderer (#4331)**: the Rust engine's pagination now draws `<nav aria-label="Pagination">` with labelled buttons and disables Next on the last page; its badge writes the `Status: ...` text for screen readers; its progress class list has no trailing space; and a non-class `color=` such as `#336699` no longer leaks into the progress bar's class list on either engine (the default fill is drawn).
+- **`{% toolbar %}` groups the children between separators (#4331).** The Django tag wrapped each template node in its own `dj-toolbar__group`, so `<button>{{ x }}</button>` was split across three divs, and the Rust engine drew no groups at all. Both engines now wrap each run of children between `{% toolbar_separator %}` tags (or the overflow menu, or an end of the toolbar) in one group.
+- **An embedded child's `_cleanup_on_unregister()` runs when the page navigates away**, as it did for 1.3 children. Before, a navigation ran only `_cleanup_uploads()` and `_on_sticky_unmount()`, so whatever the hook frees (files, subscriptions) leaked until the socket closed. Each disposed view runs it once, including a sticky child the destination page drops.
+- **Open CodeQL findings resolved.** `djust.security.__all__` names (`get_max_age`, `DEFAULT_MAX_AGE`) are now visible to static analysis, `djust.live_view` no longer re-exports the unused `decode_private_model_refs` / `decode_state_roundtrip` / `encode_private_model_refs` (import them from `djust.serialization`) and exports `StateRoundtripJSONEncoder` in `__all__`, `AssignsSnapshot` / `ChangedKeys` define explicit value equality, and two dead locals were removed.
+
+### Security
+
+- **The template engine's date filters and timezone conversion moved from `chrono` + `chrono-tz` to `jiff` (#4222).** Both crates are marked unmaintained by RustSec (RUSTSEC-2026-0543, RUSTSEC-2026-0555); `Cargo.lock` no longer carries either, and their `osv-scanner.toml` exceptions are removed. The IANA tz database is bundled into the extension (no dependency on the host's `/usr/share/zoneinfo`). The RFC 3339 grammar and case-sensitive zone-name lookup are unchanged. Dates past 2037 now follow the zone's recurring DST rule, as Django does; `chrono-tz` had stopped at its last precomputed transition.
+- **Events routed to a LiveComponent or an embedded child view run the page view's per-event object-permission check on the WebSocket and SSE transports.** The page view's `get_object()` / `has_object_permission()` was re-run for the page's own events but not for an event carrying `component_id` (or a child's `view_id`), although such an event re-renders the page. Every view the event belongs to (the component's view, an embedded child's parents and the page view) is now checked before the handler runs; a refusal sends the same `permission_denied` error frame a page event gets, runs no handler and renders nothing. The HTTP POST event fallback already checked the page view first and is unchanged.
+- **`dj-model` accepts only fields bound in the branch the template rendered.** The `update_model` allowlist was every static `dj-model="<field>"` binding in the template source, across all `{% if %}` branches, so a field bound only inside a branch that was not rendered for a view instance (for example `{% if user.is_staff %}<input dj-model="note">{% endif %}`) was still writable by that instance's client. A binding now counts only when its template text rendered for the current state: bindings on always-rendered paths are granted as before, and a binding inside an `{% if %}`/`{% for %}` branch, an include or a lazy site counts while the last render emitted it. The bindings are recorded during the render itself (nothing renders twice; a node or loop served from a render cache contributes what it recorded when it rendered). A binding inside the body of a custom block tag (a Rust or library block tag, `{% ifchanged %}`, `{% filter %}`, an inclusion tag's template) never counts, because the tag decides what of its body reaches the page: list such fields in `allowed_model_fields`, which is unchanged. New system check `djust.T030` warns about them (following a literal `{% include %}` in such a body), and a block-tag handler that always emits its body may declare `EMITS_BODY = True`: the built-in component tags that do (`card`, `accordion`, `tabs`, `form_group`, `fieldset`, the layout tags and the others in `djust.components.rust_handlers.EMITS_BODY_TAGS`) keep working unchanged, while `modal`, `dropdown`, `await`, `nav_item` and `{% call %}`/`{% slot %}` bodies need `allowed_model_fields`. Embedded `{% live_render %}` children record the template text their render executed, under Django's engine and djust's own backend alike. Rendered data — an unquoted `attr={{ value }}`, a `dj-model="{{ field }}"`, `|safe` HTML — can never add a field.
+- **Presence identifies an anonymous user by an opaque id instead of the session key.** `PresenceMixin.get_presence_user_id()` used to return `anon_<session_key>` for an anonymous user, and that id is shared with every participant in the room (`list_presences()`, join/leave records, the `LiveCursorMixin` `cursor_move` broadcast and `get_cursors()`). It now returns `anon_<hmac>`: 128 bits of an HMAC-SHA256 of the session key under `SECRET_KEY` (`django.utils.crypto.salted_hmac`, dedicated salt), via the new `djust.presence.anonymous_presence_id()`. The id is still stable for the session, so tabs of one browser session still count as one presence. With `presence_unique_per_connection = True` the `anon_conn_` id is likewise an HMAC of the transport session id (`anonymous_connection_presence_id()`). An override of `get_presence_user_id()` that returns a session key, or code that matched presence ids against `anon_<session_key>`, should use `anonymous_presence_id()`.
+
+### Documentation
+
+- **An incremental Django workflow, as a guide and a running example (#3659).** `examples/demo_project/djust_workflow` adds djust to an ordinary Django model one piece at a time: a list with a URL-backed filter and pagination (`params_form`, `live_patch`, back/forward), a detail page, create and edit forms with server validation (`FormMixin`, `ModelFormMixin`), login, role and object permissions, `dj-loading` feedback, a visible error state, and a table of what survives a reconnect. The new guide `incremental-django-workflow.md` walks through it, and a test fails when one of its snippets drifts from the example's source.
+- **The deployment guide states what a graceful stop keeps under each ASGI
+  server, with `DJUST_STATE_SAVE_INTERVAL` set (#4159).** Recorded per server by
+  `test_what_a_graceful_stop_keeps_per_server` (the multinode harness now runs a
+  node under uvicorn, daphne, hypercorn or gunicorn + `UvicornWorker`, with the
+  application answering `lifespan`): uvicorn and gunicorn close the socket and
+  run `lifespan`, so nothing is lost; hypercorn 0.18 keeps an open WebSocket
+  open until the client leaves (its close saves) or the process is killed;
+  daphne 4 delivers neither, so a graceful stop loses up to one interval.
+- **A handler that sends the browser to another page with its own push event
+  is documented to use `@event_handler(save=True)` or `self.save_state()`
+  (#4160).** Such a turn is not seen as navigation, so with
+  `DJUST_STATE_SAVE_INTERVAL` set it could be deferred and the next page load
+  before the state was stored. The save-frequency guide says so, and a test
+  shows both means store the state before the reply that precedes the push.
+- **The holder fence under the row lock, measured (#4164).** A late writer paused between its read and its write never lands in the database on PostgreSQL (`db` and `cached_db`, 300 rounds each) and lands every time on SQLite. On `cached_db` the cache, written after the commit and outside the lock, can keep the older copy (once in 600 rounds). `save-frequency.md` records all three, and `test_holder_fence_row_lock_4164.py` reruns the race when `DJUST_PG_RACE_DATABASE` or `DJUST_MYSQL_RACE_DATABASE` is set. The per-turn cost with and without an interval is recorded there too, from the extended `test_explicit_turn_cost_3997.py`.
+- **The state-survival guide has a table per save mode (#4164).** Saved before
+  every reply against saved on an interval, each with a graceful-stop and a
+  kill column, every cell recorded by `test_save_mode_graceful_stop` and
+  `test_save_mode_kill` against real processes.
+- **The 2.0 upgrade guide is rewritten around the legacy removal (#4208).** Each 1.3 capability is shown with its 2.0 spelling, the system check that reports it (or the `ImproperlyConfigured` that refuses it at import or startup) and whether `djust_exposure_inventory --fix` rewrites it; the retired `djust.V033` / `djust.T028` are replaced by `djust.V016` / `djust.T020` in the check table and the finish list, the guide no longer describes a legacy view as something 2.0 runs, and every code block in the guide is executed by the test suite.
+- **Every teaching doc now passes event arguments as `dj-value-*`, and the guard sees all of them (#4235).** `test_docs_pass_event_arguments_as_dj_value` scanned only `docs/website` and only `dj-click`-style attributes; it now covers every document in `DOC_FILES` and the `dj-click-away`, `dj-mounted`, `dj-shortcut`, `dj-window-*` and `dj-document-*` bindings. 29 `data-*` arguments in `docs/EVENT_HANDLERS.md`, `docs/BEST_PRACTICES_AI.md`, `docs/ai/` and `docs/components/` became `dj-value-*`, and the "`**kwargs` is required" section of `EVENT_HANDLERS.md` now states the 2.0 rule (the signature is the contract).
+- **Handlers in the docs no longer teach a `**kwargs` catch-all they never read (#4239).** 189 handlers in 61 `docs/website` guides took `**kwargs` and dropped it, which teaches the retired 1.3 rule that a handler must accept every name. They now declare only the arguments their binding sends, handlers that read the catch-all keep it typed, and `test_website_handlers_have_no_absorbing_catch_all` fails a guide that adds an unread `**` catch-all to a decorated handler. `CLAUDE.md` and `docs/EVENT_HANDLERS.md` state the same rule.
+
+### Removed
+
+- **The per-effect wire frames and the HTTP answer's `_*` keys (#3658).** The
+  `patch`, `html_update`, `noop`, `embedded_update`, `push_event`, `flash`,
+  `page_metadata`, `layout`, `navigation` and `navigate` frames are gone, and so
+  are the HTTP answer's `_flash`, `_page_metadata`, `_push_events`, `_layout` and
+  `_navigation` keys. Their content is the `render` frame's DOM part and its
+  `effects` list; an effect is the old frame with `type` renamed to `kind`.
+- **djust.react, ReactMixin and capitalized component tags are removed (#4006).** Importing `ReactMixin`, `react_components` or `register_react_component` from `djust` raises `ImportError` naming the `dj-hook` replacement, and `<Button />` in a template is a template error (an uppercase spelling of an HTML element such as `<DIV>` is still HTML). The client's `initReactCounters` is gone.
+- **The legacy exposure and parameter policies are refused (#4199).** `exposure_policy = "legacy"` fails when the class is created (and on construction), `@event_handler`/`@server_function(parameter_policy="legacy")` when the decorator applies, `cancel_async_on_disconnect = True` when the class is created, and `LIVEVIEW_CONFIG`/`DJUST_CONFIG` `event_parameter_policy`, `reauth_on_event` and `reauth_server_turn_interval` at startup, each with `ImproperlyConfigured` naming the replacement. `"explicit"` and `parameter_policy="strict"` are accepted and do nothing. `python manage.py djust_exposure_inventory --fix` still reads 1.3 code. System checks `djust.V028`, `djust.V032`, `djust.C045` and `djust.V036` are retired.
+- **The legacy branches for embedded, lazy and sticky children are deleted (#4200).** With `exposure_policy = "legacy"` refused (#4199), every `{% live_render %}`, `dj-lazy` and sticky child takes the explicit path: a lazy attribute child keeps only its `persist="server"` fields between page POSTs (#4174), and a released view refuses new `wait_for_event` waiters through child disposal. Removed internals: `LiveView._get_private_state()` / `_restore_private_state()`, `djust._lazy_containers.save_http_lazy`, `djust._child_async.dispatch_legacy_child_work`, `WaiterMixin._close_waiters()` and the `RustLiveView.lazy_registration_allowed()` binding.
+  Session entries a deployed 1.3 / 2.0 pre-release already wrote for lazy children (`liveview_<path>__lazy__<id>`) stay in the session until `djust clear --all` removes them.
+- **The `reauth` turn-middleware built-in and the legacy arm of every turn are removed (#4201).** `reauth` re-checked only legacy-exposure views, under `LIVEVIEW_CONFIG["reauth_on_event"]`; every turn of an explicit view is authorized against the session the server stores, so the chain is now `error_boundary`, then `LIVEVIEW_MIDDLEWARE`. Each turn kind is authorized on that one path: mount and reconnect, event (WebSocket, SSE, the HTTP fallback and the HTTP API), URL change, server push, tick, `db_notify`, background start and result, and a deferred event released from a hidden activity. Over WebSocket, the frames the server sends without running a handler are authorized too: a recovery render (`request_html`) and a `push_event_to_view` frame each time, and a presence frame at most once every 5 seconds per connection. A refused turn sends `permission_denied` and closes the socket with 4403. SSE has no presence, client-push or recovery-render frames.
+- **The attribute walk and its exporters are deleted (#4202).** `get_context_data()` builds only the explicit context (declared `state()` fields, providers, `get_render_only_context()` and what an override adds); `get_state()` returns only `client=True` fields; the debug panel, the observability `view_assigns` endpoint and the `full_html_update` signal show the bounded explicit projection; captured SQL parameters are redacted whenever the capture has an owning view. The JIT stays: explicit renders use it (#4069). Removed internals: `djust.mixins.context.legacy_unsaved_keys` / `legacy_render_only_keys`, the `_djust_render_only_context_keys` hooks, `LiveView._is_serializable()` and the legacy debug-panel walker.
+- **Feature mixins keep only their explicit-exposure behaviour (#4203).** Forms, formsets, presence, tutorials, components, data tables, automatic state, context providers, saved server state, exception diagnostics, the service worker, the HTTP fallback and hot view replacement lose the branches that served `exposure_policy = "legacy"`. `FormMixin` no longer looks a model up from a stored `model_pk`, presence no longer adds `name` / `user_id` to the metadata you pass, and `djust.testing.persisted_state()` no longer has a legacy error case.
+- **System checks for the legacy exposure policy are retired (#4204).** `djust.V026` is retired (every view is explicit, so a class-level plain component is refused when the class is created), and `V006`, `V008`, `V027`, `V029`, `V035`, `C034`, `C035` and `T027` no longer read the exposure policy. Remove the retired IDs from `suppress_checks` and `SILENCED_SYSTEM_CHECKS`.
+- **The legacy event-parameter path is gone, server and client (#4205).** Strict is the only binding: `validation.py` coercion, near-miss warnings, legacy type-error hints and the policy resolvers are deleted, and system checks `djust.T028`, `djust.V033` and `djust.C022` are retired (strict findings are `djust.T020`, `T021` and `V016`). The browser no longer collects `data-*` attributes, sends `_target` or falls back to legacy collection for a binding with no contract; `window.djust.extractTypedParams` is removed (use `dj-value-*`). Shipped `client.min.js.gz` 89473 → 88719 bytes (-754), unminified `client.js` 292174 → 289955 bytes gzipped.
+- **The 1.x compatibility shims are removed (#4207).** `LiveViewConsumer.handle_event` and `handle_url_change` are deleted and `handle_mount` becomes the private `_mount_page`; `PushEventMixin._flush_pending_push_events` (use `flush_push_events`), the deprecated `_drain_announcements` / `_drain_focus` docs block, the `djust startproject` command (use `djust new <name>`, which `djust startproject` now names and exits 2), `djust_theming/css/base.css` (an `@import` of `scaffold.css`: link `scaffold.css`), the `djust:client-command` listener and the unprefixed-cookie fallback and cleanup in the theming manager and `theme.js` (with `cookie_namespace` set only `<ns>_djust_theme*` cookies are read), the Rust `call_block_handler`, `call_assign_handler` and `try_text_only_vdom_update` shims, and the back-compat re-exports in `djust.theming.manager`, `.presets` and `.theme_packs` (`DEFAULT_CONFIG`, `ColorScale`, `ThemeTokens`, the `*_THEME` constants, the style types). Each removed Python name raises an `ImportError` that names where to import it from.
+- **The client discards drafts saved in an older format (#4207).** A saved draft without the current format number is discarded and removed from storage instead of being partly restored. The compatibility for a reply without a `ref` and for `async_pending` without an `async_batch` stays: embedded-child frames and the Python `LiveViewConsumer` activity-drain path still send them. Shipped `client.min.js.gz` 88719 → 88667 bytes, unminified `client.js` 289955 → 289889 bytes gzipped.
+- **examples/test_textarea_component.py and examples/textarea_benchmark.py are removed (#4243).** Both imported a `_RUST_AVAILABLE` flag that no longer exists; their functional assertions now live in `python/djust/tests/test_textarea_component_4243.py`.
+- **The component templates badge.html, avatar.html, progress.html and pagination.html under djust_components/ are removed (#4331)**: the tags are drawn by native handlers on both engines, so a project template of the same name no longer overrides them (migration entry 355). The empty, unreferenced accordion.html, card.html, dropdown.html, modal.html, tabs.html and tooltip.html in the same directory are removed too.
+
+### Deprecated
+
+- **Six component argument aliases are deprecated to 3.0 (#4207).** `{% slider %}` / `{% currency_input %}` `min` and `max` (use `min_val` / `max_val`), `{% date_picker range=... %}` (`is_range`), `{% split_button open=... %}` (`is_open`), `{% dj_button variant="danger" %}` (`variant="destructive"`) and dict items for `Dropdown` / `Tabs` (`DropdownItem` / `TabItem`) still work and now raise one `DeprecationWarning` per process; removal is no earlier than `3.0.0`.
+
 ## [2.0.0rc5] - 2026-11-24
 
 > **Upgrading from rc4.** Two live-mount performance fixes and no behaviour
