@@ -13619,17 +13619,33 @@ window.djust.viewSlots = {
 // ============================================================================
 //
 // The auto-injected client is the CORE bundle (client-core.min.js). The
-// heaviest optional modules are built as separate chunk files under
+// optional modules are built as separate chunk files under
 // static/djust/chunks/ by scripts/build-client.sh, and this module loads one
 // only when the page needs it:
 //
-//   uploads         [dj-upload], [dj-upload-drop], or a mount that declares
-//                   uploads (upload_configs)
-//   virtual-list    [dj-virtual]
-//   cursor-overlay  [dj-hook="CursorOverlay"]
-//   tutorial        #dj-tutorial-bubble ({% tutorial_bubble %})
-//   service-worker  a service worker controls the page, or the app calls
-//                   djust.registerServiceWorker()
+//   uploads              [dj-upload], [dj-upload-drop], or a mount that
+//                        declares uploads (upload_configs)
+//   virtual-list         [dj-virtual]
+//   cursor-overlay       [dj-hook="CursorOverlay"]
+//   tutorial             #dj-tutorial-bubble ({% tutorial_bubble %})
+//   service-worker       a service worker controls the page, or the app calls
+//                        djust.registerServiceWorker()
+//   component-behaviors  a djust.components widget (.rich-select, .combobox,
+//                        .kanban, ...: see 53-component-behaviors.js)
+//   keyboard-nav         [role="dialog"], [role="tablist"], .dj-modal,
+//                        .dj-accordion, .dj-dropdown, .dj-dropdown-menu
+//   error-overlay        window.DEBUG_MODE (Django DEBUG); never in production
+//   dj-style             <meta name="djust-styles" content="attrs"> in the
+//                        head (LIVEVIEW_CONFIG csp_strict_styles)
+//   flip                 [dj-flip]
+//   transitions          [dj-transition], [dj-remove], [dj-transition-group]
+//   infinite-scroll      [dj-viewport-top], [dj-viewport-bottom]
+//   prefetch             a[dj-prefetch], or a service worker controls the page
+//   track-static         [dj-track-static]
+//   dialog               dialog[dj-dialog]
+//
+// The SSE transport (03b-sse.js) stays in core: see
+// docs/website/guides/client-bundle.md, "What stays in core".
 //
 // djustInit() (14-init.js) scans the document, loads the chunks it needs and
 // only then binds and connects, so a page that uses a chunk behaves exactly as
@@ -13652,7 +13668,44 @@ const _DJUST_CHUNK_SELECTORS = {
     'virtual-list': '[dj-virtual]',
     'cursor-overlay': '[dj-hook="CursorOverlay"]',
     'tutorial': '#dj-tutorial-bubble',
+    // The widgets 53-component-behaviors.js serves (its header lists them).
+    'component-behaviors': '.rich-select,.combobox,.dj-theme-toggle,.popover-wrapper,' +
+        '.dj-popconfirm-wrapper,.collapsible,.ctx-wrapper,.code-block-copy,.dropzone,' +
+        '.kanban,.rte,.multi-select,.split-pane',
+    'keyboard-nav': '[role="dialog"],.dj-modal,[role="tablist"],.dj-accordion,' +
+        '.dj-dropdown,.dj-dropdown-menu',
+    'flip': '[dj-flip]',
+    'transitions': '[dj-transition],[dj-remove],[dj-transition-group]',
+    'infinite-scroll': '[dj-viewport-top],[dj-viewport-bottom]',
+    'prefetch': 'a[dj-prefetch]',
+    'track-static': '[dj-track-static]',
+    'dialog': 'dialog[dj-dialog]',
 };
+
+function _djustSwControlled() {
+    return typeof navigator !== 'undefined' && !!navigator.serviceWorker &&
+        !!navigator.serviceWorker.controller;
+}
+
+// Chunks a page needs for a reason other than an element: checked at every
+// scan (init, TurboNav swap, patch), whatever the scanned subtree.
+const _DJUST_CHUNK_PAGE_TRIGGERS = {
+    'service-worker': _djustSwControlled,
+    // The hover layer of 22-prefetch.js posts to the controlling worker.
+    'prefetch': _djustSwControlled,
+    // The persistent overlay only renders under DEBUG (set by the server).
+    'error-overlay': function () { return window.DEBUG_MODE === true; },
+    // 54-dj-style.js reads the server-rendered head once.
+    'dj-style': function () {
+        return !!(document.head &&
+            document.head.querySelector('meta[name="djust-styles"][content="attrs"]'));
+    },
+};
+
+function _djustIsChunkName(name) {
+    return Object.prototype.hasOwnProperty.call(_DJUST_CHUNK_SELECTORS, name) ||
+        Object.prototype.hasOwnProperty.call(_DJUST_CHUNK_PAGE_TRIGGERS, name);
+}
 
 // Captured while this bundle executes; null when it was evaluated, not loaded.
 const _djustClientScript = document.currentScript || null;
@@ -13733,7 +13786,7 @@ function _djustIsCoreBundle() {
  * Public as `djust.loadClientChunk(name)`.
  */
 function loadClientChunk(name) {
-    if (!Object.prototype.hasOwnProperty.call(_DJUST_CHUNK_SELECTORS, name) && name !== 'service-worker') {
+    if (!_djustIsChunkName(name)) {
         return Promise.reject(new Error('[djust] unknown client chunk: ' + name));
     }
     // eslint-disable-next-line security/detect-object-injection
@@ -13779,19 +13832,32 @@ function _djustNeededChunks(root, changes) {
     if (!_djustIsCoreBundle()) return [];
     const scope = root || document;
     const needed = [];
-    for (const name of Object.keys(_DJUST_CHUNK_SELECTORS)) {
+    const pending = Object.keys(_DJUST_CHUNK_SELECTORS).filter(function (name) {
         // eslint-disable-next-line security/detect-object-injection
-        if (_djustChunkLoaded[name] || _djustChunkFailed[name]) continue;
+        return !_djustChunkLoaded[name] && !_djustChunkFailed[name];
+    });
+    // #4001: after a patch, only what it inserted or re-attributed.
+    const matches = function (selector) {
+        return changes ? _changedMatches(changes, selector).length > 0
+            : !!((scope.matches && scope.matches(selector)) ||
+                (scope.querySelector && scope.querySelector(selector)));
+    };
+    // One pass over the scanned elements for every pending selector; only a
+    // hit is narrowed down to the chunks it names.
+    if (pending.length && matches(pending.map(function (name) {
         // eslint-disable-next-line security/detect-object-injection
-        const selector = _DJUST_CHUNK_SELECTORS[name];
-        // #4001: after a patch, only what it inserted or re-attributed.
-        if (changes ? _changedMatches(changes, selector).length > 0
-            : (scope.matches && scope.matches(selector)) ||
-            (scope.querySelector && scope.querySelector(selector))) needed.push(name);
+        return _DJUST_CHUNK_SELECTORS[name];
+    }).join(','))) {
+        for (const name of pending) {
+            // eslint-disable-next-line security/detect-object-injection
+            if (matches(_DJUST_CHUNK_SELECTORS[name])) needed.push(name);
+        }
     }
-    if (!_djustChunkLoaded['service-worker'] && !_djustChunkFailed['service-worker'] &&
-        typeof navigator !== 'undefined' && navigator.serviceWorker && navigator.serviceWorker.controller) {
-        needed.push('service-worker');
+    for (const name of Object.keys(_DJUST_CHUNK_PAGE_TRIGGERS)) {
+        // eslint-disable-next-line security/detect-object-injection
+        if (_djustChunkLoaded[name] || _djustChunkFailed[name] || needed.indexOf(name) !== -1) continue;
+        // eslint-disable-next-line security/detect-object-injection
+        if (_DJUST_CHUNK_PAGE_TRIGGERS[name]()) needed.push(name);
     }
     return needed;
 }
@@ -13931,6 +13997,13 @@ if (!window.djust._sw) {
     };
 }
 
+// djust.resetViewport / teardownInfiniteScroll act on the containers the
+// infinite-scroll chunk tracks; before it has loaded there are none, so they
+// do nothing. djust.initInfiniteScroll stays undefined until then: core skips
+// the dj-viewport-* pass without it.
+if (!window.djust.resetViewport) window.djust.resetViewport = function () {};
+if (!window.djust.teardownInfiniteScroll) window.djust.teardownInfiniteScroll = function () {};
+
 // Called by each chunk after its code has run (see build-client.sh).
 const _DJUST_CHUNK_READY = {
     'uploads': function () {
@@ -13949,6 +14022,23 @@ const _DJUST_CHUNK_READY = {
     'service-worker': function () {
         if (_djustSwMountData) window.djust._sw.applyMountMetadata(_djustSwMountData);
         _djustSwMountData = null;
+        // The hover prefetch layer posts to the worker this page now uses.
+        if (_djustSwControlled()) _djustBackgroundLoad('prefetch');
+    },
+    // These modules set themselves up when they run (each installs its
+    // document listeners or observer and scans the page at once when the
+    // document is already parsed), so their handlers have nothing to do.
+    'component-behaviors': function () {},
+    'keyboard-nav': function () {},
+    'error-overlay': function () {},
+    'dj-style': function () {},
+    'flip': function () {},
+    'transitions': function () {},
+    'prefetch': function () {},
+    'track-static': function () {},
+    'dialog': function () {},
+    'infinite-scroll': function () {
+        if (window.djustInitialized) window.djust.initInfiniteScroll(document);
     },
 };
 
@@ -13980,6 +14070,7 @@ function _djustExposeChunkScope() {
         isWSConnected: isWSConnected,
         slotIdFor: slotIdFor,
         slotFrameFields: slotFrameFields,
+        _destroyDetachedHooks: _destroyDetachedHooks,
     });
 }
 
@@ -21079,10 +21170,12 @@ globalThis.djust.djDialog = {
  * an in-browser panel with the error message, triggering event, Python
  * traceback, hint, and validation details when present.
  *
- * Deferred state saves use a nonblocking status in every mode; a successful
- * render of the same view/target clears it. Persistent error overlays are
- * only active when `window.DEBUG_MODE === true` (set by the `djust_tags`
- * template tag when Django DEBUG=True). Production builds receive no
+ * Deferred state saves use a nonblocking status in every mode instead
+ * (36a-save-status.js, core). Since #4320 this module is the `error-overlay`
+ * client chunk, which the core bundle loads only when `window.DEBUG_MODE` is
+ * true; the full bundle includes it. Persistent error overlays are only
+ * active when `window.DEBUG_MODE === true` (set by the `djust_tags` template
+ * tag when Django DEBUG=True). Production builds receive no
  * overlay at all — the server strips `traceback` / `debug_detail` / `hint`
  * in non-DEBUG mode, so the overlay would have nothing interesting to show.
  *
@@ -21094,47 +21187,6 @@ globalThis.djust.djDialog = {
 (function initErrorOverlay() {
     const OVERLAY_ID = 'djust-error-overlay';
     const STYLE_ID = 'djust-error-overlay-style';
-    const STATUS_ID = 'djust-save-status';
-    const saving = new Map();
-
-    function _owner(detail) {
-        return JSON.stringify([
-            typeof detail.view === 'string' ? detail.view : null,
-            typeof detail.target_id === 'string' ? detail.target_id : null,
-        ]);
-    }
-
-    function _clearSaving(detail) {
-        const key = _owner(detail);
-        const entry = saving.get(key);
-        if (!entry) return;
-        entry.remove();
-        saving.delete(key);
-        if (!saving.size) document.getElementById(STATUS_ID)?.remove();
-    }
-
-    function _showSaving(detail) {
-        let status = document.getElementById(STATUS_ID);
-        if (!status) {
-            status = document.createElement('div');
-            status.id = STATUS_ID;
-            status.setAttribute('role', 'status');
-            status.setAttribute('aria-live', 'polite');
-            status.style.cssText = 'position:fixed;bottom:16px;right:16px;z-index:99998;' +
-                'pointer-events:none;padding:12px;background:#1e293b;color:#fff;border-radius:8px;';
-            document.body.appendChild(status);
-        }
-        const key = _owner(detail);
-        let entry = saving.get(key);
-        if (!entry) {
-            entry = document.createElement('div');
-            saving.set(key, entry);
-            status.appendChild(entry);
-        }
-        // Only the message, never traceback or HTML. The server's literal
-        // boolean distinguishes a deferred save from a persistent error.
-        entry.textContent = typeof detail.error === 'string' ? detail.error : 'Saving your change…';
-    }
 
     function _escape(s) {
         if (s == null) return '';
@@ -21286,12 +21338,85 @@ globalThis.djust.djDialog = {
         // #4164: a reconnect that restored an older state than the page
         // showed, and changes not saved yet, are notices of the same kind.
         const notice = detail.code === 'state_error' || detail.code === 'state_not_restored';
-        if (notice && detail.transient === true) {
-            _showSaving(detail);
-            return;
-        }
-        _clearSaving(detail);
+        // The notice itself is 36a-save-status.js (core, every mode).
+        if (notice && detail.transient === true) return;
         if (window.DEBUG_MODE) _render(detail);
+    }
+
+    if (typeof window !== 'undefined') {
+        window.addEventListener('djust:error', _onError);
+        window.addEventListener('keydown', _onKeyDown);
+        // Expose for tests and for manual triggering from devtools.
+        window.djustErrorOverlay = {
+            show: (detail) => _render(detail || {}),
+            dismiss: () => {
+                const o = document.getElementById(OVERLAY_ID);
+                if (o) o.remove();
+            },
+        };
+    }
+})();
+// ============================================================================
+// Deferred-save status (#4164): a nonblocking notice, in every mode
+// ============================================================================
+//
+// A `djust:error` frame that is a deferred state save (code `state_error` or
+// `state_not_restored` with the server's literal `transient: true`) shows a
+// small polite status in the corner instead of an error; a successful render
+// of the same view/target clears it, and so does any other error for it.
+//
+// Split out of 36-error-overlay.js (#4320): this part is core, in every mode,
+// while the DEBUG error overlay is the `error-overlay` client chunk, loaded
+// only when `window.DEBUG_MODE` is true.
+
+(function initSaveStatus() {
+    const STATUS_ID = 'djust-save-status';
+    const saving = new Map();
+
+    function _owner(detail) {
+        return JSON.stringify([
+            typeof detail.view === 'string' ? detail.view : null,
+            typeof detail.target_id === 'string' ? detail.target_id : null,
+        ]);
+    }
+
+    function _clearSaving(detail) {
+        const key = _owner(detail);
+        const entry = saving.get(key);
+        if (!entry) return;
+        entry.remove();
+        saving.delete(key);
+        if (!saving.size) document.getElementById(STATUS_ID)?.remove();
+    }
+
+    function _showSaving(detail) {
+        let status = document.getElementById(STATUS_ID);
+        if (!status) {
+            status = document.createElement('div');
+            status.id = STATUS_ID;
+            status.setAttribute('role', 'status');
+            status.setAttribute('aria-live', 'polite');
+            status.style.cssText = 'position:fixed;bottom:16px;right:16px;z-index:99998;' +
+                'pointer-events:none;padding:12px;background:#1e293b;color:#fff;border-radius:8px;';
+            document.body.appendChild(status);
+        }
+        const key = _owner(detail);
+        let entry = saving.get(key);
+        if (!entry) {
+            entry = document.createElement('div');
+            saving.set(key, entry);
+            status.appendChild(entry);
+        }
+        // Only the message, never traceback or HTML. The server's literal
+        // boolean distinguishes a deferred save from a persistent error.
+        entry.textContent = typeof detail.error === 'string' ? detail.error : 'Saving your change…';
+    }
+
+    function _onError(e) {
+        const detail = (e && e.detail) || {};
+        const notice = detail.code === 'state_error' || detail.code === 'state_not_restored';
+        if (notice && detail.transient === true) _showSaving(detail);
+        else _clearSaving(detail);
     }
 
     if (typeof window !== 'undefined') {
@@ -21303,15 +21428,6 @@ globalThis.djust.djDialog = {
                 document.getElementById(STATUS_ID)?.remove();
             });
         }
-        window.addEventListener('keydown', _onKeyDown);
-        // Expose for tests and for manual triggering from devtools.
-        window.djustErrorOverlay = {
-            show: (detail) => _render(detail || {}),
-            dismiss: () => {
-                const o = document.getElementById(OVERLAY_ID);
-                if (o) o.remove();
-            },
-        };
     }
 })();
 

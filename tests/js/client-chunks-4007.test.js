@@ -19,7 +19,10 @@ import fs from 'fs';
 import path from 'path';
 
 const STATIC = path.resolve('python/djust/static/djust');
-const CHUNKS = ['uploads', 'virtual-list', 'cursor-overlay', 'tutorial', 'service-worker'];
+const CHUNKS = ['uploads', 'virtual-list', 'cursor-overlay', 'tutorial', 'service-worker',
+    // #4320
+    'component-behaviors', 'keyboard-nav', 'error-overlay', 'dj-style', 'flip', 'transitions',
+    'infinite-scroll', 'prefetch', 'track-static', 'dialog'];
 const NONCE = 'n0nce-4007';
 
 // Serves python/djust/static/djust/** for /static/djust/** (and /hashed/**,
@@ -167,7 +170,9 @@ describe('core bundle: chunks load only when used (#4007)', () => {
     it('a page a service worker controls loads the service-worker chunk at init', async () => {
         const { window, loader } = page('<div dj-view="app.V"></div>', { swController: true });
         await until(() => window.djustInitialized, 'init');
-        expect(chunkRequests(loader)).toEqual(['/static/djust/chunks/service-worker.js']);
+        // #4320: the hover prefetch layer posts to the worker, so it comes too.
+        expect(chunkRequests(loader).sort()).toEqual(['/static/djust/chunks/prefetch.js',
+            '/static/djust/chunks/service-worker.js']);
         expect(window.djust._sw._djustStub).toBeUndefined();
         expect(typeof window.djust._sw.syncIdentity).toBe('function');
     });
@@ -292,6 +297,126 @@ describe('core bundle: stalled and slow chunks (#4007)', () => {
     });
 });
 
+describe('core bundle: the slice-2 chunks (#4320)', () => {
+    // Markup that needs each chunk, and what the loaded module provides.
+    const CASES = [
+        ['component-behaviors', '<div class="combobox"><input class="combobox-input"></div>',
+            (w) => w.document._djustComponentBehaviors === true],
+        ['keyboard-nav', '<div role="tablist"><button role="tab">a</button></div>',
+            (w) => typeof w.djust.keyboardNav._handleKeydown === 'function'],
+        ['flip', '<ul dj-flip><li>a</li></ul>', (w) => typeof w.djust.flip._install === 'function'],
+        ['transitions', '<div dj-transition="a b c">x</div>',
+            (w) => typeof w.djust.maybeDeferRemoval === 'function' && !!w.djust.djTransitionGroup],
+        ['transitions', '<div dj-remove="fade">x</div>', (w) => typeof w.djust.maybeDeferRemoval === 'function'],
+        ['infinite-scroll', '<ul dj-viewport-bottom="more"><li>a</li></ul>',
+            (w) => w.djust._infiniteScrollTracked() === 1],
+        ['prefetch', '<a href="/next/" dj-prefetch>next</a>', (w) => !!w.djust._intentPrefetch],
+        ['dialog', '<dialog dj-dialog="open">hi</dialog>',
+            (w) => w.document.querySelector('dialog').hasAttribute('open')],
+    ];
+
+    for (const [name, markup, ready] of CASES) {
+        it(`${markup} loads the ${name} chunk before init`, async () => {
+            const { window, loader } = page(`<div dj-view="app.V">${markup}</div>`);
+            await until(() => window.djustInitialized, 'init');
+            expect(chunkRequests(loader)).toEqual([`/static/djust/chunks/${name}.js`]);
+            expect(window.document.querySelector(`script[data-djust-chunk="${name}"]`).getAttribute('nonce'))
+                .toBe(NONCE);
+            expect(ready(window)).toBe(true);
+        });
+    }
+
+    it('dj-track-static in the head loads track-static, which snapshots the page-load assets', async () => {
+        const { window, loader } = page('<div dj-view="app.V"></div>', {
+            extraHead: '<link dj-track-static rel="stylesheet" href="/static/app.css">',
+        });
+        await until(() => window.djustInitialized, 'init');
+        expect(chunkRequests(loader)).toEqual(['/static/djust/chunks/track-static.js']);
+        expect(window.djust.djTrackStatic._trackedUrls()).toEqual(['/static/app.css']);
+    });
+
+    it('a page that uses several chunks requests them all at once, before init', async () => {
+        const { window, loader } = page(
+            '<div dj-view="app.V"><dialog dj-dialog="close"></dialog><ul dj-flip></ul><div class="kanban"></div></div>',
+            { hold: ['dialog', 'flip', 'component-behaviors'] });
+        await until(() => chunkRequests(loader).length === 3, 'three requests');
+        expect(window.djustInitialized).toBeFalsy();
+        loader.release('dialog');
+        loader.release('flip');
+        loader.release('component-behaviors');
+        await until(() => window.djustInitialized, 'init');
+        expect(chunkRequests(loader).sort()).toEqual(['/static/djust/chunks/component-behaviors.js',
+            '/static/djust/chunks/dialog.js', '/static/djust/chunks/flip.js']);
+    });
+
+    it('DEBUG loads the error overlay; without DEBUG it is never requested', async () => {
+        const dbg = page('<div dj-view="app.V"></div>', {
+            extraHead: '<script nonce="' + NONCE + '">window.DEBUG_MODE = true;</script>',
+        });
+        await until(() => dbg.window.djustInitialized, 'init');
+        expect(chunkRequests(dbg.loader)).toEqual(['/static/djust/chunks/error-overlay.js']);
+        dbg.window.dispatchEvent(new dbg.window.CustomEvent('djust:error', { detail: { error: 'boom' } }));
+        expect(dbg.window.document.getElementById('djust-error-overlay').textContent).toContain('boom');
+
+        const prod = page('<div dj-view="app.V"></div>');
+        await until(() => prod.window.djustInitialized, 'init');
+        expect(chunkRequests(prod.loader)).toEqual([]);
+        expect(prod.window.djustErrorOverlay).toBeUndefined();
+    });
+
+    it('the deferred-save status stays in core and works with no chunk', async () => {
+        const { window, loader } = page('<div dj-view="app.V"></div>');
+        await until(() => window.djustInitialized, 'init');
+        window.dispatchEvent(new window.CustomEvent('djust:error', {
+            detail: { error: 'still saving', code: 'state_error', transient: true, view: 'app.V' },
+        }));
+        expect(window.document.getElementById('djust-save-status').textContent).toBe('still saving');
+        window.dispatchEvent(new window.CustomEvent('djust:rendered', { detail: { view: 'app.V' } }));
+        expect(window.document.getElementById('djust-save-status')).toBeNull();
+        expect(chunkRequests(loader)).toEqual([]);
+    });
+
+    it('the strict-styles meta loads dj-style, which applies the values before init', async () => {
+        const { window, loader } = page(
+            '<div dj-view="app.V"><div id="col" data-dj-style data-dj-style-width="120px"></div></div>',
+            { extraHead: '<meta name="djust-styles" content="attrs">' });
+        await until(() => window.djustInitialized, 'init');
+        expect(chunkRequests(loader)).toEqual(['/static/djust/chunks/dj-style.js']);
+        expect(window.document.getElementById('col').style.width).toBe('120px');
+    });
+
+    it('a dj-viewport list a patch renders loads infinite-scroll and is tracked', async () => {
+        const { window, loader } = page('<div dj-view="app.V"><div id="tab"></div></div>');
+        await until(() => window.djustInitialized, 'init');
+        // Stubs until the chunk runs: nothing is tracked, so nothing to do.
+        expect(window.djust.initInfiniteScroll).toBeUndefined();
+        expect(() => window.djust.resetViewport(window.document.body)).not.toThrow();
+        const tab = window.document.getElementById('tab');
+        tab.innerHTML = '<ul dj-viewport-bottom="more"><li>a</li><li>b</li></ul>';
+        window.djust.reinitAfterDOMUpdate(tab);
+        await until(() => typeof window.djust.initInfiniteScroll === 'function' &&
+            window.djust._infiniteScrollTracked() === 1, 'tracked list');
+        expect(chunkRequests(loader)).toEqual(['/static/djust/chunks/infinite-scroll.js']);
+    });
+
+    it('a dj-dialog a patch renders open loads the dialog chunk and opens', async () => {
+        const { window, loader } = page('<div dj-view="app.V"><div id="tab"></div></div>');
+        await until(() => window.djustInitialized, 'init');
+        const tab = window.document.getElementById('tab');
+        tab.innerHTML = '<dialog id="dlg" dj-dialog="open">hi</dialog>';
+        window.djust.reinitAfterDOMUpdate(tab);
+        await until(() => window.document.getElementById('dlg').hasAttribute('open'), 'opened dialog');
+        expect(chunkRequests(loader)).toEqual(['/static/djust/chunks/dialog.js']);
+    });
+
+    it('registering a service worker brings the prefetch chunk once the worker controls the page', async () => {
+        const { window, loader } = page('<div dj-view="app.V"></div>', { swController: true });
+        await until(() => window.djustInitialized && !!window.djust._prefetch, 'prefetch chunk');
+        expect(typeof window.djust._prefetch.clear).toBe('function');
+        expect(chunkRequests(loader).filter((p) => p.includes('prefetch')).length).toBe(1);
+    });
+});
+
 describe('full bundle (#4007)', () => {
     it('client.js holds every module and loads no chunk', async () => {
         const items = '<div data-key="1">a</div>';
@@ -330,7 +455,7 @@ describe('built chunks (#4007)', () => {
     }
     for (const k of Object.getOwnPropertyNames(globalThis)) browserGlobals[k] = 'readonly';
     // Browser APIs JSDOM does not implement.
-    for (const k of ['indexedDB', 'IDBKeyRange', 'caches']) browserGlobals[k] = 'readonly';
+    for (const k of ['indexedDB', 'IDBKeyRange', 'caches', 'DataTransfer', 'matchMedia']) browserGlobals[k] = 'readonly';
 
     const core = fs.readFileSync(path.join(STATIC, 'client-core.js'), 'utf-8');
     const scopeBlock = core.slice(core.indexOf('window.djust._chunkScope = Object.freeze({'));
@@ -359,7 +484,13 @@ describe('built chunks (#4007)', () => {
         const full = fs.readFileSync(path.join(STATIC, 'client.js'), 'utf-8');
         for (const marker of ['setConfigs: setUploadConfigs', 'window.djust.initVirtualLists = initVirtualLists',
             'window.djust.hooks.CursorOverlay =', 'window.djust._tutorialBubble =',
-            'globalThis.djust._sw = {']) {
+            'globalThis.djust._sw = {',
+            // #4320
+            'document._djustComponentBehaviors = true', 'globalThis.djust.keyboardNav = {',
+            'window.djustErrorOverlay = {', 'globalThis.djust.djStyle = {', 'globalThis.djust.flip = {',
+            'globalThis.djust.maybeDeferRemoval = maybeDeferRemoval', 'globalThis.djust.djTransitionGroup = {',
+            'window.djust.initInfiniteScroll = initInfiniteScroll', 'window.djust._intentPrefetch = {',
+            'globalThis.djust.djTrackStatic = {', 'globalThis.djust.djDialog = {']) {
             expect(full.includes(marker), marker).toBe(true);
             expect(core.includes(marker), marker).toBe(false);
         }

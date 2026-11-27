@@ -151,6 +151,17 @@ CHUNK_SPECS=(
     "cursor-overlay|16-cursor-overlay.js|"
     "tutorial|28-tutorial-bubble.js|"
     "service-worker|33-sw-registration.js|"
+    # #4320, slice 2: the remaining dj-* and DEBUG-triggered feature modules.
+    "component-behaviors|53-component-behaviors.js|"
+    "keyboard-nav|51-keyboard-nav.js|"
+    "error-overlay|36-error-overlay.js|"
+    "dj-style|54-dj-style.js|"
+    "flip|44-dj-flip.js|"
+    "transitions|40a-transition-helpers.js 41-dj-transition.js 42-dj-remove.js 43-dj-transition-group.js|_destroyDetachedHooks"
+    "infinite-scroll|30-infinite-scroll.js|"
+    "prefetch|22-prefetch.js|"
+    "track-static|39-dj-track-static.js|"
+    "dialog|35-dj-dialog.js|"
 )
 CHUNK_DIR="$STATIC_DIR/chunks"
 

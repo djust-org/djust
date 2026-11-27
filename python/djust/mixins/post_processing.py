@@ -7,6 +7,18 @@ import logging
 import re
 from typing import Any, Dict, List, cast
 
+# The client chunks and the injected bundle's URLs live in _client_chunks
+# (#4007, #4320); CLIENT_CHUNKS, _static_url and _versioned_url stay
+# importable from here.
+from .._client_chunks import (  # noqa: F401
+    CLIENT_CHUNKS,
+    chunks_for_first_render,
+    client_bundle_urls,
+    preload_links,
+    static_url as _static_url,
+    versioned_url as _versioned_url,
+)
+
 logger = logging.getLogger(__name__)
 
 # #2987: find the document's real <head>/<body> boundaries. Anything tag-shaped
@@ -29,35 +41,6 @@ _HEAD_CLOSE_RE = re.compile(r"</head(?=[\s/>])[^<>]*>", re.IGNORECASE)
 _BODY_OPEN_RE = re.compile(r"<body(?=[\s/>])", re.IGNORECASE)
 _BODY_CLOSE_TAG_RE = re.compile(r"</body(?=[\s/>])[^<>]*>", re.IGNORECASE)
 _HTML_CLOSE_TAG_RE = re.compile(r"</html(?=[\s/>])[^<>]*>", re.IGNORECASE)
-
-# The client chunks scripts/build-client.sh builds (CHUNK_SPECS) and
-# static/djust/src/13c-chunk-loader.js loads (#4007). Kept in step by
-# tests/unit/test_client_chunks_4007.py.
-CLIENT_CHUNKS = ("uploads", "virtual-list", "cursor-overlay", "tutorial", "service-worker")
-
-
-def _static_url(path: str) -> str:
-    """``static(path)``, or ``/static/<path>`` when staticfiles cannot resolve it."""
-    from django.templatetags.static import static
-
-    try:
-        return str(static(path))
-    except (ValueError, AttributeError):
-        return f"/static/{path}"
-
-
-def _versioned_url(url: str) -> str:
-    """``url`` with ``v=<djust version>`` in its query (#3658).
-
-    A protocol reload fetches the bundle again; an unhashed static URL could be
-    served from the browser cache and loop the reload. A hashed Manifest URL
-    tolerates the query.
-    """
-    from urllib.parse import quote
-
-    from .. import __version__
-
-    return f"{url}{'&' if '?' in url else '?'}v={quote(str(__version__), safe='')}"
 
 
 def _mask_document_text(html: str) -> str:
@@ -245,22 +228,14 @@ class PostProcessingMixin:
         # minified file locally.
         #
         # #4007: the default is the CORE bundle, which loads the optional
-        # chunks (CLIENT_CHUNKS) only when the page uses them. Their static()
+        # chunks (CLIENT_CHUNKS) only when the page uses them (#4320: and the
+        # head preloads the ones this first render uses, below). Their static()
         # URLs ride on the script tag as data-djust-chunks, so a hashed
         # ManifestStaticFilesStorage name is used; the loaded <script> takes
         # this tag's nonce. ``client_bundle: "full"`` injects every module.
-        use_min = getattr(settings, "DJUST_CLIENT_JS_MINIFIED", not settings.DEBUG)
-        suffix = ".min.js" if use_min else ".js"
-        full_bundle = config.get("client_bundle", "core") == "full"
-        client_js_name = ("djust/client" if full_bundle else "djust/client-core") + suffix
-        client_js_url = _versioned_url(_static_url(client_js_name))
-
+        client_js_url, chunk_urls = client_bundle_urls()
         chunks_attr = ""
-        if not full_bundle:
-            chunk_urls = {
-                name: _versioned_url(_static_url(f"djust/chunks/{name}{suffix}"))
-                for name in CLIENT_CHUNKS
-            }
+        if chunk_urls:
             chunks_attr = f' data-djust-chunks="{escape(json.dumps(chunk_urls, sort_keys=True))}"'
 
         script = (
@@ -375,6 +350,20 @@ class PostProcessingMixin:
                 # The client reads it from the document head only: written before any
                 # other content (after a doctype), the parser puts it in the implied head.
                 styles_meta_first = True
+        # #4320: preload the chunks this first render uses, so the core finds
+        # them in flight (or done) instead of fetching them one round trip
+        # after it has run. Same URLs and nonce as the loader's <script>s.
+        if chunk_urls and head_close >= 0:
+            from ..components.utils import csp_strict as _strict_styles
+
+            upload_manager = getattr(self, "_upload_manager", None)
+            preload = chunks_for_first_render(
+                masked,
+                declares_uploads=bool(upload_manager and upload_manager.get_upload_state()),
+                debug=bool(settings.DEBUG),
+                strict_styles=_strict_styles(),
+            )
+            head_inject += preload_links((chunk_urls[name] for name in preload), nonce_attr)
         if debug_css_link and head_close >= 0:
             head_inject += debug_css_link
         # #3036: what this page's shell loads, so a live navigation to a page
