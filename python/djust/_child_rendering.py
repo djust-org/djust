@@ -144,9 +144,7 @@ class _Render:
             self.owner._explicit_child_vdom_bindings = dict(self.vdom_bindings)
             self.owner._explicit_child_vdom_tracking = True
             self.owner._pending_authenticated_page = False
-            self.owner._record_dj_model_fields_from_rust(
-                self.owner._rust_view, self.prepared_owned_html
-            )
+            self.owner._record_dj_model_fields_from_rust(self.owner._rust_view)
         self.owner._explicit_child_render_regions = keep
         self.owner._explicit_child_render_scope = "full" if self.whole_page else "root"
         if self.whole_page:

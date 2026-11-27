@@ -99,7 +99,8 @@ class DocumentView(PresenceMixin, LiveView):
 ### Anonymous tabs (`presence_unique_per_connection`)
 
 By default, two browser tabs of the same anonymous user share a Django
-session and therefore one presence id (`anon_<session_key>`) — the live
+session and therefore one presence id (an opaque per-session id,
+`anon_<hmac>`, derived from the session key) — the live
 count stays at "1 online" no matter how many tabs you open. This is the
 right semantics for an authenticated user collaborating with themselves
 (same person, one identity), but wrong for a demo or a counter where

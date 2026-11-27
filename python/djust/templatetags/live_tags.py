@@ -100,7 +100,7 @@ def _child_source_with_named_includes(child: Any, source: Any) -> Any:
         return source
 
 
-def _record_child_dj_model_allowlist(child: Any, rendered_html: Any) -> None:
+def _record_child_dj_model_allowlist(child: Any, rendered_bindings: Any) -> None:
     """Populate an embedded ``{% live_render %}`` child's dj-model allowlist
     from the CHILD's own TEMPLATE SOURCE (CWE-915 mass-assignment guard).
 
@@ -111,9 +111,10 @@ def _record_child_dj_model_allowlist(child: Any, rendered_html: Any) -> None:
     here. Source is preferred via ``child.get_template()`` (fully resolves
     ``{% extends %}``); falls back to the inline ``template`` / raw
     ``template_name`` source. Derivation is from the Rust template AST
-    (Text-node literals only), immune to rendered-output poisoning, narrowed
-    to the bindings present in ``rendered_html`` (the child's own output from
-    this render), so an untaken ``{% if %}`` branch grants no writes.
+    (Text-node literals only), narrowed to ``rendered_bindings``: the
+    template-text bindings the child's Django render executed
+    (``djust._dj_model_bindings.record_bindings``), so an untaken
+    ``{% if %}`` branch grants no writes and rendered data adds none.
     """
     if not hasattr(child, "_record_dj_model_fields_from_source"):
         return
@@ -136,7 +137,7 @@ def _record_child_dj_model_allowlist(child: Any, rendered_html: Any) -> None:
                     source = _loader.get_template(template_name).template.source
         source = _child_source_with_named_includes(child, source)
         child._record_dj_model_fields_from_source(
-            source, get_template_dirs(), rendered_html=rendered_html
+            source, get_template_dirs(), rendered_bindings=rendered_bindings
         )
     except Exception:  # noqa: BLE001 — never let allowlist collection break a render
         # Fail closed: the child's _record_dj_model_fields_from_source already
@@ -2041,9 +2042,11 @@ def _render_sticky_child_html(
     if "view" in child_context:
         raise ExposureError("Explicit child context contains a reserved framework name")
 
+    from .._dj_model_bindings import record_bindings
+
     inline = getattr(child, "template", None)
     if inline:
-        with active_parent_view(child), include_guard_scope():
+        with active_parent_view(child), include_guard_scope(), record_bindings() as bindings:
             rendered_inner = Template(inline).render(Context(child_context))
     else:
         template_name = getattr(child, "template_name", None)
@@ -2052,14 +2055,14 @@ def _render_sticky_child_html(
                 "{%% live_render %%} child %r has neither ``template`` nor "
                 "``template_name`` set" % view_path
             )
-        with active_parent_view(child), include_guard_scope():
+        with active_parent_view(child), include_guard_scope(), record_bindings() as bindings:
             rendered_inner = get_template(template_name).render(child_context, request)
 
     # Record the child's dj-model auto-allowlist from its own TEMPLATE SOURCE
     # so child update_model events (gated on the child's _dj_model_fields)
     # accept its dj-model inputs — this render bypasses render_with_diff
     # (#3 Stage-11 review, #1646 parallel-path).
-    _record_child_dj_model_allowlist(child, rendered_inner)
+    _record_child_dj_model_allowlist(child, bindings)
     rendered_stamped = _stamp_view_id(rendered_inner, view_id)
     escaped_id = escape(view_id)
     if sticky_id_value is None:

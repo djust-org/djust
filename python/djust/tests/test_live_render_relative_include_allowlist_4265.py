@@ -17,11 +17,6 @@ from djust.templatetags.live_tags import _record_child_dj_model_allowlist
 from djust.websocket import render_embedded_child_html
 
 
-# The child's rendered output: the allowlist is the template's static bindings
-# narrowed to the ones the render emitted.
-_TITLE = '<div dj-root><input dj-model="title"></div>'
-
-
 def _child(**attrs):
     return type("Child", (LiveView,), {"exposure_policy": "explicit", **attrs})()
 
@@ -30,7 +25,7 @@ def test_a_relative_include_keeps_the_partials_fields(rel_files) -> None:
     rel_files("sub/main.html", '<div dj-root>{% include "./part.html" %}</div>')
     rel_files("sub/part.html", '<input dj-model="title">')
     child = _child(template_name="sub/main.html")
-    _record_child_dj_model_allowlist(child, _TITLE)
+    _record_child_dj_model_allowlist(child, {"title"})
     assert child._dj_model_fields == frozenset({"title"})
 
 
@@ -38,7 +33,7 @@ def test_a_dot_dot_include_keeps_the_partials_fields(rel_files) -> None:
     rel_files("sub/deep/main.html", '<div dj-root>{% include "../part.html" %}</div>')
     rel_files("sub/part.html", '<input dj-model="title">')
     child = _child(template_name="sub/deep/main.html")
-    _record_child_dj_model_allowlist(child, _TITLE)
+    _record_child_dj_model_allowlist(child, {"title"})
     assert child._dj_model_fields == frozenset({"title"})
 
 
@@ -46,7 +41,7 @@ def test_the_absolute_name_is_unchanged(rel_files) -> None:
     rel_files("sub/main.html", '<div dj-root>{% include "sub/part.html" %}</div>')
     rel_files("sub/part.html", '<input dj-model="title">')
     child = _child(template_name="sub/main.html")
-    _record_child_dj_model_allowlist(child, _TITLE)
+    _record_child_dj_model_allowlist(child, {"title"})
     assert child._dj_model_fields == frozenset({"title"})
 
 
@@ -56,7 +51,7 @@ def test_a_relative_name_that_escapes_the_hierarchy_fails_closed(rel_files, capl
     )
     rel_files("x.html", '<input dj-model="title">')
     child = _child(template_name="a/main.html")
-    _record_child_dj_model_allowlist(child, _TITLE)  # logs and never raises
+    _record_child_dj_model_allowlist(child, {"title", "own"})  # logs and never raises
     assert "title" not in getattr(child, "_dj_model_fields", frozenset())
     assert "failing closed" in caplog.text
 
@@ -89,5 +84,6 @@ def test_a_relative_include_in_a_flattened_parent_does_not_widen_the_allowlist(r
     rel_files("sub/p.html", '<input dj-model="evil">')
     rel_files("sub/main.html", '{% extends "base/layout.html" %}{% block b %}x{% endblock %}')
     child = _child(template_name="sub/main.html")
-    _record_child_dj_model_allowlist(child, '<input dj-model="good"><input dj-model="evil">')
+    # Both names rendered: only the template's own binding is granted.
+    _record_child_dj_model_allowlist(child, {"good", "evil"})
     assert child._dj_model_fields == frozenset({"good"})
