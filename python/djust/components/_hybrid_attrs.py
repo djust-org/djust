@@ -1309,6 +1309,32 @@ def _refused(group: Group, path: tuple[tuple[str, str], ...], texts: dict[str, s
     return not _allowed(group.attr, group.kind, _normal(printed))
 
 
+def _neutralise(group: Group, texts: dict[str, str], owner: str = "") -> None:
+    """Replace the slots of every refused path of ``group`` until every path is allowed.
+
+    The first slot of a refused path becomes ``#`` and the rest nothing, repeated (a slot emptied
+    for one path may be the first of another). A path still refused after that is a defect here
+    and fails closed (#3925): the value is never printed unjudged. The ``#`` itself can complete
+    a character reference the literal text around it leaves open (``javascript&{{ s }}x3a;``
+    reads as ``javascript&#x3a;``), so this is reachable, not theoretical.
+    """
+    for _ in range(len(group.slots) + 1):
+        bad = [p for p in group.paths if _refused(group, p, texts)]
+        if not bad:
+            return
+        for path in bad:
+            first = True
+            for kind, v in path:
+                if kind == "slot":
+                    texts[v] = _NEUTRAL if first else ""
+                    first = False
+    if any(_refused(group, p, texts) for p in group.paths):
+        raise RuntimeError(
+            f"djust: {owner or 'a component'}: the {group.attr!r} value of its hybrid template"
+            " could not be made safe"
+        )
+
+
 #: Warnings already given, by (class, attributes): bounded, and never carrying template text.
 _WARNED: set[tuple[Any, ...]] = set()
 _MAX_WARNED = 512
@@ -1474,18 +1500,6 @@ def harden_context(
         elif group.roles:
             _coarse_neutralise(group, texts)
         else:
-            # A path whose assembled value is refused loses its slots: the first becomes "#" and
-            # the rest nothing, so no value is left that completes a refused scheme. Repeat until
-            # every path is allowed (each round neutralises a slot, so it ends).
-            for _ in range(len(group.slots) + 1):
-                bad = [p for p in group.paths if _refused(group, p, texts)]
-                if not bad:
-                    break
-                for path in bad:
-                    first = True
-                    for kind, v in path:
-                        if kind == "slot":
-                            texts[v] = "#" if first else ""
-                            first = False
+            _neutralise(group, texts, owner)
         hardened.update(texts)
     return rewrite.template, hardened
