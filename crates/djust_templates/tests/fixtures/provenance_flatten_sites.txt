@@ -637,7 +637,7 @@ let html = page.rendered.html.clone();
 .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?,
 let (start, end) = page.range.unwrap_or((0, page.rendered.html.len()));
 return Ok((rendered.html[start..end].to_owned(), spans, origins));
-Ok((result.html, spans, result.origins))
+(result.html, spans, result.origins)
 patches.map(|bytes| PyBytes::new(py, &bytes).into()),
 return Err(e.into());
 let open = format!("<{sentinel_tag} ");
@@ -1278,14 +1278,6 @@ self.normal.into_authored_output()
 self.root_channel |= child.root_channel;
 let offset = self.normal.html.len();
 self.append(&Self::from(text.to_owned()));
-&self.html
-f.write_str(&self.html)
-html: text.to_owned(),
-fn into_authored_output(self) -> djust_core::context::AuthoredOutput {
-self.html.into_authored_output()
-output.0.into()
-self.html.push_str(&child.html);
-self.html.push_str(text);
 out.append(&DualRendered::captured("opaque".to_owned(), None));
 out.normal.html,
 assert!(out.normal.literal_only.is_none());
@@ -1417,13 +1409,3 @@ for children in node.child_lists_mut().into_iter().flatten() {
 (start, end, format!("{kind}{index}:{hash:016x}"))
 for children in node.child_lists_mut().into_iter().flatten() {
 &std::sync::Arc::from(source),
-ctx.set((*k).into(), v.clone());
-let inc = r#"{% if staff %}{% with x=1 %}{% include "p.html" %}{% endwith %}{% endif %}"#;
-let files = [("p.html", r#"<textarea dj-model="note"></textarea>"#)];
-let ext = r#"{% extends "base.html" %}{% block b %}{% if staff %}<input dj-model="note">{% endif %}{% endblock %}"#;
-"base.html",
-let src = r#"<input dj-model="a">{% block b %}{% with x=1 %}<input dj-model="b">{% endwith %}{% endblock %}{% if f %}<input dj-model="c">{% endif %}{% for r in rs %}<input dj-model="d">{% endfor %}{% include "p.html" %}"#;
-"p.html",
-let payload = Value::String("x dj-model=note".into());
-assert!(bindings(src, &[("field", Value::String("note".into()))], &[]).is_empty());
-let html = Value::String(r#"<input dj-model="note">"#.into());

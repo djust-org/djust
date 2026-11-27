@@ -10401,3 +10401,64 @@ def do_dashboard_grid(parser: Any, token: Any) -> template.Node:
     nodelist = parser.parse(("enddashboard_grid",))
     parser.delete_first_token()
     return DashboardGridNode(nodelist, kwargs)
+
+
+# Block-tag nodes that always put their rendered body into their output (the
+# raw-body ones, ``tabs`` / ``split_pane`` / ``form_array``, render exactly the
+# parts they emit). Under Django's engine the dj-model bindings in their bodies
+# count toward the view's write allowlist; every other custom node's body does
+# not (``djust._dj_model_bindings``). The Rust handlers of the same tags declare
+# it too (``rust_handlers.EMITS_BODY_TAGS``); the list is pinned by
+# ``test_dj_model_emits_body_tags``.
+for _emits_body_node in (
+    AppShellNode,
+    AppSidebarNode,
+    AppHeaderNode,
+    AppContentNode,
+    AccordionNode,
+    AccordionItemNode,
+    SidebarNode,
+    SidebarItemNode,
+    NavMenuNode,
+    ToolbarNode,
+    ToolbarOverflowNode,
+    FilterBarNode,
+    PageHeaderNode,
+    PageHeaderActionsNode,
+    AlertNode,
+    AnnouncementBarNode,
+    AspectRatioNode,
+    CalloutNode,
+    CardNode,
+    CollapsibleNode,
+    CommandPaletteNode,
+    ContextMenuNode,
+    CookieConsentNode,
+    DashboardGridNode,
+    DjLabelNode,
+    ErrorBoundaryNode,
+    ExpandableTextNode,
+    FieldsetNode,
+    FormGroupNode,
+    HoverCardNode,
+    InfiniteScrollNode,
+    InputAddonNode,
+    InputGroupNode,
+    LoadingOverlayNode,
+    ModalDescriptionNode,
+    PageAlertNode,
+    PopoverNode,
+    ResizablePanelNode,
+    ScrollAreaNode,
+    SheetNode,
+    StickyHeaderNode,
+    TabNode,
+    TimelineNode,
+    TimelineItemNode,
+    TooltipNode,
+    WizardNode,
+    TabsNode,
+    SplitPaneNode,
+    FormArrayNode,
+):
+    _emits_body_node.EMITS_BODY = True  # type: ignore[attr-defined]

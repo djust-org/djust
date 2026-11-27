@@ -978,6 +978,24 @@ def register_block_tag_handler(tag_name: str, end_tag: str, handler: Any) -> Non
     """
     ...
 
+def dj_model_recording_active() -> bool:
+    """Whether a view render on this thread is recording its dj-model bindings."""
+    ...
+
+def record_dj_model_bindings(fields: List[str]) -> None:
+    """Add the template-text dj-model bindings a raw-block handler declaring
+    ``EMITS_BODY`` rendered to the active recording (no-op without one)."""
+    ...
+
+def block_tag_handler_emits_body(tag_name: str) -> bool:
+    """Whether the block (or raw-block) tag handler for ``tag_name`` declared ``EMITS_BODY``.
+
+    Such a handler always emits its rendered body, so ``dj-model`` bindings
+    in the body count toward the view's write allowlist. False for an
+    unknown tag.
+    """
+    ...
+
 def has_block_tag_handler(tag_name: str) -> bool:
     """
     Check if a block tag handler is registered for the given tag name.
@@ -1553,6 +1571,9 @@ __all__ = [
     # Block tag handlers
     "register_block_tag_handler",
     "has_block_tag_handler",
+    "block_tag_handler_emits_body",
+    "dj_model_recording_active",
+    "record_dj_model_bindings",
     "unregister_block_tag_handler",
     "clear_block_tag_handlers",
     # Assign tag handlers (context-mutating)

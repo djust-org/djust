@@ -3686,6 +3686,10 @@ fn split_dj_model_fields_depth<L: crate::inheritance::TemplateLoader>(
                 }
                 all.extend(found);
             }
+            // A raw-block body is source its handler renders itself: never
+            // unconditional, granted only when a handler declaring
+            // `EMITS_BODY` reports it from its render.
+            Node::RawBlockCustomTag { body, .. } => scan_dj_model_in_text(body, all),
             Node::Include { template, .. } => {
                 if depth >= MAX_INCLUDE_DEPTH {
                     continue;

@@ -1698,6 +1698,14 @@ settings turns it into an error that fails the test that renders it. Suppress wi
 
 **Fix**: emit `dj-value-<name>` instead (`format_html('... dj-value-item-id="{}"', value)`). A `data-*` attribute that only styles or scripts the element can stay. Suppress with `DJUST_CONFIG = {"suppress_checks": ["T029"]}`.
 
+### T030: `dj-model` inside a custom block tag body
+
+**Severity**: Warning
+
+**What causes it**: a `dj-model="<field>"` binding in the body of a custom block tag. The tag decides what of its body reaches the page (a permission-gate tag may drop it), so the binding is not added to the view's dj-model write allowlist, and a client update of that field is refused. Message: '<file>:<line> -- dj-model="note" is inside the body of {% ifperm %}; it is not writable unless listed in allowed_model_fields.'
+
+**Fix**: add the field to the view's `allowed_model_fields` (the view then accepts it whatever the tag renders), or move the input out of the tag. A Rust block-tag handler that always emits its body unchanged can declare `EMITS_BODY = True`. Suppress with `DJUST_CONFIG = {"suppress_checks": ["T030"]}`.
+
 <!-- END GENERATED check-sections:T -->
 
 ---
