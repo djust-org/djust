@@ -10,7 +10,14 @@ emitted, and "emitted" is read from the template text that ran — Django's
 :func:`record_bindings` collects, for one render, the ``dj-model="<field>"``
 attributes in every ``TextNode`` that rendered (includes and ``{% extends %}``
 parents too). A ``TextNode`` inside an ``{% if %}`` branch that was not taken
-does not render, so it grants nothing. The scan matches the Rust template
+does not render, so it grants nothing. Only Django's control-flow and
+structural nodes (``{% if %}``, ``{% for %}``, ``{% with %}``,
+``{% include %}``, ``{% block %}``/``{% extends %}`` and the scope tags) pass
+the recording on to their bodies: the body of any other node (a custom block
+tag, an inclusion tag's template, ``{% ifchanged %}``) is rendered with the
+recording paused, because that node decides what of it reaches the page. A
+node class may declare ``EMITS_BODY = True`` when it always emits its body.
+The scan matches the Rust template
 walker (``scan_dj_model_in_text``): a standalone ``dj-model`` attribute name,
 ``=``, then a quoted, non-empty value inside one text run. With djust's own
 template backend the render is in Rust; see :func:`suspend_recording`.
@@ -59,7 +66,7 @@ def _install() -> None:
     with _install_lock:
         if _installed:
             return
-        from django.template.base import TextNode
+        from django.template.base import Node, TextNode
 
         def render(self: TextNode, context: object) -> str:
             fields = _active.get()
@@ -67,9 +74,59 @@ def _install() -> None:
                 fields.update(scan_dj_model_bindings(self.s))
             return self.s
 
+        transparent = _transparent_node_types()
+        node_render_annotated = Node.render_annotated
+
+        def render_annotated(self: Node, context: object) -> str:
+            node_type = type(self)
+            if (
+                _active.get() is None
+                or node_type in transparent
+                or getattr(node_type, "EMITS_BODY", False)
+            ):
+                return node_render_annotated(self, context)
+            token = _active.set(None)
+            try:
+                return node_render_annotated(self, context)
+            finally:
+                _active.reset(token)
+
         TextNode.render = render  # type: ignore[method-assign]
         TextNode.render_annotated = render  # type: ignore[method-assign]
+        Node.render_annotated = render_annotated  # type: ignore[method-assign]
         _installed = True
+
+
+def _transparent_node_types() -> frozenset:
+    """Django's nodes that render their bodies into the page as they are.
+
+    Control flow (the body renders exactly when it is emitted) and the
+    structural/scope nodes. Everything else is opaque to the recording.
+    """
+    from django.template import defaulttags, loader_tags
+    from django.template.base import VariableNode
+    from django.templatetags import i18n, l10n, tz
+
+    return frozenset(
+        {
+            VariableNode,
+            defaulttags.IfNode,
+            defaulttags.ForNode,
+            defaulttags.WithNode,
+            defaulttags.AutoEscapeControlNode,
+            defaulttags.SpacelessNode,
+            defaulttags.FilterNode,
+            defaulttags.CommentNode,
+            defaulttags.LoadNode,
+            loader_tags.IncludeNode,
+            loader_tags.BlockNode,
+            loader_tags.ExtendsNode,
+            i18n.LanguageNode,
+            l10n.LocalizeNode,
+            tz.LocalTimeNode,
+            tz.TimezoneNode,
+        }
+    )
 
 
 @contextmanager

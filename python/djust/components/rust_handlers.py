@@ -2499,6 +2499,74 @@ OBJECT_ARGUMENT_TAGS = frozenset(
 TYPED_ARGUMENT_TAGS = frozenset({"json_viewer"})
 
 
+#: The built-in block tags whose handler always puts its rendered body into its output unchanged,
+#: so the ``dj-model`` bindings in the body count toward the view's write allowlist
+#: (``EMITS_BODY``). Every other block tag decides what of its body reaches the page (``modal``,
+#: ``dropdown_menu``, ``bottom_sheet``, ``confirm_dialog_block``, ``await``, ``nav_item``,
+#: ``form_array``, ``{% call %}`` / ``{% slot %}``, ...) or escapes it (``agent_step``,
+#: ``copyable_text``), and a binding in its body is listed in ``allowed_model_fields``. The
+#: raw-body tags render exactly the parts they emit and report the bindings of that render; the
+#: ``{% load djust_components %}`` bridge marks the library tags it serves. Pinned by
+#: ``test_dj_model_emits_body_tags``.
+EMITS_BODY_TAGS = frozenset(
+    {
+        # native handlers
+        "accordion",
+        "accordion_item",
+        "alert",
+        "announcement_bar",
+        "app_content",
+        "app_header",
+        "app_shell",
+        "app_sidebar",
+        "card",
+        "collapsible",
+        "command_palette",
+        "context_menu",
+        "cookie_consent",
+        "dashboard_grid",
+        "dj_label",
+        "dropdown",
+        "error_boundary",
+        "expandable_text",
+        "fieldset",
+        "filter_bar",
+        "form_group",
+        "hover_card",
+        "infinite_scroll",
+        "input_addon",
+        "input_group",
+        "loading_overlay",
+        "modal_description",
+        "nav_menu",
+        "page_alert",
+        "page_header",
+        "page_header_actions",
+        "popconfirm",
+        "popover",
+        "resizable_panel",
+        "sheet",
+        "sidebar",
+        "sidebar_item",
+        "timeline",
+        "timeline_item",
+        "toolbar",
+        "toolbar_overflow",
+        "tooltip",
+        "wizard",
+        # served by the {% load djust_components %} bridge
+        "aspect_ratio",
+        "callout",
+        "scroll_area",
+        "sticky_header",
+        "tab",
+        # raw-body tags
+        "split_pane",
+        "tabs",
+    }
+)
+
+
 def register_with_rust_engine() -> None:
     """Register all component tag handlers with the Rust template engine.
 
@@ -2532,6 +2600,8 @@ def register_with_rust_engine() -> None:
         )
 
     for tag_name, end_tag, handler in BLOCK_HANDLERS:
+        if tag_name in EMITS_BODY_TAGS:
+            handler.EMITS_BODY = True
         register_block_tag_handler(
             tag_name,
             end_tag,
@@ -2596,11 +2666,11 @@ def register_with_rust_engine() -> None:
         # registration down if it is unavailable.
         return
 
-    register_raw_block_tag_handler(
-        "split_pane",
-        "endsplit_pane",
-        LibraryRawBlockTagHandler("djust_components", "split_pane", _components_lib.do_split_pane),
+    split_pane = LibraryRawBlockTagHandler(
+        "djust_components", "split_pane", _components_lib.do_split_pane
     )
+    split_pane.EMITS_BODY = True  # type: ignore[attr-defined]
+    register_raw_block_tag_handler("split_pane", "endsplit_pane", split_pane)
 
     # {% tabs %}…{% tab %}…{% endtab %}…{% endtabs %} — the same reason. The
     # tab list and the choice of the ONE pane to render come from the `{% tab %}`
@@ -2609,18 +2679,16 @@ def register_with_rust_engine() -> None:
     # registered here wrapped that body in a div: no tab list, and every pane
     # rendered. Django's `do_tabs` reads the children, so the raw path renders
     # the nav and only the active pane, byte for byte as Django does.
-    register_raw_block_tag_handler(
+    tabs = LibraryRawBlockTagHandler(
+        "djust_components",
         "tabs",
-        "endtabs",
-        LibraryRawBlockTagHandler(
-            "djust_components",
-            "tabs",
-            _components_lib.do_tabs,
-            # The body holds `{% tab %}` blocks, and a Rust template uses these
-            # tags without `{% load djust_components %}`.
-            libraries=(_components_lib.register,),
-        ),
+        _components_lib.do_tabs,
+        # The body holds `{% tab %}` blocks, and a Rust template uses these
+        # tags without `{% load djust_components %}`.
+        libraries=(_components_lib.register,),
     )
+    tabs.EMITS_BODY = True  # type: ignore[attr-defined]
+    register_raw_block_tag_handler("tabs", "endtabs", tabs)
 
 
 # ===========================================================================

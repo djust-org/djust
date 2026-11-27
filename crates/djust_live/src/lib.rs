@@ -156,12 +156,43 @@ type DjModelFieldSplit = (Vec<String>, Vec<String>);
 static DJ_MODEL_FIELD_SPLIT_CACHE: Lazy<DashMap<DjModelFieldsKey, DjModelFieldSplit>> =
     Lazy::new(DashMap::new);
 
+/// `RustLiveViewBackend::dj_model_gate`: source address and length, template
+/// directories, cache generation, answer.
+type DjModelGate = ((usize, usize), Vec<PathBuf>, u64, bool);
+
+/// A view render's dj-model frame: recording, or paused for a template with
+/// no conditional binding.
+enum DjModelRecording {
+    Recording(djust_templates::model_bindings::Recording),
+    Paused(#[allow(dead_code)] djust_templates::model_bindings::Pause),
+}
+
+/// Bumped by [`clear_dj_model_fields_cache`] so each view's memoised
+/// "records dj-model bindings" answer is recomputed after a reload.
+static DJ_MODEL_CACHE_GENERATION: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// Whether a view render on this thread is recording its dj-model bindings
+/// and is not inside a tag whose body does not count.
+#[pyfunction]
+fn dj_model_recording_active() -> bool {
+    djust_templates::model_bindings::is_recording()
+}
+
+/// Add the template-text dj-model bindings a raw-block tag handler declaring
+/// `EMITS_BODY` rendered to the active recording (a no-op without one).
+#[pyfunction]
+fn record_dj_model_bindings(fields: Vec<String>) {
+    djust_templates::model_bindings::record_fields(fields);
+}
+
 /// Forget every cached `dj_model_fields(cache=True)` result (hot reload, a
 /// settings change, test isolation).
 #[pyfunction]
 fn clear_dj_model_fields_cache() {
     DJ_MODEL_FIELDS_CACHE.clear();
     DJ_MODEL_FIELD_SPLIT_CACHE.clear();
+    DJ_MODEL_CACHE_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 /// Global supervisor for managing actor lifecycle
 /// Created once with 1-hour TTL
@@ -302,6 +333,17 @@ pub struct RustLiveViewBackend {
     last_render_timing: Option<RenderTiming>,
     /// Per-node HTML cache for partial template rendering
     node_html_cache: Vec<String>,
+    /// The dj-model bindings each top-level node emitted from template text
+    /// when it was last rendered, parallel to `node_html_cache`: a node the
+    /// partial renderer serves from the cache contributes these.
+    node_binding_records: Vec<Vec<String>>,
+    /// The dj-model bindings the last render emitted from template text, or
+    /// `None` when it recorded none (see `writable_dj_model_fields`).
+    last_dj_model_bindings: Option<Vec<String>>,
+    /// Memo for `has_conditional_dj_model_bindings`: the source's address
+    /// and length, dirs, cache generation and the answer. A stale answer only
+    /// records when not needed or grants just the unconditional bindings.
+    dj_model_gate: Option<DjModelGate>,
     /// Context keys that changed since the last render (None = full render)
     changed_keys: Option<HashSet<String>>,
     /// Maps template node index → (VDOM path, djust_id) for text-only fragments.
@@ -410,6 +452,9 @@ impl RustLiveViewBackend {
             safe_keys: HashSet::new(),
             last_render_timing: None,
             node_html_cache: Vec::new(),
+            node_binding_records: Vec::new(),
+            last_dj_model_bindings: None,
+            dj_model_gate: None,
             changed_keys: None,
             fragment_text_map: None,
             text_node_index: None,
@@ -812,14 +857,13 @@ impl RustLiveViewBackend {
     ///
     /// A binding on an always-rendered path (see
     /// `djust_templates::extract_dj_model_field_split`) is granted outright. A
-    /// binding inside an `{% if %}`/`{% for %}` branch, a custom block tag, an
-    /// include or a lazy site is granted only when a bindings-only render of
-    /// the current state emits it from template text
-    /// (`Template::render_dj_model_bindings_named`), so an untaken branch
-    /// grants nothing and rendered data can never add a field. That render
-    /// runs only for templates that have such bindings, changes no render
-    /// cache and does not execute inline custom tags. Any failure grants only
-    /// the unconditional bindings.
+    /// binding inside an `{% if %}`/`{% for %}` branch or a lazy site is
+    /// granted only when the last render emitted it from template text
+    /// (recorded during that render, `djust_templates::model_bindings`), so an
+    /// untaken branch grants nothing and rendered data can never add a field.
+    /// A binding in the body of a custom block tag is granted only when the
+    /// tag's handler declares `EMITS_BODY`. A failed or unrecorded render
+    /// grants only the unconditional bindings.
     #[pyo3(signature = (cache=false))]
     fn writable_dj_model_fields(&self, cache: bool) -> PyResult<Vec<String>> {
         guard_panic("writable_dj_model_fields", move || {
@@ -854,7 +898,7 @@ impl RustLiveViewBackend {
             if all.len() == unconditional.len() {
                 return Ok(all);
             }
-            let rendered = self.render_dj_model_bindings(&loader).unwrap_or_default();
+            let rendered = self.last_dj_model_bindings.as_deref().unwrap_or_default();
             let mut fields: Vec<String> = all
                 .into_iter()
                 .filter(|f| unconditional.contains(f) || rendered.contains(f))
@@ -954,17 +998,23 @@ impl RustLiveViewBackend {
 
             // Use template loader for {% include %} support
             let loader = FilesystemTemplateLoader::new(self.template_dirs.clone());
-            if track_provenance {
-                let result = template_arc.render_with_provenance(&context, &loader)?;
-                let spans = result.authored.iter().map(|r| (r.start, r.end)).collect();
-                Ok((result.html, spans, result.origins))
+            let recording = self.begin_dj_model_recording();
+            let rendered = if track_provenance {
+                template_arc
+                    .render_with_provenance(&context, &loader)
+                    .map(|result| {
+                        let spans = result.authored.iter().map(|r| (r.start, r.end)).collect();
+                        (result.html, spans, result.origins)
+                    })
             } else {
-                Ok((
-                    template_arc.render_with_loader(&context, &loader)?,
-                    Vec::new(),
-                    Vec::new(),
-                ))
-            }
+                template_arc
+                    .render_with_loader(&context, &loader)
+                    .map(|html| (html, Vec::new(), Vec::new()))
+            };
+            self.finish_dj_model_recording(recording, rendered.is_ok());
+            // `render()` leaves the node cache empty, so no per-node record.
+            self.node_binding_records.clear();
+            Ok(rendered?)
         })
     }
 
@@ -1042,6 +1092,7 @@ impl RustLiveViewBackend {
             // prune + restore for persistence). Inert when disabled.
             let mut loop_cache = std::mem::take(&mut self.loop_render_cache);
             loop_cache.begin_render();
+            let recording = self.begin_dj_model_recording();
             let html_result: Result<String, _> = {
                 let _loop_guard = LoopCacheGuard::install(&mut loop_cache);
                 if !self.node_html_cache.is_empty()
@@ -1070,6 +1121,7 @@ impl RustLiveViewBackend {
                         })
                 }
             };
+            self.finish_dj_model_recording(recording, html_result.is_ok());
             loop_cache.prune();
             // #1970: defer the loop-cache putback (the parse phase consumes the
             // manifest + parse cache, mirroring `render_with_diff`). Take the
@@ -1542,6 +1594,9 @@ impl RustLiveViewBackend {
             safe_keys: HashSet::new(),
             last_render_timing: None,
             node_html_cache: Vec::new(),
+            node_binding_records: Vec::new(),
+            last_dj_model_bindings: None,
+            dj_model_gate: None,
             changed_keys: None,
             fragment_text_map: None,
             text_node_index: None,
@@ -1593,31 +1648,63 @@ impl RustLiveViewBackend {
 
 // Public Rust API (for use by other Rust crates like djust_actors)
 impl RustLiveViewBackend {
-    /// Bindings-only render of the current state (see
-    /// [`Self::writable_dj_model_fields`]). Builds the context the way
-    /// `render_result` does and touches no render cache.
-    fn render_dj_model_bindings(
-        &self,
-        loader: &djust_templates::inheritance::FilesystemTemplateLoader,
-    ) -> PyResult<Vec<String>> {
-        let template_arc = cached_template(&self.template_source)?;
-        let _render_env = self.render_env.as_ref().map(RenderEnvGuard::install);
-        let _bridge_memo = djust_core::context::BridgeFrameCacheGuard;
-        let mut context = Context::from_shared(self.state.clone());
-        for key in &self.safe_keys {
-            context.mark_safe(key.clone());
+    /// Whether this template has a dj-model binding that only some renders
+    /// emit (inside an `{% if %}`/`{% for %}`, a custom block tag or a lazy
+    /// site). Only then does a render record its bindings. Memoised per
+    /// template source, directories and cache generation.
+    fn has_conditional_dj_model_bindings(&mut self) -> bool {
+        let generation = DJ_MODEL_CACHE_GENERATION.load(std::sync::atomic::Ordering::Relaxed);
+        let source = (
+            self.template_source.as_ptr() as usize,
+            self.template_source.len(),
+        );
+        if let Some((seen_source, dirs, seen, answer)) = &self.dj_model_gate {
+            if *seen == generation && *seen_source == source && *dirs == self.template_dirs {
+                return *answer;
+            }
         }
-        context.set_dj_if_id_namespace(self.dj_if_id_namespace.as_str());
-        if let Some(raw) = &self.raw_py_values {
-            let cloned: HashMap<String, Py<PyAny>> = Python::attach(|py| {
-                raw.iter()
-                    .map(|(k, v)| (k.clone(), v.clone_ref(py)))
-                    .collect()
-            });
-            context.set_raw_py_objects(cloned);
-            context.set_auto_call(self.template_auto_call);
+        let loader =
+            djust_templates::inheritance::FilesystemTemplateLoader::new(self.template_dirs.clone());
+        // A template the static walk cannot read records (fail closed: the
+        // allowlist then holds only what the render emitted).
+        let answer =
+            djust_templates::extract_dj_model_field_split(&self.template_source, Some(&loader))
+                .map(|(all, unconditional)| all.len() != unconditional.len())
+                .unwrap_or(true);
+        self.dj_model_gate = Some((source, self.template_dirs.clone(), generation, answer));
+        answer
+    }
+
+    /// Start recording the dj-model bindings this render emits from template
+    /// text (`djust_templates::model_bindings`), or pause any outer recording
+    /// when the template has no conditional binding. The previous render's
+    /// per-node records are handed over for the nodes a partial render
+    /// serves from its cache.
+    fn begin_dj_model_recording(&mut self) -> DjModelRecording {
+        let previous = std::mem::take(&mut self.node_binding_records);
+        if !self.has_conditional_dj_model_bindings() {
+            self.last_dj_model_bindings = None;
+            // Still a frame of its own: a view rendered inside another view's
+            // render adds nothing to the outer recording.
+            return DjModelRecording::Paused(djust_templates::model_bindings::Pause::begin());
         }
-        Ok(template_arc.render_dj_model_bindings_named(&mut context, loader, None)?)
+        DjModelRecording::Recording(djust_templates::model_bindings::Recording::begin(previous))
+    }
+
+    /// Keep what a successful render recorded; a failed render keeps nothing,
+    /// so the allowlist falls back to the unconditional bindings.
+    fn finish_dj_model_recording(&mut self, recording: DjModelRecording, succeeded: bool) {
+        let DjModelRecording::Recording(recording) = recording else {
+            return;
+        };
+        if succeeded {
+            let (fields, nodes) = recording.finish();
+            self.last_dj_model_bindings = Some(fields);
+            self.node_binding_records = nodes;
+        } else {
+            drop(recording);
+            self.last_dj_model_bindings = None;
+        }
     }
 
     /// Body of [`render_with_diff`](Self::render_with_diff), callable with
@@ -1683,6 +1770,7 @@ impl RustLiveViewBackend {
             // so this is byte-identical to the pre-#1967 path.
             let mut loop_cache = std::mem::take(&mut self.loop_render_cache);
             loop_cache.begin_render();
+            let recording = self.begin_dj_model_recording();
             let render_result: Result<(String, Vec<usize>), _> = {
                 let _loop_guard = LoopCacheGuard::install(&mut loop_cache);
                 if !self.node_html_cache.is_empty() && self.changed_keys.is_some() {
@@ -1710,6 +1798,7 @@ impl RustLiveViewBackend {
                         })
                 }
             };
+            self.finish_dj_model_recording(recording, render_result.is_ok());
             // Prune stale entries (keep only hashes seen this render). NOTE: we do
             // NOT put `loop_cache` back on `self` yet — the parse phase below
             // consumes the #1970 per-render manifest and may populate the parse
@@ -2845,6 +2934,8 @@ fn render_template(
         // `<!--dj-if-->` on every false `{% if %}` while this entry was clean.
         ctx.set_emit_dj_if_markers(false);
         ctx.set_raw_py_objects(sidecar);
+        // Adds nothing to a dj-model recording of an outer view render.
+        let _pause = djust_templates::model_bindings::Pause::begin();
         Ok(template_arc.render(&ctx)?)
     })
 }
@@ -3617,22 +3708,36 @@ fn render_template_with_dirs(
         // The template's own name is what a relative `{% extends "./x" %}`
         // resolves against (#2517); `None` leaves such a name unchanged.
         // `dj_model_bindings` (a Python set) asks for the template-text
-        // dj-model bindings this render emits: a bindings-only render of the
-        // same context (`Template::render_dj_model_bindings_named`), which
-        // runs no inline custom tag, so nothing the template calls runs twice
-        // with output. An embedded child's allowlist is narrowed to them.
-        let mut binding_ctx = dj_model_bindings.map(|_| ctx.clone());
-        let rendered =
-            template_arc.render_with_loader_named_mut(&mut ctx, &loader, template_name.as_deref());
-        if let (Some(target), Some(binding_ctx)) = (dj_model_bindings, binding_ctx.as_mut()) {
-            if rendered.is_ok() {
-                for field in template_arc.render_dj_model_bindings_named(
-                    binding_ctx,
-                    &loader,
-                    template_name.as_deref(),
-                )? {
-                    target.call_method1("add", (field,))?;
-                }
+        // dj-model bindings this render emits, recorded during the render
+        // itself (`djust_templates::model_bindings`); an embedded child's
+        // allowlist is narrowed to them. Without it, any outer recording (a
+        // view render whose tag rendered this template) is paused, so this
+        // render adds nothing to it.
+        let (rendered, fields) = if dj_model_bindings.is_some() {
+            let recording = djust_templates::model_bindings::Recording::begin(Vec::new());
+            let rendered = template_arc.render_with_loader_named_mut(
+                &mut ctx,
+                &loader,
+                template_name.as_deref(),
+            );
+            let fields = if rendered.is_ok() {
+                recording.finish().0
+            } else {
+                Vec::new()
+            };
+            (rendered, fields)
+        } else {
+            let _pause = djust_templates::model_bindings::Pause::begin();
+            let rendered = template_arc.render_with_loader_named_mut(
+                &mut ctx,
+                &loader,
+                template_name.as_deref(),
+            );
+            (rendered, Vec::new())
+        };
+        if let Some(target) = dj_model_bindings {
+            for field in fields {
+                target.call_method1("add", (field,))?;
             }
         }
         if let Some(assignments) = assignments {
@@ -7394,6 +7499,8 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(virtual_keyed_ops_enabled, m)?)?;
     m.add_function(wrap_pyfunction!(dj_model_fields_from_template, m)?)?;
     m.add_function(wrap_pyfunction!(clear_dj_model_fields_cache, m)?)?;
+    m.add_function(wrap_pyfunction!(dj_model_recording_active, m)?)?;
+    m.add_function(wrap_pyfunction!(record_dj_model_bindings, m)?)?;
 
     // Actor system exports
     m.add_class::<SessionActorHandlePy>()?;
@@ -7522,6 +7629,10 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     m.add_function(wrap_pyfunction!(
         djust_templates::registry::has_block_tag_handler,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(
+        djust_templates::registry::block_tag_handler_emits_body,
         m
     )?)?;
     m.add_function(wrap_pyfunction!(

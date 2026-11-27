@@ -89,6 +89,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | T024 | Templates | Warning | A template an owner renders reads `is_staff`, `is_superuser` or `password` through a `user` variable; djust never serializes them |
 | T025 | Templates | Warning | `dj-view` / `dj-root` on `<html>` or `<head>`: unsupported and ignored, no live view is mounted and the page stays a plain HTTP page (`<body>` is a supported root) |
 | T027 | Templates | Warning | A JSX-style `<RustButton … />` (any `<Rust…/>`) component tag: deprecated in 1.3, a template error in 2.0.0 |
+| T030 | Templates | Warning | `dj-model` inside a custom block tag body is not writable unless listed in `allowed_model_fields` |
 | Q001 | Quality | Info | print() statement found |
 | Q002 | Quality | Warning | f-string in logger call |
 | Q003 | Quality | Info | console.log without djustDebug guard |
@@ -965,6 +966,24 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
   renderer, and a `{% verbatim %}` written inside a `{{ '...' }}` string literal can
   hide a real tag. A tag written inside another tag's attribute value is reported
   once per tag; the renderer warns once.
+
+### T030 — `dj-model` inside a custom block tag body
+- **Severity**: Warning
+- **Method**: Template scan (each template file's tags, in order).
+- **What it detects**: a `dj-model="<field>"` binding in the body of a block tag
+  other than Django's control-flow and structural tags (`if`, `for`, `with`,
+  `block`, `autoescape`, `spaceless`, `filter` and the locale/time-zone scope
+  tags). The view's dj-model write allowlist holds only the bindings the last
+  render emitted from template text, and the body of a custom block tag
+  (`{% ifperm %}…{% endifperm %}`, `{% ifchanged %}`, a library block tag) never
+  counts, because the tag decides what of its body reaches the page. A
+  block-tag handler that declares `EMITS_BODY = True` is exempt; the built-in
+  component tags that always emit their body (`card`, `accordion`, `tabs`,
+  `form_group`, `app_shell` and the others in
+  `djust.components.rust_handlers.EMITS_BODY_TAGS`) do.
+- **Fix**: list the field in the view's `allowed_model_fields`, or move the input
+  out of the tag.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["T030"]}`
 
 ### T019–T022 — Template event bindings (ADR-037)
 - **Severity**: Warning (all four, in 1.3)
