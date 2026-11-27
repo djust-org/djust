@@ -218,7 +218,7 @@ and leaves under *other* presence keys.
 |-----------|------|---------|-------------|
 | `presence_key` | `str` or `None` | `None` | Group identifier. Supports format variables from view attributes (e.g., `"doc:{doc_id}"`). |
 | `presence_broadcast_scoped` *(v1.3+)* | `bool` or `None` | `None` | Who a join or leave wakes. `None`: the sessions sharing the presence key when the view sets `push_scope`, otherwise every session of the view. `True`: the sessions sharing the presence key. `False`: every session of the view. |
-| `presence_unique_per_connection` *(v1.0.0rc12+)* | `bool` | `False` | When `True`, anonymous users get a per-WebSocket-connection unique id (`anon_conn_<ws_session_id>`) instead of a per-session id. Authenticated users always use `user.id` regardless. Use for anonymous-tab demos. |
+| `presence_unique_per_connection` *(v1.0.0rc12+)* | `bool` | `False` | When `True`, anonymous users get a per-WebSocket-connection unique id (`anon_conn_<hmac>`, an opaque HMAC of the WebSocket session id) instead of a per-session id. Authenticated users always use `user.id` regardless. Use for anonymous-tab demos. |
 
 ### Instance Attributes (auto-maintained)
 
@@ -235,7 +235,7 @@ and leaves under *other* presence keys.
 | `list_presences()` | Returns all active presences in the group as a list of dicts, one per user. |
 | `presence_count()` | Returns count of active users (imperative method; for template binding prefer `{{ online_count }}`). |
 | `get_presence_key()` | Returns formatted presence key. Override for dynamic keys. |
-| `get_presence_user_id()` | Returns unique user ID. Defaults to `request.user.id` for authenticated users, `anon_conn_<ws_session_id>` if `presence_unique_per_connection=True`, else `anon_<session_key>`. |
+| `get_presence_user_id()` | Returns unique user ID. Defaults to `request.user.id` for authenticated users, `anon_conn_<hmac>` if `presence_unique_per_connection=True`, else `anon_<hmac>`: an opaque HMAC of the session key under `SECRET_KEY` (`djust.presence.anonymous_presence_id()`), stable for the session. The id is shown to every peer, so it never contains the session key; an override must not return one either. |
 | `broadcast_to_presence(event, payload)` | Broadcast a custom event to all users in the group. Each browser receives it as a `djust:presence` event (below). |
 
 ### Receiving broadcasts in the browser
