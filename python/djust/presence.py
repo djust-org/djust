@@ -70,6 +70,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 from channels.layers import get_channel_layer
 from asgiref.sync import async_to_sync
 from django.core.cache import cache
+from django.utils.crypto import salted_hmac
 
 from ._exposure import uses_legacy_exposure
 from .decorators import event_handler
@@ -92,6 +93,36 @@ PRESENCE_GROUP_PREFIX = "djust_presence"
 HEARTBEAT_INTERVAL = 30  # seconds
 PRESENCE_TIMEOUT = 60  # seconds - stale if no heartbeat for this long
 CLEANUP_INTERVAL = 300  # seconds - cleanup every 5 minutes
+
+# Salts for the opaque anonymous presence ids. Dedicated values, so the HMACs
+# are never interchangeable with any other ``salted_hmac`` use of SECRET_KEY.
+_ANON_SESSION_ID_SALT = "djust.presence.anonymous_session_id"
+_ANON_CONNECTION_ID_SALT = "djust.presence.anonymous_connection_id"
+# Hex characters kept from the HMAC-SHA256 digest (128 bits).
+_ANON_ID_HEX_LENGTH = 32
+
+
+def anonymous_presence_id(session_key: str) -> str:
+    """The presence id of an anonymous user whose session key is ``session_key``.
+
+    Presence ids are shared with every peer in the room (``list_presences()``,
+    cursor broadcasts, join/leave callbacks), so the id is an HMAC of the
+    session key under ``settings.SECRET_KEY`` rather than the key itself: it is
+    stable for the session (one id across the session's tabs) but cannot be
+    turned back into the session key.
+    """
+    digest = salted_hmac(_ANON_SESSION_ID_SALT, session_key, algorithm="sha256").hexdigest()
+    return "anon_%s" % digest[:_ANON_ID_HEX_LENGTH]
+
+
+def anonymous_connection_presence_id(connection_id: str) -> str:
+    """The presence id of one anonymous connection (``presence_unique_per_connection``).
+
+    Like :func:`anonymous_presence_id`, an opaque HMAC: the transport session id
+    stays on the server.
+    """
+    digest = salted_hmac(_ANON_CONNECTION_ID_SALT, connection_id, algorithm="sha256").hexdigest()
+    return "anon_conn_%s" % digest[:_ANON_ID_HEX_LENGTH]
 
 
 def tenant_scoped_presence_key(view: Any, key: str) -> str:
@@ -469,12 +500,16 @@ class PresenceMixin:
            connection (#3254): the user stays present until the last one
            leaves.
         2. Anonymous + ``presence_unique_per_connection=True`` →
-           ``f"anon_conn_{_websocket_session_id}"`` so each tab counts as
-           a distinct presence. Falls back to ``f"anon_{id(self)}"`` if
+           ``anon_conn_<hmac>`` (an opaque HMAC of the WebSocket session
+           id, see :func:`anonymous_connection_presence_id`) so each tab
+           counts as a distinct presence. Falls back to ``f"anon_{id(self)}"`` if
            the WS-session attribute is missing (only happens when the
            #1612 guard didn't catch us first; defensive).
-        3. Anonymous (default flag=False) → ``f"anon_{session_key}"``
-           (collapses across tabs of the same browser session).
+        3. Anonymous (default flag=False) → ``anon_<hmac>``, an opaque
+           HMAC of the session key (see :func:`anonymous_presence_id`).
+           Stable for the session, so it collapses across tabs of the same
+           browser session; the session key itself never leaves the server,
+           since the id is shown to every peer in the room.
         4. No request/session → ``"unknown_user"``.
 
         Returns:
@@ -486,14 +521,16 @@ class PresenceMixin:
         if getattr(self, "presence_unique_per_connection", False):
             ws_sid = getattr(self, "_websocket_session_id", None)
             if ws_sid:
-                return f"anon_conn_{ws_sid}"
+                return anonymous_connection_presence_id(str(ws_sid))
             # Defensive fallback — should not normally hit because #1612
             # guard returns early when _websocket_session_id is absent.
             return f"anon_{id(self)}"
 
-        # Fallback to session key for anonymous users. An UNSAVED session has
+        # Fallback to the session for anonymous users: an opaque HMAC of the
+        # session key, never the key itself, because the id is sent to every
+        # peer in the room. An UNSAVED session has
         # ``session_key is None``, which would make every such session collapse
-        # onto the single identity ``anon_None`` — many clients counting as one
+        # onto a single identity — many clients counting as one
         # presence. Reachable from ``LiveViewTestClient`` (whose sessions are
         # deliberately not saved, and which since #2821 takes the WebSocket
         # branch by default, so a view's mount()-time ``track_presence()``
@@ -501,7 +538,7 @@ class PresenceMixin:
         if hasattr(self, "request") and hasattr(self.request, "session"):
             session_key = self.request.session.session_key
             if session_key:
-                return f"anon_{session_key}"
+                return anonymous_presence_id(session_key)
             return f"anon_{id(self)}"
 
         # Last resort - use a default identifier
