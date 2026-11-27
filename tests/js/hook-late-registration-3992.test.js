@@ -17,6 +17,11 @@ async function boot(readyState) {
   <div dj-view="test.views.Page" dj-root><div id="late" dj-hook="Late"></div></div>
 </body>
 </html>`, { runScripts: 'dangerously', url: 'http://localhost/page/' });
+    // jsdom dispatches its own DOMContentLoaded and load asynchronously after
+    // construction (jsdom 31 does so soon enough to land inside the settle wait
+    // below). Let them pass before the client arms its retry, so the only
+    // DOMContentLoaded/load it sees are the ones each test fires by hand.
+    await new Promise((resolve) => dom.window.addEventListener('load', resolve, { once: true }));
     dom.window.eval(`
         window.WebSocket = class {
             static CONNECTING = 0; static OPEN = 1; static CLOSING = 2; static CLOSED = 3;
