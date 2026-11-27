@@ -35,7 +35,8 @@ from typing import Iterable, Iterator, List, Optional, Set
 _ATTR = "dj-model"
 _active: ContextVar[Optional[Set[str]]] = ContextVar("djust_dj_model_bindings", default=None)
 _install_lock = threading.Lock()
-_installed = False
+#: Set once Django's nodes are wrapped (checked again under the lock).
+_installed = threading.Event()
 
 
 def scan_dj_model_bindings(text: str) -> List[str]:
@@ -62,11 +63,10 @@ def _install() -> None:
 
     Outside :func:`record_bindings` the wrapper costs one ``ContextVar`` read.
     """
-    global _installed
-    if _installed:
+    if _installed.is_set():
         return
     with _install_lock:
-        if _installed:
+        if _installed.is_set():
             return
         from django.template.base import Node, TextNode
 
@@ -96,7 +96,7 @@ def _install() -> None:
         TextNode.render = render  # type: ignore[method-assign]
         TextNode.render_annotated = render  # type: ignore[method-assign]
         Node.render_annotated = render_annotated  # type: ignore[method-assign]
-        _installed = True
+        _installed.set()
 
 
 def _transparent_node_types() -> frozenset:
