@@ -608,6 +608,9 @@ def active_unlocalized_number_format() -> Optional[Tuple[str, str, List[int], bo
 def clear_dj_model_fields_cache() -> None:
     """Forget every cached ``RustLiveView.dj_model_fields(cache=True)`` result."""
 
+def set_dj_model_gate_shared(enabled: bool) -> None:
+    """Let each new view's dj-model gate share the template walk (render caches on, #4363)."""
+
 def dj_model_fields_from_template(
     template_source: str,
     template_dirs: Optional[List[str]] = None,
@@ -1640,6 +1643,7 @@ __all__ = [
     "MAX_MD_NESTING",
     "dj_model_fields_from_template",
     "clear_dj_model_fields_cache",
+    "set_dj_model_gate_shared",
     "serialize_queryset",
     "serialize_context",
     "serialize_models_fast",
