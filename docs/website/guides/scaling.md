@@ -185,15 +185,17 @@ The same change measured on the Python heap alone (`tracemalloc`, five open page
 | Rust: last rendered tree | 1,648 | 503,080 | 2,289,965 | 34,194 | 4,208 |
 | Rust: copy of the state | 1,810 | 1,810 | 1,207,514 | 8,249 | 4,447 |
 | Rust: text-node index | 217 | 67,167 | 403,889 | 5,015 | 294 |
-| Rust: last HTML, per-node HTML cache, loop cache, fragment map | 464 | 100,464 | 316,744 | 3,494 | 1,030 |
+| Rust: last HTML, per-node HTML cache, loop cache, fragment map | 464 | 100,464 | 316,744 | 4,384 | 1,030 |
 | Python: the view's state | 11,204 | 11,216 | 398,054 | 29,100 | 18,410 |
 | Python: change-detection fingerprints | 1,298 | 1,298 | 1,563 | 7,489 | 3,350 |
 | Python: recovery HTML | 116 | 53,007 | 112,919 | 1,993 | 312 |
 | Python: view and consumer, everything else | 24,657 | 24,629 | 34,663 | 29,306 | 25,905 |
 | Rust: everything else | 3,356 | 3,356 | 3,356 | 5,594 | 3,356 |
-| **Total** | **44 KB** | **0.77 MB** | **4.8 MB** | **124 KB** | **60 KB** |
+| **Total** | **44 KB** | **0.77 MB** | **4.8 MB** | **125 KB** | **60 KB** |
 
 The table's rows each hold a nested `{% for %}` over their tags. Since #4325 the per-item loop store keeps such a row's HTML whole, and the loop nested in it no longer fills the content cache with one entry per tag, so the loop cache of the 1,000-row table is about 60 KB smaller than before (377,033 bytes then).
+
+Since #4315 the per-node HTML cache also keeps the children of each top-level `{% if %}`, `{% with %}` or `{% block %}` whose inputs can be named (so a partial render can reuse them while the wrapper re-renders); that is the 20-components page's 890 extra bytes in that row (3,494 before).
 
 Read it this way:
 

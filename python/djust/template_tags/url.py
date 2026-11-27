@@ -15,6 +15,10 @@ from ._builtin import DjangoBuiltinTagHandler
 class UrlTagHandler(DjangoBuiltinTagHandler):
     # Django's node binds only its `as <name>` target (#4124).
     BINDS_ONLY_AS_VAR = True
+    # Django's URLNode reads its operands and `context.request` (for the
+    # current application namespace), nothing else of the context (#4315).
+    READS_ONLY_ARGS = True
+    ALSO_READS = frozenset({"request"})
 
     # The native argument channel preserves the assignment-name marker; all
     # other positions are raw source tokens under the built-in bridge policy.

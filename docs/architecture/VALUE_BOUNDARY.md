@@ -502,25 +502,45 @@ top-level node, the set of **top-level context roots** the node's subtree reads
 > the wildcard set, the intersection rule) is unchanged by it.
 
 **Eight** node types get the wildcard `"*"` because their dependencies cannot be
-inferred (`parser.rs:2944` and `:2950`–`2959`): `Include` on its own, then the
-custom-tag family whose raw bodies are re-parsed by Django (#2558) —
-`CustomTag`, `BlockCustomTag`, `RawBlockCustomTag`, `Language`, `Timezone`,
-`Localize`, `LocalTime`.
+inferred: `Include` on its own, then the custom-tag family whose raw bodies are
+re-parsed by Django (#2558) — `CustomTag`, `BlockCustomTag`, `RawBlockCustomTag`,
+`Language`, `Timezone`, `Localize`, `LocalTime`. An inline `CustomTag` whose
+handler declares `READS_ONLY_ARGS` (#4315) is the exception: a use that binds
+nothing depends on its operands' root names plus the handler's `ALSO_READS`
+(`{% url %}`: `request`; `{% static %}`: nothing). `{% now %}` does not declare
+it (the clock is not an operand), and neither do `takes_context` tags, raw
+`@register.tag` nodes or `{% querystring %}`. Only this walk honours the
+declaration; the loop render cache and the JIT's path extraction keep the `"*"`.
 
-`render_nodes_partial` (`renderer.rs:2193`) re-renders node `i` when
-(`renderer.rs:2212`–`2217`):
+`render_nodes_partial_with_children` (`renderer.rs`) re-renders top-level node
+`i` when:
 
 - `deps` contains `"*"`, or
 - `deps` intersects `changed_keys`, or
 - there is no cached fragment for `i`, or
-- an earlier wildcard node may have rebound names this node reads
-  (`context_may_have_changed`, `renderer.rs:2211`) **and** this node has any
-  deps at all — literal text stays reusable.
+- an earlier node that may BIND names (`node_may_bind_names`: an assign tag, an
+  `as <var>` form, an include, …) has rendered (`context_may_have_changed`)
+  **and** this node has any deps at all — literal text stays reusable. A `"*"`
+  node that only reads unknown keys re-renders itself and does not latch (#4124).
 
-Otherwise `node_html_cache[i]` is reused verbatim. The entry point is
-`render_with_loader_partial` (`crates/djust_templates/src/lib.rs:264`), which
-falls back to a full collecting render when `{% extends %}` has not been
-resolved yet (`:271`).
+Otherwise `node_html_cache[i]` is reused verbatim. A top-level `{% if %}`,
+`{% with %}` or `{% block %}` that re-renders renders its body **child by child**
+(#4315): each child is reused from the previous render's per-child fragments
+under the same rule, with per-child deps from `extract_per_node_deps` of the
+body (`parser::extract_wrapper_child_deps`), the latch carried in from the
+top-level list and applied again inside the body, and a child that reads a name
+the wrapper binds (`{% with %}` targets, `block`) always re-rendered. An
+`{% if %}` keeps its children per branch. The child entries sit beside the
+fragment cache (`RustLiveView::node_child_cache`) and record the top-level
+fragment they were rendered with, so an entry is ignored once that fragment is
+replaced; a fragment whose loop-cache placeholders are expanded after the
+render drops its child entry. Partial rendering still caches only one level
+down: a `{% for %}` relies on the loop render cache, and an element or nested
+wrapper inside a child re-renders with that child.
+
+The entry point is `render_with_loader_partial_children`
+(`crates/djust_templates/src/lib.rs`), which falls back to a full collecting
+render when `{% extends %}` has not been resolved yet.
 
 ### 3.9 The other live-object mechanism: the by-name sidecar
 

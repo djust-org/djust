@@ -3649,25 +3649,29 @@ pub fn extract_dj_model_fields<L: crate::inheritance::TemplateLoader>(
 /// `Include` and `CustomTag` nodes get a `"*"` wildcard because their
 /// dependencies cannot be statically determined.
 pub fn extract_per_node_deps(nodes: &[Node]) -> Vec<HashSet<String>> {
+    let _walk = PartialDepsWalk::enter();
     nodes
         .iter()
-        .map(|node| {
-            let node = node.unlocated();
+        .map(|located| {
+            let node = located.unlocated();
             let mut variables: HashMap<String, Vec<String>> = HashMap::new();
-            extract_from_nodes(std::slice::from_ref(node), &mut variables);
+            // The LOCATED node, so the walk enters its registry namespace
+            // before asking about a tag handler's declarations (#4315).
+            extract_from_nodes(std::slice::from_ref(located), &mut variables);
             let mut deps: HashSet<String> = variables.into_keys().collect();
 
             // Include nodes may depend on any variable — mark as wildcard
             if matches!(node, Node::Include { .. }) {
                 deps.insert("*".to_string());
             }
-            // CustomTag / BlockCustomTag / RawBlockCustomTag nodes may also
-            // have unpredictable deps (#2558: the raw body is re-parsed by
-            // Django, so anything in it is a dependency).
+            // BlockCustomTag / RawBlockCustomTag nodes may also have
+            // unpredictable deps (#2558: the raw body is re-parsed by Django,
+            // so anything in it is a dependency). An inline `CustomTag` gets
+            // its `"*"` from `extract_from_nodes`, which leaves it out for a
+            // handler that declared `READS_ONLY_ARGS` (#4315).
             if matches!(
                 node,
-                Node::CustomTag { .. }
-                    | Node::PartialCall { .. }
+                Node::PartialCall { .. }
                     | Node::PartialDef { .. }
                     | Node::BlockCustomTag { .. }
                     | Node::RawBlockCustomTag { .. }
@@ -3679,6 +3683,53 @@ pub fn extract_per_node_deps(nodes: &[Node]) -> Vec<HashSet<String>> {
                 deps.insert("*".to_string());
             }
             deps
+        })
+        .collect()
+}
+
+/// The per-child dependency sets of one top-level wrapper whose body the
+/// partial renderer caches child by child (#4315).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WrapperChildDeps {
+    /// One entry per body, indexed by the branch the renderer reports:
+    /// `{% if %}` has its true body (`0`) and false body (`1`), `{% with %}`
+    /// and `{% block %}` one body (`0`). Each is [`extract_per_node_deps`] of
+    /// that body.
+    pub bodies: Vec<Vec<HashSet<String>>>,
+    /// Names the wrapper itself binds for its body: a `{% with %}`'s targets,
+    /// a `{% block %}`'s `block`. They are not caller keys, so a changed-key
+    /// set never names them; a child reading one re-renders whenever the
+    /// wrapper does.
+    pub scoped: HashSet<String>,
+}
+
+/// [`WrapperChildDeps`] for each node of a top-level list (#4315): `Some` for
+/// an `{% if %}`, `{% with %}` or `{% block %}` (located or not), `None` for
+/// every other node.
+pub fn extract_wrapper_child_deps(nodes: &[Node]) -> Vec<Option<WrapperChildDeps>> {
+    nodes
+        .iter()
+        .map(|node| match node.unlocated() {
+            Node::If {
+                true_nodes,
+                false_nodes,
+                ..
+            } => Some(WrapperChildDeps {
+                bodies: vec![
+                    extract_per_node_deps(true_nodes),
+                    extract_per_node_deps(false_nodes),
+                ],
+                scoped: HashSet::new(),
+            }),
+            Node::With { assignments, nodes } => Some(WrapperChildDeps {
+                bodies: vec![extract_per_node_deps(nodes)],
+                scoped: assignments.iter().map(|(name, _)| name.clone()).collect(),
+            }),
+            Node::Block { nodes, .. } => Some(WrapperChildDeps {
+                bodies: vec![extract_per_node_deps(nodes)],
+                scoped: std::iter::once("block".to_string()).collect(),
+            }),
+            _ => None,
         })
         .collect()
 }
@@ -3706,6 +3757,53 @@ pub fn body_root_var_names(nodes: &[Node]) -> HashSet<String> {
 
 thread_local! {
     static PARTIAL_DEPENDENCY_STACK: std::cell::RefCell<HashSet<(usize, String)>> = std::cell::RefCell::new(HashSet::new());
+    /// Set while [`extract_per_node_deps`] walks (#4315). Only that walk
+    /// honours a handler's `READS_ONLY_ARGS`: the loop render cache
+    /// (`body_root_var_names`) and the JIT's path extraction keep the `"*"`
+    /// every inline tag has always contributed.
+    static PARTIAL_DEPS_WALK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Marks the extent of one [`extract_per_node_deps`] walk (#4315).
+struct PartialDepsWalk {
+    previous: bool,
+}
+
+impl PartialDepsWalk {
+    fn enter() -> Self {
+        Self {
+            previous: PARTIAL_DEPS_WALK.with(|flag| flag.replace(true)),
+        }
+    }
+}
+
+impl Drop for PartialDepsWalk {
+    fn drop(&mut self) {
+        PARTIAL_DEPS_WALK.with(|flag| flag.set(self.previous));
+    }
+}
+
+/// The context names an inline tag use reads, when it reads only its operands
+/// (#4315): the handler declared `READS_ONLY_ARGS` and this use binds nothing
+/// (no `as <name>` on a `BINDS_ONLY_AS_VAR` handler, or a handler that cannot
+/// bind at all). `None` means "may read anything": the `"*"` dependency.
+///
+/// Asked inside the node's registry namespace (the walk enters it at the
+/// enclosing `Node::Located`). A use that may bind keeps `"*"`, because the
+/// partial renderer's latch (`node_may_bind_names`) only fires for a `"*"`
+/// node: a binding must keep re-rendering what follows.
+fn inline_tag_reads_only(node: &Node) -> Option<Vec<String>> {
+    let Node::CustomTag { name, .. } = node else {
+        return None;
+    };
+    if !PARTIAL_DEPS_WALK.with(std::cell::Cell::get) {
+        return None;
+    }
+    let extra = crate::registry::tag_handler_reads_only_args(name)?;
+    if crate::renderer::node_may_bind_names(node) {
+        return None;
+    }
+    Some(extra)
 }
 
 /// Recursively extract variable paths from AST nodes
@@ -3719,7 +3817,18 @@ fn extract_from_nodes(
     let mut regroups: Vec<(String, String)> = Vec::new();
     for node in nodes {
         match node {
-            Node::Located { nodes, .. } => extract_from_nodes(nodes, variables),
+            Node::Located {
+                nodes,
+                registry_namespace,
+                ..
+            } => {
+                // A handler's `READS_ONLY_ARGS` lives in the namespace the
+                // render enters for this node (#4315).
+                let _namespace = PARTIAL_DEPS_WALK
+                    .with(std::cell::Cell::get)
+                    .then(|| crate::registry_scope::NamespaceGuard::enter(*registry_namespace));
+                extract_from_nodes(nodes, variables)
+            }
             Node::Variable(var_expr, filters, _in_attr) => {
                 // Extract from variable: {{ variable.path }}. A relation's
                 // `all` piped straight into `length` is read for its row count
@@ -4022,9 +4131,19 @@ fn extract_from_nodes(
                 }
                 // Custom tags can reference arbitrary vars internally; mark
                 // the enclosing wrapper as "*" so partial render re-renders
-                // it on any context change. Mirrors the top-level treatment
-                // in extract_per_node_deps. Fixes #783.
-                variables.entry("*".to_string()).or_default();
+                // it on any context change. Fixes #783. A handler that
+                // declared `READS_ONLY_ARGS` reads its operands (extracted
+                // above) plus the names it listed, and nothing else (#4315).
+                match inline_tag_reads_only(node) {
+                    Some(extra) => {
+                        for name in extra {
+                            variables.entry(name).or_default();
+                        }
+                    }
+                    None => {
+                        variables.entry("*".to_string()).or_default();
+                    }
+                }
             }
             Node::WidthRatio {
                 value,

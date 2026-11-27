@@ -62,6 +62,7 @@ static TAG_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(r"\{%([^%]+)%\}").unwrap
 struct ResolvedInheritance {
     final_nodes: Vec<Node>,
     final_node_deps: Vec<HashSet<String>>,
+    final_child_deps: Vec<Option<parser::WrapperChildDeps>>,
 }
 
 /// Flattened nodes for partial rendering: `{% block %}` children promoted to top-level.
@@ -69,6 +70,7 @@ struct ResolvedInheritance {
 struct FlattenedNodes {
     nodes: Vec<Node>,
     node_deps: Vec<HashSet<String>>,
+    child_deps: Vec<Option<parser::WrapperChildDeps>>,
 }
 
 /// Expose pure block children as separate nodes for partial rendering.
@@ -139,11 +141,13 @@ impl CompiledTemplate {
             return Ok(None);
         };
         let node_deps = parser::extract_per_node_deps(&nodes);
+        let child_deps = parser::extract_wrapper_child_deps(&nodes);
         Ok(Some(Self {
             template: std::sync::Arc::new(Template {
                 nodes,
                 source: self.template.source.clone(),
                 node_deps,
+                child_deps,
                 resolved: OnceLock::new(),
                 flattened: OnceLock::new(),
                 is_named_partial: true,
@@ -159,6 +163,8 @@ pub struct Template {
     source: String,
     /// Per-node dependency sets for partial rendering optimisation.
     node_deps: Vec<HashSet<String>>,
+    /// Per-child dependency sets of each top-level wrapper (#4315).
+    child_deps: Vec<Option<parser::WrapperChildDeps>>,
     /// Lazily resolved inheritance: final merged nodes + deps for `{% extends %}` templates.
     resolved: OnceLock<ResolvedInheritance>,
     /// Lazily flattened nodes: blocks expanded for finer partial rendering.
@@ -181,11 +187,13 @@ impl Template {
         // counter (Stage 11 finding on PR #1363, #1358 Iter 1).
         let nodes = parser::parse_with_source_spanned(&tokens, &spans, source)?;
         let node_deps = parser::extract_per_node_deps(&nodes);
+        let child_deps = parser::extract_wrapper_child_deps(&nodes);
 
         Ok(Self {
             nodes,
             source: source.to_string(),
             node_deps,
+            child_deps,
             resolved: OnceLock::new(),
             flattened: OnceLock::new(),
             is_named_partial: false,
@@ -244,10 +252,12 @@ impl Template {
         let root_nodes = chain.get_root_nodes();
         let final_nodes = chain.apply_block_overrides(root_nodes);
         let final_node_deps = parser::extract_per_node_deps(&final_nodes);
+        let final_child_deps = parser::extract_wrapper_child_deps(&final_nodes);
         // OnceLock::set returns Err if already set (race), which is fine
         let _ = self.resolved.set(ResolvedInheritance {
             final_nodes,
             final_node_deps,
+            final_child_deps,
         });
         Ok(())
     }
@@ -263,9 +273,11 @@ impl Template {
         if has_blocks && !self.uses_extends() {
             let flat = flatten_blocks(self.nodes.clone());
             let deps = parser::extract_per_node_deps(&flat);
+            let child_deps = parser::extract_wrapper_child_deps(&flat);
             let _ = self.flattened.set(FlattenedNodes {
                 nodes: flat,
                 node_deps: deps,
+                child_deps,
             });
         }
     }
@@ -295,6 +307,19 @@ impl Template {
         &self.node_deps
     }
 
+    /// Get the effective per-child wrapper deps, parallel to
+    /// [`Self::effective_node_deps`] (#4315).
+    fn effective_child_deps(&self) -> &[Option<parser::WrapperChildDeps>] {
+        if let Some(resolved) = self.resolved.get() {
+            return &resolved.final_child_deps;
+        }
+        self.ensure_flattened();
+        if let Some(flat) = self.flattened.get() {
+            return &flat.child_deps;
+        }
+        &self.child_deps
+    }
+
     pub fn render(&self, context: &Context) -> Result<String> {
         self.render_with_loader(context, &NoOpTemplateLoader)
     }
@@ -307,6 +332,60 @@ impl Template {
     ) -> Result<(String, Vec<String>)> {
         let _includes = inheritance::IncludeRenderGuard::new();
         renderer::render_nodes_collecting(self.effective_nodes(), context, Some(loader))
+    }
+
+    /// [`Self::render_with_loader_collecting`], also returning the per-child
+    /// fragment cache of each top-level wrapper (#4315).
+    pub fn render_with_loader_collecting_children<L: TemplateLoader>(
+        &self,
+        context: &Context,
+        loader: &L,
+    ) -> Result<renderer::PartialRender> {
+        let _includes = inheritance::IncludeRenderGuard::new();
+        renderer::render_nodes_collecting_with_children(
+            self.effective_nodes(),
+            context,
+            Some(loader),
+        )
+    }
+
+    /// [`Self::render_with_loader_partial`] with the per-child fragment cache
+    /// of top-level `{% if %}` / `{% with %}` / `{% block %}` bodies (#4315):
+    /// `child_cache` is the previous render's [`renderer::PartialRender::children`].
+    pub fn render_with_loader_partial_children<L: TemplateLoader>(
+        &self,
+        context: &Context,
+        loader: &L,
+        changed_keys: &HashSet<String>,
+        node_html_cache: &[String],
+        child_cache: &[Option<renderer::ChildFragments>],
+    ) -> Result<renderer::PartialRender> {
+        let _includes = inheritance::IncludeRenderGuard::new();
+        if self.uses_extends() && self.resolved.get().is_none() {
+            // Extends not yet resolved — fall back to full render
+            let mut rendered = renderer::render_nodes_collecting_with_children(
+                &self.nodes,
+                context,
+                Some(loader),
+            )?;
+            rendered.changed = (0..rendered.fragments.len()).collect();
+            // Rendered from the unresolved list, not the one the next partial
+            // render walks: no child entry may outlive it.
+            rendered.children.clear();
+            return Ok(rendered);
+        }
+        renderer::render_nodes_partial_with_children(
+            self.effective_nodes(),
+            self.effective_node_deps(),
+            context,
+            Some(loader),
+            changed_keys,
+            node_html_cache,
+            renderer::ChildCacheInput {
+                deps: self.effective_child_deps(),
+                fragments: child_cache,
+            },
+        )
     }
 
     /// Partial render: re-render only nodes whose deps intersect `changed_keys`.

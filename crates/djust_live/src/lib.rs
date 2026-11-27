@@ -415,6 +415,14 @@ pub struct RustLiveViewBackend {
     last_render_timing: Option<RenderTiming>,
     /// Per-node HTML cache for partial template rendering
     node_html_cache: Vec<String>,
+    /// Per-child fragments of each top-level `{% if %}` / `{% with %}` /
+    /// `{% block %}`, parallel to `node_html_cache` (#4315). An entry records
+    /// the top-level fragment it was rendered with and is ignored once that
+    /// fragment is replaced, so a site that replaces `node_html_cache` without
+    /// clearing this cannot serve stale children (the clearing sites clear
+    /// both, to free the memory). Not part of the serialized state: a restored view
+    /// re-renders a wrapper's children once.
+    node_child_cache: djust_templates::renderer::ChildFragmentCache,
     /// Context keys that changed since the last render (None = full render)
     changed_keys: Option<HashSet<String>>,
     /// Maps template node index → (VDOM path, djust_id) for text-only fragments.
@@ -526,6 +534,7 @@ impl RustLiveViewBackend {
             safe_keys: HashSet::new(),
             last_render_timing: None,
             node_html_cache: Vec::new(),
+            node_child_cache: Vec::new(),
             changed_keys: None,
             fragment_text_map: None,
             text_node_index: None,
@@ -557,6 +566,7 @@ impl RustLiveViewBackend {
             self.authenticated_model_fields.clear();
             self.last_html = None;
             self.node_html_cache.clear();
+            self.node_child_cache.clear();
             self.fragment_text_map = None;
             self.text_node_index = None;
             self.loop_render_cache.clear();
@@ -585,6 +595,7 @@ impl RustLiveViewBackend {
             // The old page's bindings do not authorize a different origin.
             self.authenticated_model_fields.clear();
             self.node_html_cache.clear();
+            self.node_child_cache.clear();
             self.last_html = None;
             self.fragment_text_map = None;
             self.text_node_index = None;
@@ -988,6 +999,7 @@ impl RustLiveViewBackend {
         // tracked context key does. Loop fragments have the same constraint.
         if *self.template_source == *new_template_source {
             self.node_html_cache.clear();
+            self.node_child_cache.clear();
             self.fragment_text_map = None;
             self.loop_render_cache.clear();
             return;
@@ -998,6 +1010,7 @@ impl RustLiveViewBackend {
             self.authenticated_model_fields.clear();
         }
         self.node_html_cache = Vec::new(); // Invalidate partial render cache
+        self.node_child_cache = Vec::new();
         self.last_html = None; // Invalidate text fast path cache
         self.fragment_text_map = None; // Invalidate fragment→VDOM map
         self.text_node_index = None; // Invalidate text-region fast-path index
@@ -1087,6 +1100,7 @@ impl RustLiveViewBackend {
     /// in tests to produce a control output for byte-equality comparison.
     fn clear_fragment_cache(&mut self) {
         self.node_html_cache = Vec::new();
+        self.node_child_cache = Vec::new();
         self.last_html = None;
         self.fragment_text_map = None;
         self.text_node_index = None;
@@ -1399,6 +1413,7 @@ impl RustLiveViewBackend {
                 self.authenticated_partial_root = is_root;
                 self.authenticated_model_fields = fields;
                 self.node_html_cache.clear();
+                self.node_child_cache.clear();
                 self.last_html = None;
                 self.text_node_index = None;
                 return Ok((rendered.html[start..end].to_owned(), spans, origins));
@@ -1406,6 +1421,7 @@ impl RustLiveViewBackend {
             // Invalidate partial render cache — render() bypasses the diff pipeline
             // so the cache would be stale for the next render_with_diff() call.
             self.node_html_cache = Vec::new();
+            self.node_child_cache = Vec::new();
             self.last_html = None; // Invalidate text fast path cache
             self.text_node_index = None; // Invalidate text-region fast-path index
 
@@ -1560,6 +1576,7 @@ impl RustLiveViewBackend {
                 if self.potential_authenticated_partial_root && self.template_origin.is_some() {
                     self.changed_keys = None;
                     self.node_html_cache.clear();
+                    self.node_child_cache.clear();
                     template_arc.render_with_loader_named(
                         &context,
                         &loader,
@@ -1571,23 +1588,26 @@ impl RustLiveViewBackend {
                 {
                     let changed = self.changed_keys.take().unwrap_or_default();
                     template_arc
-                        .render_with_loader_partial(
+                        .render_with_loader_partial_children(
                             &context,
                             &loader,
                             &changed,
                             &self.node_html_cache,
+                            &self.node_child_cache,
                         )
-                        .map(|(html, fragments, _changed_indices)| {
-                            self.node_html_cache = fragments;
-                            html
+                        .map(|rendered| {
+                            self.node_html_cache = rendered.fragments;
+                            self.node_child_cache = rendered.children;
+                            rendered.html
                         })
                 } else {
                     self.changed_keys = None;
                     template_arc
-                        .render_with_loader_collecting(&context, &loader)
-                        .map(|(html, fragments)| {
-                            self.node_html_cache = fragments;
-                            html
+                        .render_with_loader_collecting_children(&context, &loader)
+                        .map(|rendered| {
+                            self.node_html_cache = rendered.fragments;
+                            self.node_child_cache = rendered.children;
+                            rendered.html
                         })
                 }
             };
@@ -1619,9 +1639,16 @@ impl RustLiveViewBackend {
                 // placeholders are the manifest's, in order.
                 let open = format!("<{sentinel_tag} ");
                 let mut ph_iter = loop_parse_manifest.iter().filter(|m| m.placeholder);
-                for frag in self.node_html_cache.iter_mut() {
+                for (i, frag) in self.node_html_cache.iter_mut().enumerate() {
                     if frag.contains(&open) {
                         *frag = Self::expand_loop_placeholders(frag, &mut ph_iter, &sentinel_tag);
+                        // A wrapper's child fragments hold the same reduced
+                        // placeholders; drop them rather than expand them
+                        // apart from their parent (#4315). The entry would no
+                        // longer match the expanded fragment anyway.
+                        if let Some(entry) = self.node_child_cache.get_mut(i) {
+                            *entry = None;
+                        }
                     }
                 }
                 Self::reconstruct_full_loop_html(&reduced_html, &loop_parse_manifest, &sentinel_tag)
@@ -1951,6 +1978,7 @@ impl RustLiveViewBackend {
             self.version += 1;
             self.last_html = Some(full_html.clone());
             self.node_html_cache = Vec::new();
+            self.node_child_cache = Vec::new();
             self.fragment_text_map = None;
             self.text_node_index = None; // positions moved; rebuilt by the next full parse
             self.set_component_html(component_id, html);
@@ -1975,6 +2003,7 @@ impl RustLiveViewBackend {
         self.last_html = None;
         self.version = 0;
         self.node_html_cache = Vec::new();
+        self.node_child_cache = Vec::new();
         self.changed_keys = None;
         self.fragment_text_map = None;
         self.text_node_index = None;
@@ -1995,6 +2024,7 @@ impl RustLiveViewBackend {
         self.last_root_ns = None;
         self.last_html = None;
         self.node_html_cache = Vec::new();
+        self.node_child_cache = Vec::new();
         self.changed_keys = None;
         self.fragment_text_map = None;
         self.text_node_index = None;
@@ -2098,6 +2128,7 @@ impl RustLiveViewBackend {
             safe_keys: HashSet::new(),
             last_render_timing: None,
             node_html_cache: Vec::new(),
+            node_child_cache: Vec::new(),
             changed_keys: None,
             fragment_text_map: None,
             text_node_index: None,
@@ -2435,6 +2466,7 @@ impl RustLiveViewBackend {
         self.authenticated_partial_root = authenticated;
         self.last_html = None;
         self.node_html_cache.clear();
+        self.node_child_cache.clear();
         self.fragment_text_map = None;
         self.text_node_index = None;
         self.changed_keys = None;
@@ -2524,6 +2556,7 @@ impl RustLiveViewBackend {
                 if self.potential_authenticated_partial_root && self.template_origin.is_some() {
                     self.changed_keys = None;
                     self.node_html_cache.clear();
+                    self.node_child_cache.clear();
                     template_arc
                         .render_with_loader_named(
                             &context,
@@ -2535,24 +2568,27 @@ impl RustLiveViewBackend {
                     // Partial render: only re-render nodes whose deps changed
                     let changed = self.changed_keys.take().unwrap_or_default();
                     template_arc
-                        .render_with_loader_partial(
+                        .render_with_loader_partial_children(
                             &context,
                             &loader,
                             &changed,
                             &self.node_html_cache,
+                            &self.node_child_cache,
                         )
-                        .map(|(html, fragments, changed_indices)| {
-                            self.node_html_cache = fragments;
-                            (html, changed_indices)
+                        .map(|rendered| {
+                            self.node_html_cache = rendered.fragments;
+                            self.node_child_cache = rendered.children;
+                            (rendered.html, rendered.changed)
                         })
                 } else {
                     // Full render: first render or no change info
                     self.changed_keys = None;
                     template_arc
-                        .render_with_loader_collecting(&context, &loader)
-                        .map(|(html, fragments)| {
-                            self.node_html_cache = fragments;
-                            (html, vec![])
+                        .render_with_loader_collecting_children(&context, &loader)
+                        .map(|rendered| {
+                            self.node_html_cache = rendered.fragments;
+                            self.node_child_cache = rendered.children;
+                            (rendered.html, vec![])
                         })
                 }
             };
@@ -2601,9 +2637,16 @@ impl RustLiveViewBackend {
                 // placeholders are the manifest's, in order.
                 let open = format!("<{sentinel_tag} ");
                 let mut ph_iter = loop_parse_manifest.iter().filter(|m| m.placeholder);
-                for frag in self.node_html_cache.iter_mut() {
+                for (i, frag) in self.node_html_cache.iter_mut().enumerate() {
                     if frag.contains(&open) {
                         *frag = Self::expand_loop_placeholders(frag, &mut ph_iter, &sentinel_tag);
+                        // A wrapper's child fragments hold the same reduced
+                        // placeholders; drop them rather than expand them
+                        // apart from their parent (#4315). The entry would no
+                        // longer match the expanded fragment anyway.
+                        if let Some(entry) = self.node_child_cache.get_mut(i) {
+                            *entry = None;
+                        }
                     }
                 }
                 Self::reconstruct_full_loop_html(&reduced_html, &loop_parse_manifest, &sentinel_tag)

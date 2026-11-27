@@ -74,10 +74,21 @@ DjangoRustError::TemplateError(format!("localizing {}: {e}", encoded.type_name))
 djust_core::locale::localize_number_unlocalized(&value.to_string(), false)
 djust_core::locale::localize_number(&value.to_string())
 _ => value.to_string(),
+Ok((rendered.html, rendered.fragments))
+rendered.html.push_str(&fragment);
+.flatten()
+.and_then(|deps| deps.bodies.get(usize::from(branch)))
+Some(html) => html.clone(),
+Ok((rendered.html, rendered.fragments, rendered.changed))
+rendered.html.push_str(&html);
 "Template loader not configured".to_string(),
 fn render_block_super(&self, ctx: &Context) -> Result<String> {
 Ok(rendered.into_authored_output())
 map.insert("block".to_string(), lazy_block);
+R::context_neutral("<!--dj-if-->".to_string())
+format!("-{namespace}")
+let mut wrapped = R::context_neutral(format!(
+wrapped.append(&R::context_neutral("<!--/dj-if-->".to_owned()));
 super_value = Some(Value::SafeString(output.0.clone()));
 .into());
 .and_then(|c| c.blank_html.clone())
@@ -98,10 +109,6 @@ let literal = value.to_string();
 blank_html: if literal_blocked {
 blank_openings: Vec::new(),
 text.into()
-R::context_neutral("<!--dj-if-->".to_string())
-format!("-{namespace}")
-let mut wrapped = R::context_neutral(format!(
-wrapped.append(&R::context_neutral("<!--/dj-if-->".to_owned()));
 Value::List(s.chars().map(|c| Value::String(c.to_string())).collect()),
 loop_dict.insert("parentloop".into(), parentloop);
 loop_dict.insert("length".into(), Value::Integer(len_values));
@@ -638,6 +645,8 @@ let (start, end) = page.range.unwrap_or((0, page.rendered.html.len()));
 return Ok((rendered.html[start..end].to_owned(), spans, origins));
 Ok((result.html, spans, result.origins))
 patches.map(|bytes| PyBytes::new(py, &bytes).into()),
+rendered.html
+rendered.html
 return Err(e.into());
 let open = format!("<{sentinel_tag} ");
 reduced_html.clone()
@@ -679,6 +688,8 @@ parse_html_with_namespace(&rendered.html)
 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?
 .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?
+(rendered.html, rendered.changed)
+(rendered.html, vec![])
 return Err(e.into());
 let open = format!("<{sentinel_tag} ");
 reduced_html.clone()
