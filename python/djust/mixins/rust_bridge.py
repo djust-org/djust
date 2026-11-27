@@ -361,6 +361,10 @@ def _normalize_db_values(value: Any, depth: int = 0) -> Any:
     return value
 
 
+#: Exact types that are not and cannot hold a ``SafeString``.
+_NO_SAFE_KEYS = frozenset((str, int, float, bool, type(None)))
+
+
 def _collect_safe_keys(
     value: Any, prefix: str = "", visited: Optional[Set[int]] = None
 ) -> List[str]:
@@ -382,6 +386,10 @@ def _collect_safe_keys(
         data = {"content": mark_safe("<u>Text</u>")}
         → ["data.content"]
     """
+    if type(value) in _NO_SAFE_KEYS:
+        # An exact scalar (not a ``SafeString``) holds no safe path.
+        return []
+
     from django.utils.safestring import SafeString
 
     if visited is None:

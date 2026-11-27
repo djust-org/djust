@@ -128,6 +128,11 @@ def _spells_itself(value: Any) -> bool:
     return False
 
 
+#: Exact types :func:`serialize_value` returns unchanged (a subclass, such as
+#: ``SafeString`` or an ``IntEnum``, takes the full path).
+_PLAIN_SCALARS = frozenset((str, int, float, bool, type(None)))
+
+
 def serialize_value(
     value: Any,
     *,
@@ -151,6 +156,11 @@ def serialize_value(
     Returns:
         JSON-serializable value
     """
+    # A plain scalar comes back as itself on every branch below (none of them
+    # claims an exact ``str`` / ``int`` / ``float`` / ``bool`` / ``None``), and a
+    # render serializes thousands of them: answer before the type tests.
+    if type(value) in _PLAIN_SCALARS:
+        return value
     # The native render API accepts Python objects directly. JSON conversion
     # would erase the types needed by filters, comparisons, and date formatting.
     # Keep the existing JSON-oriented helper contract for other callers.
