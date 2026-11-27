@@ -70,6 +70,7 @@ import inspect
 import json
 import os
 import pstats
+import re
 import shutil
 import statistics
 import subprocess
@@ -281,8 +282,11 @@ TAG_CASES = [
 ]
 
 
-def _tag_context() -> Dict[str, Any]:
-    return {
+def _tag_context(body: str) -> Dict[str, Any]:
+    """Only the names ``body`` uses: the ``djust`` backend serializes every
+    context value on each render, so an unused one would be charged to the tag
+    (``tag/badge/render+unused-context`` measures exactly that)."""
+    full = {
         "n": 7,
         "crumbs": [{"label": "Home", "url": "/"}, {"label": "Docs", "url": "/d/"}],
         "rows": [{"id": i, "name": "Row %d" % i, "qty": i % 7} for i in range(50)],
@@ -292,6 +296,9 @@ def _tag_context() -> Dict[str, Any]:
             {"key": "qty", "label": "Qty"},
         ],
     }
+    if body == "*":
+        return full
+    return {k: v for k, v in full.items() if re.search(r"\b%s\b" % k, body)}
 
 
 def tag_cases() -> List[Case]:
@@ -303,16 +310,23 @@ def tag_cases() -> List[Case]:
         source = "{% load djust_components %}" + body
 
         def make_cold(source: str = source) -> Callable[[], Any]:
-            ctx = _tag_context()
+            ctx = _tag_context(source)
             return lambda: engine.from_string(source).render(ctx)
 
         def make_warm(source: str = source) -> Callable[[], Any]:
-            ctx = _tag_context()
+            ctx = _tag_context(source)
             compiled = engine.from_string(source)
             return lambda: compiled.render(ctx)
 
         out.append(Case("tag/%s/compile+render" % tag, make_cold, inner=20))
         out.append(Case("tag/%s/render" % tag, make_warm, inner=50))
+
+    def unused_context() -> Callable[[], Any]:
+        compiled = engine.from_string("{% load djust_components %}" + TAG_CASES[0][1])
+        ctx = _tag_context("*")
+        return lambda: compiled.render(ctx)
+
+    out.append(Case("tag/badge/render+unused-context", unused_context, inner=20))
     return out
 
 
