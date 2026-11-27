@@ -2726,7 +2726,7 @@ impl RustLiveViewBackend {
                             {
                                 let (path, djust_id) = frag_map.get(idx).unwrap();
                                 if let Some(node) = get_vdom_node_mut(&mut vdom, path) {
-                                    node.text = Some(new_text.clone());
+                                    node.text = Some(new_text.clone().into());
                                     node.cached_html = None;
                                 }
                                 let d = if djust_id.is_empty() {
@@ -6649,7 +6649,7 @@ fn apply_text_region_edits(vdom: &mut VNode, edits: &[TextRegionEdit]) -> bool {
     }
     for edit in edits {
         if let Some(node) = get_vdom_node_mut(vdom, &edit.path) {
-            node.text = Some(edit.text.clone());
+            node.text = Some(edit.text.clone().into());
             node.cached_html = None;
         }
     }
@@ -6801,7 +6801,7 @@ fn try_multi_text_region_fast_path(
             path: path.clone(),
             d,
             text: new_text.clone(),
-            parent_d,
+            parent_d: Option::map(parent_d, String::from),
             index,
         });
         edits.push(TextRegionEdit {
@@ -7886,7 +7886,11 @@ fn collect_vdom_text_nodes(
                 );
                 if preserving_parent || !is_html_whitespace_only(text) {
                     let djust_id = child.djust_id.clone().unwrap_or_default();
-                    entries.push((current_path.clone(), text.clone(), djust_id));
+                    entries.push((
+                        current_path.clone(),
+                        String::from(text.clone()),
+                        String::from(djust_id),
+                    ));
                 }
             }
         } else {

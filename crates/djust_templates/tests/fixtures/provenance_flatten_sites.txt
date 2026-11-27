@@ -601,6 +601,8 @@ assert!(rendered.html.starts_with("é<div>保全</div><main"));
 assert_eq!(rendered.literal_only, original);
 rendered.literal_offsets.last().copied(),
 djust_live/src/child_bindings.rs
+if !seen.insert(String::from(id.clone())) {
+result.push((key, String::from(id)));
 result.djust_id = Some(id.into());
 result.attrs.insert("dj-update".into(), "ignore".into());
 let fresh = HashMap::from([
@@ -685,6 +687,7 @@ return Err(e.into());
 let open = format!("<{sentinel_tag} ");
 reduced_html.clone()
 text_changes.push((idx, old_frag.to_string(), new_frag.to_string()));
+node.text = Some(new_text.clone().into());
 Some("[]".to_string())
 Some("[]".to_string())
 PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
@@ -777,6 +780,7 @@ let old_raw = &old_html[entry.html_start..old_html_end];
 text_node_index[entry_idx].html_end = new_html_end;
 e.html_start = (e.html_start as isize + delta_add) as usize;
 e.html_end = (e.html_end as isize + delta_add) as usize;
+node.text = Some(edit.text.clone().into());
 let mut i = text_node_index.partition_point(|e| e.html_start <= pfx);
 if pfx > text_node_index[i].html_end {
 if old_bytes.get(entry.html_end) != Some(&b'<') {
@@ -797,6 +801,8 @@ entry.html_end =
 entry.html_start = start;
 offsets.extend(span.close.map(|(s, e)| [s, e]).into_iter().flatten());
 offsets.extend(stamp.flatten());
+String::from(text.clone()),
+String::from(djust_id),
 PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("Template parsing error: {e}"))
 Ok(py_dict.into())
 .map_err(|e| djust_core::DjangoRustError::TemplateError(e.to_string()))

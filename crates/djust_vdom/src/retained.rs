@@ -56,10 +56,10 @@ impl VNode {
                 .iter()
                 .map(|(k, v)| k.capacity() + v.capacity())
                 .sum::<usize>();
-        out.text += self.text.as_ref().map_or(0, String::capacity);
-        out.ids += self.key.as_ref().map_or(0, String::capacity)
-            + self.djust_id.as_ref().map_or(0, String::capacity)
-            + self.cached_html.as_ref().map_or(0, String::capacity);
+        out.text += self.text.as_ref().map_or(0, |s| s.len());
+        out.ids += self.key.as_ref().map_or(0, |s| s.len())
+            + self.djust_id.as_ref().map_or(0, |s| s.len())
+            + self.cached_html.as_ref().map_or(0, |s| s.len());
         out.node_structs += self.children.capacity() * size_of::<VNode>();
         for child in &self.children {
             child.add_retained(out);

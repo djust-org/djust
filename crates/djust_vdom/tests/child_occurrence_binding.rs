@@ -21,7 +21,7 @@ fn opaque_issued_wrapper_binds_to_its_generated_id() {
         .unwrap();
     assert_eq!(
         root.child_vdom_ids[0],
-        ("issued".to_owned(), node.djust_id.clone().unwrap())
+        ("issued".to_owned(), node.djust_id.clone().unwrap().into())
     );
     assert!(!root.root_html.contains("urn:djust"));
     assert!(!root.vdom.to_html().contains("source="));
@@ -129,7 +129,7 @@ fn issued_sticky_slot_binds_without_granting_source_authority() {
     assert_eq!(root.child_vdom_ids[0].0, "issued");
     assert_eq!(
         root.child_vdom_ids[0].1,
-        root.vdom.children[0].djust_id.clone().unwrap()
+        String::from(root.vdom.children[0].djust_id.clone().unwrap())
     );
     assert!(root.model_fields.is_empty());
 }

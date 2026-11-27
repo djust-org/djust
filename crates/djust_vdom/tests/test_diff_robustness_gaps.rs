@@ -61,13 +61,13 @@ fn el_text(tag: &str, id: &str, text: &str) -> VNode {
 fn dj_if_open(id: &str) -> VNode {
     let mut n = VNode::element("#comment");
     n.tag = "#comment".to_string();
-    n.text = Some(format!("dj-if id=\"{}\"", id));
+    n.text = Some(format!("dj-if id=\"{}\"", id).into());
     n
 }
 fn dj_if_close() -> VNode {
     let mut n = VNode::element("#comment");
     n.tag = "#comment".to_string();
-    n.text = Some("/dj-if".to_string());
+    n.text = Some(Box::<str>::from("/dj-if".to_string()));
     n
 }
 

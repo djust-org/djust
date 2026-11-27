@@ -138,7 +138,7 @@ fn settext_with_sibling_remove_handles_resolve() {
     // New: text_node text changed; removed gone.
     let mut text_node_new = text_node.clone();
     if let Some(child) = text_node_new.children.first_mut() {
-        child.text = Some("after".to_string());
+        child.text = Some(Box::<str>::from("after".to_string()));
     }
     let new = parent.with_children(vec![text_node_new]);
 
@@ -185,7 +185,7 @@ fn bulk_remove_with_survivor_mutation_handles_resolve() {
     // New: only kids[4] survives, with new text.
     let mut survivor = kids[4].clone();
     if let Some(child) = survivor.children.first_mut() {
-        child.text = Some("survivor-new".to_string());
+        child.text = Some(Box::<str>::from("survivor-new".to_string()));
     }
     let new = parent.with_children(vec![survivor]);
 

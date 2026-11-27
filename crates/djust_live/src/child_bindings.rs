@@ -17,10 +17,10 @@ fn paths(
         out: &mut Vec<BindingPath>,
     ) -> Result<(), &'static str> {
         if let Some(id) = node.djust_id.as_ref() {
-            if !seen.insert(id.clone()) {
+            if !seen.insert(String::from(id.clone())) {
                 return Err("duplicate VDOM ID");
             }
-            if let Some(binding) = bindings.get(id) {
+            if let Some(binding) = bindings.get(&**id) {
                 out.push((path.clone(), binding.clone()));
             }
         }
@@ -97,7 +97,7 @@ pub fn plan(
             if !boundary
                 .djust_id
                 .as_ref()
-                .is_some_and(|id| authored_ignores.contains(id))
+                .is_some_and(|id| authored_ignores.contains(&**id))
             {
                 return Err("unauthored ignore boundary cannot retain child ownership");
             }
@@ -119,7 +119,7 @@ pub fn rekey(node: &VNode, paths: Vec<BindingPath>) -> Result<Vec<(String, Strin
         if !seen.insert(id.clone()) {
             return Err("duplicate VDOM ID");
         }
-        result.push((key, id));
+        result.push((key, String::from(id)));
     }
     Ok(result)
 }

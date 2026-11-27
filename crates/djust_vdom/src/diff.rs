@@ -206,7 +206,7 @@ fn diff_node_into(
         vdom_trace!("Replace at {:?}: <{}> -> <{}>", path, old.tag, new.tag);
         out.push(Patch::Replace {
             path: path.to_vec(),
-            d: old.djust_id.clone(),
+            d: Option::map(old.djust_id.clone(), String::from),
             node: new.clone(),
         });
         return;
@@ -223,8 +223,8 @@ fn diff_node_into(
             };
             out.push(Patch::SetText {
                 path: path.to_vec(),
-                d: old.djust_id.clone(),
-                text: new.text.clone().unwrap_or_default(),
+                d: Option::map(old.djust_id.clone(), String::from),
+                text: String::from(new.text.clone().unwrap_or_default()),
                 parent_d,
                 index,
             });
@@ -284,7 +284,7 @@ fn diff_attrs(old: &VNode, new: &VNode, path: &[usize], out: &mut Vec<Patch>) {
             _ => {
                 out.push(Patch::SetAttr {
                     path: path.to_vec(),
-                    d: old.djust_id.clone(),
+                    d: Option::map(old.djust_id.clone(), String::from),
                     key: key.clone(),
                     value: new_val.clone(),
                 });
@@ -305,7 +305,7 @@ fn diff_attrs(old: &VNode, new: &VNode, path: &[usize], out: &mut Vec<Patch>) {
         if !new.attrs.contains_key(key) {
             out.push(Patch::RemoveAttr {
                 path: path.to_vec(),
-                d: old.djust_id.clone(),
+                d: Option::map(old.djust_id.clone(), String::from),
                 key: key.clone(),
             });
         }
@@ -322,16 +322,16 @@ fn diff_children_replace_mode(old: &VNode, new: &VNode, path: &[usize], out: &mu
     for i in (0..old.children.len()).rev() {
         out.push(Patch::RemoveChild {
             path: path.to_vec(),
-            d: d.clone(),
+            d: Option::map(d.clone(), String::from),
             index: i,
-            child_d: old.children[i].djust_id.clone(),
+            child_d: Option::map(old.children[i].djust_id.clone(), String::from),
         });
     }
     // Insert all new children, ascending index.
     for (i, child) in new.children.iter().enumerate() {
         out.push(Patch::InsertChild {
             path: path.to_vec(),
-            d: d.clone(),
+            d: Option::map(d.clone(), String::from),
             index: i,
             node: child.clone(),
             ref_d: None,
@@ -878,7 +878,7 @@ fn reconcile_keyed(
                     d: pid.map(|s| s.to_string()),
                     from: old_abs,
                     to: new_abs,
-                    child_d: old_node.djust_id.clone(),
+                    child_d: Option::map(old_node.djust_id.clone(), String::from),
                 });
             }
             let mut child_path = ppath.to_vec();
@@ -959,7 +959,7 @@ fn reconcile_keyed(
             d: pid.map(|s| s.to_string()),
             from: old_abs,
             to: new_abs,
-            child_d: old_node.djust_id.clone(),
+            child_d: Option::map(old_node.djust_id.clone(), String::from),
         });
     }
 }
@@ -999,7 +999,7 @@ fn push_remove_child(
         path: ppath.to_vec(),
         d: pid.map(|s| s.to_string()),
         index: old_abs,
-        child_d: old_node.djust_id.clone(),
+        child_d: Option::map(old_node.djust_id.clone(), String::from),
     });
 }
 
@@ -1037,7 +1037,8 @@ pub fn sync_ids(old: &VNode, new: &mut VNode) {
         new.djust_id = old.djust_id.clone();
         if new.attrs.contains_key("dj-id") || old.attrs.contains_key("dj-id") {
             if let Some(id) = &old.djust_id {
-                new.attrs.insert("dj-id".to_string(), id.clone());
+                new.attrs
+                    .insert("dj-id".to_string(), String::from(id.clone()));
             }
         }
     }

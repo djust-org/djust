@@ -140,38 +140,38 @@ The model below is measured, not estimated. `python/djust/tests/test_view_memory
 **The formula** (djust 2.0 on CPython 3.12, bytes one connected view holds after an event):
 
 ```text
-view ≈ 46 KB + P × page_bytes + S × state_bytes
+view ≈ 45 KB + P × page_bytes + S × state_bytes
 ```
 
 - `page_bytes` is the HTML of the view's `dj-root`.
-- `P` is **10.2** for ordinary page markup (about 25 DOM nodes per KB) and **18.8** for a dense table (about 60 nodes per KB). The tree costs per node, not per byte, so markup made of many small elements costs more per KB.
+- `P` is **9.3** for ordinary page markup (about 25 DOM nodes per KB) and **16.5** for a dense table (about 60 nodes per KB). The tree costs per node, not per byte, so markup made of many small elements costs more per KB.
 - `state_bytes` is the size of the plain data the view holds and renders (lists and dicts of strings and numbers). `S` is **3.1**: the data itself and the Rust copy the template reads (about 2× the Python data). Change detection adds a 16-byte digest per attribute, whatever the data's size. A row of five small fields is about 0.4 KB of state.
 
 Two shortcuts that follow from it:
 
-- a page of static markup with a few values: **46 KB + 10.2 × page_bytes**. A 50 KB page is about 0.59 MB per view;
-- a table whose rows are all in state: **about 3.2 KB per row**. 500 rows (a 56 KB page) is about 1.7 MB per view, 1,000 rows about 3.4 MB.
+- a page of static markup with a few values: **45 KB + 9.3 × page_bytes**. A 50 KB page is about 0.54 MB per view;
+- a table whose rows are all in state: **about 3.0 KB per row**. 500 rows (a 56 KB page) is about 1.6 MB per view, 1,000 rows about 3.1 MB.
 
-<!-- view-memory: base_kb=46 static_page=10.2 table_page=18.8 state=3.1 row_kb=3.2 static_total=10.2 -->
+<!-- view-memory: base_kb=45 static_page=9.3 table_page=16.5 state=3.1 row_kb=3.0 static_total=9.3 -->
 
 **By page size** (bytes one view holds after one event, all owners; KB and MB are 1,000 and 1,000,000 bytes here, as in the rest of this section):
 
 | Page | Page size | Per view, before #3998 | Before #4319 | Now | Of which Python, now |
 |---|---:|---:|---:|---:|---:|
-| Static markup | 11 KB | 0.19 MB | 0.19 MB | 0.15 MB | 0.05 MB |
-| Static markup | 26 KB | 0.41 MB | 0.41 MB | 0.32 MB | 0.07 MB |
-| Static markup | 53 KB | 0.77 MB | 0.77 MB | 0.59 MB | 0.09 MB |
-| Static markup | 106 KB | 1.49 MB | 1.49 MB | 1.13 MB | 0.14 MB |
-| Table, 500 rows in state | 56 KB | 2.62 MB | 2.44 MB | 1.70 MB | 0.29 MB |
-| Table, 880 rows in state | 99 KB | 4.47 MB | 4.19 MB | 2.92 MB | 0.49 MB |
-| Table, 1,000 rows in state | 113 KB | 5.20 MB | 4.80 MB | 3.36 MB | 0.55 MB |
+| Static markup | 11 KB | 0.19 MB | 0.19 MB | 0.14 MB | 0.05 MB |
+| Static markup | 26 KB | 0.41 MB | 0.41 MB | 0.29 MB | 0.07 MB |
+| Static markup | 53 KB | 0.77 MB | 0.77 MB | 0.54 MB | 0.09 MB |
+| Static markup | 106 KB | 1.49 MB | 1.49 MB | 1.03 MB | 0.14 MB |
+| Table, 500 rows in state | 56 KB | 2.62 MB | 2.44 MB | 1.57 MB | 0.29 MB |
+| Table, 880 rows in state | 99 KB | 4.47 MB | 4.19 MB | 2.69 MB | 0.49 MB |
+| Table, 1,000 rows in state | 113 KB | 5.20 MB | 4.80 MB | 3.10 MB | 0.55 MB |
 
-#3998 changed what Python keeps; #4319 changed what Rust keeps. A table's rows used to be held a fourth and fifth time, as the two fingerprint trees change detection kept (the dirty-tracking baseline and the last render's); both are now a 16-byte digest per attribute, which takes 0.18 MB off a 500-row view and 0.37 MB off a 1,000-row one. #4319 then took about a quarter off every page with markup and a third off a table, with nothing sent to the browser changed: an element's attributes are a sorted vector rather than a hash table (a hash table for one to three attributes was about 210 bytes of buckets), a value and a dict key in the Rust copy of the state are 40 and 32 bytes rather than 80 and 48 (the large, rare variants are boxed), and the text-node index keeps positions only, reading each node's text from the tree.
+#3998 changed what Python keeps; #4319 changed what Rust keeps. A table's rows used to be held a fourth and fifth time, as the two fingerprint trees change detection kept (the dirty-tracking baseline and the last render's); both are now a 16-byte digest per attribute, which takes 0.18 MB off a 500-row view and 0.37 MB off a 1,000-row one. #4319 then took about 30% off every page with markup and 35% off a table, with nothing sent to the browser changed: an element's attributes are a sorted vector rather than a hash table (a hash table for one to three attributes was about 210 bytes of buckets), a node's text, key, id and cached HTML are boxed strings rather than `String`s (8 bytes smaller each, and no spare capacity), a value and a dict key in the Rust copy of the state are 40 and 32 bytes rather than 80 and 48 (the large, rare variants are boxed), and the text-node index keeps positions only, reading each node's text from the tree. The Rust copy of the state is kept: rebuilding it from the Python rows on each turn would cost about 3.7 ms for 1,000 rows (`RustLiveView.update_state` alone), against the one row a list-item delta converts now.
 
 **The ceilings** (`test_view_memory.py`, counted as above, and part of the 2.0 acceptance matrix):
 
-- a view of a ~100 KB page of markup holds **under 2 MB** (measured: 1.13 MB);
-- a view of a ~100 KB table whose rows are all in state holds **under 3.2 MB** (measured: 2.92 MB; 4.19 MB before #4319, when the ceiling was 4.5 MB). This still misses the 2 MB first proposed for every 100 KB page: the Rust tree (about 1.35 MB, 6,165 nodes of 168 bytes plus their attributes) and the Rust copy of the rows (about 0.7 MB) are most of it, and getting under 2 MB needs a different representation of the tree itself. Because the rows' own Python dicts are sized by the interpreter, the test asserts the total on CPython 3.12 and 3.13 and, on every interpreter, its two framework parts: the Rust side under 2.7 MB (measured 2.43 MB, the same everywhere) and the Python side less the state under 0.25 MB (measured 0.14 MB);
+- a view of a ~100 KB page of markup holds **under 2 MB** (measured: 1.03 MB);
+- a view of a ~100 KB table whose rows are all in state holds **under 3.0 MB** (measured: 2.69 MB; 4.19 MB before #4319, when the ceiling was 4.5 MB). This still misses the 2 MB first proposed for every 100 KB page: the Rust tree (about 1.13 MB, 6,165 nodes of 136 bytes plus their attributes) and the Rust copy of the rows (about 0.7 MB) are most of it, and getting under 2 MB needs a different representation of the tree itself. Because the rows' own Python dicts are sized by the interpreter, the test asserts the total on CPython 3.12 and 3.13 and, on every interpreter, its two framework parts: the Rust side under 2.45 MB (measured 2.20 MB, the same everywhere) and the Python side less the state under 0.25 MB (measured 0.14 MB);
 - what change detection keeps is **under 4 KB** per view, whatever the size of the state (measured: 1.6 KB for 125 rows and for 1,000).
 
 What it costs in time: one digest per container attribute the sync compares, so one per turn for the table. For the 1,000 rows of this section's table it takes **0.47 ms**, against 1.6 ms for the fingerprint walk it follows (median of five `timeit` runs of `fingerprint_digest` on the rows' fingerprint, best of 5 × 20 calls each; CPython 3.12.3 on a 2.3 GHz Xeon, 4 vCPU). The comparisons it replaced (a tree equality and a rebuild of the changed rows from the baseline's) are gone, so a turn pays about 0.5 ms more per 1,000 rows. Reading `is_dirty` / `changed_fields` takes one more walk and digest.
@@ -182,7 +182,7 @@ The same change measured on the Python heap alone (`tracemalloc`, five open page
 
 | Owner | Counter | 50 KB static page | 1,000-row table (113 KB page) | 20 components | Form |
 |---|---:|---:|---:|---:|---:|
-| Rust: last rendered tree | 1,105 | 368,396 | 1,537,155 | 23,113 | 2,144 |
+| Rust: last rendered tree | 924 | 319,606 | 1,281,964 | 19,372 | 1,874 |
 | Rust: copy of the state | 1,170 | 1,170 | 797,914 | 5,689 | 3,127 |
 | Rust: text-node index | 80 | 21,880 | 156,040 | 1,840 | 88 |
 | Rust: last HTML, per-node HTML cache, loop cache, fragment map | 464 | 100,464 | 316,744 | 3,232 | 1,030 |
@@ -190,14 +190,14 @@ The same change measured on the Python heap alone (`tracemalloc`, five open page
 | Python: change-detection fingerprints | 1,298 | 1,298 | 1,563 | 7,489 | 3,350 |
 | Python: recovery HTML | 116 | 53,007 | 112,919 | 1,992 | 312 |
 | Python: view and consumer, everything else | 27,348 | 27,136 | 36,922 | 31,477 | 27,972 |
-| Rust: everything else | 3,482 | 3,482 | 3,482 | 5,720 | 3,482 |
-| **Total** | **47 KB** | **0.59 MB** | **3.4 MB** | **110 KB** | **60 KB** |
+| Rust: everything else | 3,418 | 3,418 | 3,418 | 5,656 | 3,418 |
+| **Total** | **47 KB** | **0.54 MB** | **3.1 MB** | **106 KB** | **60 KB** |
 
 The table's rows each hold a nested `{% for %}` over their tags. Since #4325 the per-item loop store keeps such a row's HTML whole, and the loop nested in it no longer fills the content cache with one entry per tag, so the loop cache of the 1,000-row table is about 60 KB smaller than before (377,033 bytes then).
 
 Read it this way:
 
-- **The rendered tree is the largest owner on every page with real markup**: 7 bytes of memory per byte of static HTML, 14 for a table. Each node is a 168-byte struct plus its attributes, 48 bytes each (192 bytes and a hash table of about 210 bytes before #4319).
+- **The rendered tree is the largest owner on every page with real markup**: 6 bytes of memory per byte of static HTML, 11 for a table. Each node is a 136-byte struct plus its attributes, 48 bytes each (192 bytes and a hash table of about 210 bytes before #4319).
 - **The page's text is held three more times** as text: the last HTML, the per-node HTML cache and the recovery HTML.
 - **State is held about three times over**: once in Python and twice that in the Rust copy. Change detection keeps a 16-byte digest per attribute, not a copy of it.
 - **What a refused change goes back to** is in the "view and consumer" row: one encoding of the view's saved state, kept compressed when it is over 2 KB (about 10 KB for the 1,000-row table), and a 16-byte digest per attribute. It is what lets an event whose state is over the size limit be refused whole.
@@ -205,13 +205,13 @@ Read it this way:
 
 These are counted bytes. What the allocator takes for them is higher: block rounding and free lists added about 15% for the Rust side in the one comparison made (`malloc` statistics on macOS arm64), and the Python heap matched `tracemalloc` within 1% plus about 17 KB per socket of event-loop and channel objects the walk does not attribute. Resident size also carries the per-thread heaps described above. Plan with the formula, then confirm with one load step on your own page.
 
-**What changed in 2.0.** Until 2.0 a view held two whole fingerprint trees of its containers (the dirty-tracking baseline and the last render's), each about three times the size of the rows, and its own copy of the template source. The 1,000-row table above was 7.3 MB, of which 2.5 MB was those two trees; a 50 KB static page was 0.81 MB. Each fingerprint is now a 16-byte digest (#3998), which took the 1,000-row table to 4.8 MB, and the source text is shared. The smaller Rust tree and state copy of #4319 took it to 3.4 MB.
+**What changed in 2.0.** Until 2.0 a view held two whole fingerprint trees of its containers (the dirty-tracking baseline and the last render's), each about three times the size of the rows, and its own copy of the template source. The 1,000-row table above was 7.3 MB, of which 2.5 MB was those two trees; a 50 KB static page was 0.81 MB. Each fingerprint is now a 16-byte digest (#3998), which took the 1,000-row table to 4.8 MB, and the source text is shared. The smaller Rust tree and state copy of #4319 took it to 3.1 MB.
 
 **What you can do about it**
 
 - **Render less of the list.** Memory follows the rows in state and the nodes on the page. Paginate, or follow [Large lists](large-lists.md): streams and `temporary_assigns` keep the rows out of the view's state.
 - **Keep large data out of state.** Plain data the view holds and renders costs about three times its Python size. Hold an id and query on demand.
-- **Budget sockets per process from the formula.** At 0.59 MB a view, 1,000 open sockets of a 50 KB page are about 0.6 GB before the allocator's share; at 3.4 MB a view (a 1,000-row table) the same thousand need 3.4 GB, which is a reason to change the page, not the pod. `worker_threads` does not change this number: it sets how many turns run at once, not what a parked socket holds.
+- **Budget sockets per process from the formula.** At 0.54 MB a view, 1,000 open sockets of a 50 KB page are about 0.5 GB before the allocator's share; at 3.1 MB a view (a 1,000-row table) the same thousand need 3.1 GB, which is a reason to change the page, not the pod. `worker_threads` does not change this number: it sets how many turns run at once, not what a parked socket holds.
 - **A list over the fingerprint budget** (20,000 nodes, about 1,500 rows of five fields) has no digest and is re-sent to the renderer on every turn instead. It costs more CPU per event; the framework logs it once per view class.
 
 There is no built-in per-view memory limit or warning in 2.0. A view can report its own Rust side with `self._rust_view.retained_bytes()` if you want to sample it in your own metrics: a dict of byte counts and node counts per owner, with no addresses or content in it.

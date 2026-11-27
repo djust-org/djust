@@ -242,9 +242,9 @@ async def test_a_baseline_taken_mid_turn_is_of_the_state_as_it_is_now():
 CEILING_MARKUP_100KB = 2_000_000
 #: A ~100 KB page that is a dense table of rows held in state: the Rust tree
 #: and the Rust copy of the rows are most of it (the guide's table). #4319
-#: took it from 4.19 MB to 2.92 MB (attributes in a sorted vector, a value
-#: and a dict key boxed down to 40 and 32 bytes, a text-node index of
-#: positions only). It still misses the 2 MB first proposed in #3998; this is
+#: took it from 4.19 MB to 2.69 MB (attributes in a sorted vector, a node's
+#: small strings boxed, a value and a dict key boxed down to 40 and 32 bytes,
+#: a text-node index of positions only). It still misses the 2 MB first proposed in #3998; this is
 #: the ceiling in force.
 #:
 #: The total is asserted on the reference interpreter only. Elsewhere (CI runs
@@ -254,8 +254,8 @@ CEILING_MARKUP_100KB = 2_000_000
 #: interpreter: the Rust side (``retained_bytes()``, the same everywhere) and
 #: the Python side less the state (a few fixed-size framework objects and the
 #: recovery HTML, measured as CPython 3.12 sizes them).
-CEILING_TABLE_100KB = 3_200_000
-CEILING_TABLE_100KB_RUST = 2_700_000
+CEILING_TABLE_100KB = 3_000_000
+CEILING_TABLE_100KB_RUST = 2_450_000
 CEILING_TABLE_100KB_PY_FRAMEWORK = 250_000
 #: What change detection keeps, whatever the size of the state.
 CEILING_FINGERPRINTS = 4 * KB

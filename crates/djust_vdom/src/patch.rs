@@ -242,7 +242,7 @@ pub fn apply_patches_in(root: &mut VNode, root_ns: Namespace, patches: &[Patch])
             Patch::SetText { path, d, text, .. } => {
                 let target = resolve_node_mut(root, path, d.as_deref());
                 if let Some(target) = target {
-                    target.text = Some(text.clone());
+                    target.text = Some(Box::<str>::from(text.clone()));
                 }
             }
             Patch::SetAttr {
@@ -277,7 +277,7 @@ pub fn apply_patches_in(root: &mut VNode, root_ns: Namespace, patches: &[Patch])
 /// open marker.
 fn find_marker_parent_id(node: &VNode, id: &str) -> Option<String> {
     if find_dj_if_open_idx(&node.children, id).is_some() {
-        return node.djust_id.clone();
+        return Option::map(node.djust_id.clone(), String::from);
     }
     node.children
         .iter()
@@ -397,7 +397,7 @@ pub fn apply_patch(root: &mut VNode, patch: &Patch) {
 
         Patch::SetText { path, text, .. } => {
             if let Some(target) = get_node_mut(root, path) {
-                target.text = Some(text.clone());
+                target.text = Some(Box::<str>::from(text.clone()));
             }
         }
 
@@ -472,7 +472,7 @@ pub fn apply_patch(root: &mut VNode, patch: &Patch) {
                 };
                 let mut inserted = node.clone();
                 if inserted.key.is_none() {
-                    inserted.key = Some(key.clone());
+                    inserted.key = Some(Box::<str>::from(key.clone()));
                 }
                 parent.children.insert(at, inserted);
             }
@@ -562,7 +562,10 @@ mod tests {
         };
 
         apply_patch(&mut root, &patch);
-        assert_eq!(root.text, Some("new".to_string()));
+        assert_eq!(
+            root.text,
+            Option::map(Some("new".to_string()), String::into_boxed_str)
+        );
     }
 
     #[test]

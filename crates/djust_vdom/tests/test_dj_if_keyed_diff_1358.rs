@@ -710,7 +710,7 @@ fn test_legacy_bare_dj_if_placeholder_still_uses_legacy_path() {
         tag: "#comment".to_string(),
         attrs: Default::default(),
         children: Vec::new(),
-        text: Some("dj-if".to_string()), // No id
+        text: Some(Box::<str>::from("dj-if".to_string())), // No id
         key: None,
         djust_id: None,
         cached_html: None,

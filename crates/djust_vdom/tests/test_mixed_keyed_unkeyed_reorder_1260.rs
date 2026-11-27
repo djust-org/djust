@@ -55,7 +55,7 @@ fn structurally_equal(a: &VNode, b: &VNode) -> bool {
 
 /// Recursively assign synthetic djust_ids (mirrors fuzz_test.rs helper).
 fn assign_ids(node: &mut VNode, counter: &mut u64) {
-    node.djust_id = Some(format!("t{}", counter));
+    node.djust_id = Some(format!("t{}", counter).into());
     *counter += 1;
     for child in &mut node.children {
         assign_ids(child, counter);
@@ -142,7 +142,7 @@ fn issue_1260_keyed_div_must_emit_move_child() {
         matches!(
             p,
             Patch::MoveChild { child_d, to, .. }
-                if child_d == &keyed_old_id && *to == 0
+                if child_d.as_deref() == keyed_old_id.as_deref() && *to == 0
         )
     });
     assert!(

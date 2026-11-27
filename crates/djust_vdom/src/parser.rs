@@ -450,7 +450,7 @@ pub fn parse_html_fragment_client_view_in(
                         tag: "#comment".to_string(),
                         attrs: crate::Attrs::new(),
                         children: Vec::new(),
-                        text: Some(text),
+                        text: Some(Box::<str>::from(text)),
                         key: None,
                         djust_id: None,
                         cached_html: None,
@@ -759,8 +759,9 @@ fn neighbour_kind(handle: &Handle) -> NeighbourKind {
 fn push_text(children: &mut Vec<VNode>, text: String) {
     if let Some(last) = children.last_mut() {
         if last.is_text() {
-            let merged = last.text.get_or_insert_with(String::new);
+            let mut merged = String::from(last.text.take().unwrap_or_default());
             merged.push_str(&text);
+            last.text = Some(merged.into_boxed_str());
             last.cached_html = None;
             return;
         }
@@ -842,7 +843,7 @@ fn build_children_observed<F: FnMut(&Handle, &str)>(
                         tag: "#comment".to_string(),
                         attrs: crate::Attrs::new(),
                         children: Vec::new(),
-                        text: Some(comment_text),
+                        text: Some(Box::<str>::from(comment_text)),
                         key: None,
                         djust_id: None,
                         cached_html: None,
@@ -1032,8 +1033,8 @@ pub(crate) fn handle_to_vnode_observed<F: FnMut(&Handle, &str)>(
                 attrs: attributes,
                 children,
                 text: None,
-                key,
-                djust_id: Some(djust_id),
+                key: Option::map(key, String::into_boxed_str),
+                djust_id: Some(Box::<str>::from(djust_id)),
                 cached_html: None,
             })
         }
@@ -1393,7 +1394,10 @@ mod tests {
         let vnode = parse_html(html).unwrap();
 
         assert_eq!(vnode.tag, "div");
-        assert_eq!(vnode.key, Some("item-123".to_string()));
+        assert_eq!(
+            vnode.key,
+            Option::map(Some("item-123".to_string()), String::into_boxed_str)
+        );
         // data-key should still be in attrs for DOM rendering
         assert_eq!(vnode.attrs.get("data-key"), Some(&"item-123".to_string()));
     }
@@ -1407,7 +1411,10 @@ mod tests {
         let vnode = parse_html(html).unwrap();
         assert_eq!(vnode.children.len(), 2);
         assert!(vnode.children[0].is_comment());
-        assert_eq!(vnode.children[0].text, Some("dj-if".to_string()));
+        assert_eq!(
+            vnode.children[0].text,
+            Option::map(Some("dj-if".to_string()), String::into_boxed_str)
+        );
         assert_eq!(vnode.children[1].tag, "span");
     }
 
@@ -1600,9 +1607,18 @@ mod tests {
         assert_eq!(vnode.children.len(), 3);
 
         // Each child should have its key extracted
-        assert_eq!(vnode.children[0].key, Some("1".to_string()));
-        assert_eq!(vnode.children[1].key, Some("2".to_string()));
-        assert_eq!(vnode.children[2].key, Some("3".to_string()));
+        assert_eq!(
+            vnode.children[0].key,
+            Option::map(Some("1".to_string()), String::into_boxed_str)
+        );
+        assert_eq!(
+            vnode.children[1].key,
+            Option::map(Some("2".to_string()), String::into_boxed_str)
+        );
+        assert_eq!(
+            vnode.children[2].key,
+            Option::map(Some("3".to_string()), String::into_boxed_str)
+        );
     }
 
     #[test]
@@ -1625,9 +1641,15 @@ mod tests {
         "#;
         let vnode = parse_html(html).unwrap();
 
-        assert_eq!(vnode.key, Some("parent".to_string()));
+        assert_eq!(
+            vnode.key,
+            Option::map(Some("parent".to_string()), String::into_boxed_str)
+        );
         assert_eq!(vnode.children.len(), 1);
-        assert_eq!(vnode.children[0].key, Some("child".to_string()));
+        assert_eq!(
+            vnode.children[0].key,
+            Option::map(Some("child".to_string()), String::into_boxed_str)
+        );
     }
 
     #[test]
@@ -1648,7 +1670,10 @@ mod tests {
         let html = r#"<div dj-key="item-123">Content</div>"#;
         let vnode = parse_html(html).unwrap();
 
-        assert_eq!(vnode.key, Some("item-123".to_string()));
+        assert_eq!(
+            vnode.key,
+            Option::map(Some("item-123".to_string()), String::into_boxed_str)
+        );
         // dj-key should be in attrs for DOM rendering
         assert_eq!(vnode.attrs.get("dj-key"), Some(&"item-123".to_string()));
     }
@@ -1698,9 +1723,18 @@ mod tests {
 
         assert_eq!(vnode.tag, "ul");
         assert_eq!(vnode.children.len(), 3);
-        assert_eq!(vnode.children[0].key, Some("item-1".to_string()));
-        assert_eq!(vnode.children[1].key, Some("item-2".to_string()));
-        assert_eq!(vnode.children[2].key, Some("item-3".to_string()));
+        assert_eq!(
+            vnode.children[0].key,
+            Option::map(Some("item-1".to_string()), String::into_boxed_str)
+        );
+        assert_eq!(
+            vnode.children[1].key,
+            Option::map(Some("item-2".to_string()), String::into_boxed_str)
+        );
+        assert_eq!(
+            vnode.children[2].key,
+            Option::map(Some("item-3".to_string()), String::into_boxed_str)
+        );
     }
 
     #[test]

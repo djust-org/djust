@@ -33,7 +33,7 @@ fn elem(tag: &str) -> VNode {
 
 fn elem_with_id(tag: &str, djust_id: &str) -> VNode {
     let mut v = elem(tag);
-    v.djust_id = Some(djust_id.to_string());
+    v.djust_id = Some(djust_id.to_string().into());
     v
 }
 
@@ -65,7 +65,7 @@ fn snapshot_vnode_text_node() {
         tag: "#text".to_string(),
         attrs: Default::default(),
         children: Vec::new(),
-        text: Some("hello".to_string()),
+        text: Some("hello".to_string().into()),
         key: None,
         djust_id: None,
         cached_html: None,
@@ -81,7 +81,7 @@ fn snapshot_vnode_text_node() {
 fn snapshot_vnode_cached_html_is_skipped() {
     // `cached_html` is `#[serde(skip)]` — must NOT appear in wire JSON.
     let mut v = elem("div");
-    v.cached_html = Some("<div>cached</div>".to_string());
+    v.cached_html = Some("<div>cached</div>".to_string().into());
     let json = serde_json::to_string(&v).unwrap();
     assert!(
         !json.contains("cached_html"),
@@ -316,7 +316,10 @@ fn msgpack_round_trip_vnode_djust_id_none() {
 fn msgpack_round_trip_vnode_djust_id_some() {
     // The control case: a VNode with `djust_id: Some(...)` (6-element array).
     let v = elem_with_id("span", "1a");
-    assert_eq!(v.djust_id, Some("1a".to_string()));
+    assert_eq!(
+        v.djust_id,
+        Option::map(Some("1a".to_string()), String::into_boxed_str)
+    );
     let bytes = rmp_serde::to_vec(&v).expect("msgpack serialize");
     let restored: VNode = rmp_serde::from_slice(&bytes).expect("msgpack deserialize");
     assert_eq!(
@@ -334,7 +337,7 @@ fn msgpack_round_trip_nested_tree_mixed_djust_id() {
         tag: "#text".to_string(),
         attrs: Default::default(),
         children: Vec::new(),
-        text: Some("hello".to_string()),
+        text: Some("hello".to_string().into()),
         key: None,
         djust_id: None,
         cached_html: None,
@@ -344,7 +347,7 @@ fn msgpack_round_trip_nested_tree_mixed_djust_id() {
     let elem_child = elem_with_id("strong", "2b");
 
     let mut second_text = text_child.clone();
-    second_text.text = Some(" world".to_string());
+    second_text.text = Some(" world".to_string().into());
 
     let mut root = elem_with_id("p", "1a");
     root.children = vec![text_child.clone(), elem_child, second_text];
@@ -359,7 +362,10 @@ fn msgpack_round_trip_nested_tree_mixed_djust_id() {
     // Sanity: the text-node children really did carry `djust_id: None`.
     assert_eq!(restored.children[0].djust_id, None);
     assert_eq!(restored.children[2].djust_id, None);
-    assert_eq!(restored.children[1].djust_id, Some("2b".to_string()));
+    assert_eq!(
+        restored.children[1].djust_id,
+        Option::map(Some("2b".to_string()), String::into_boxed_str)
+    );
 }
 
 // ============================================================================
@@ -922,11 +928,11 @@ fn vnode_djust_id_is_still_the_trailing_serialized_field() {
         tag: "li".to_string(),
         attrs: Default::default(),
         children: vec![],
-        text: Some("t".to_string()),
-        key: Some("k".to_string()),
-        djust_id: Some("zz".to_string()),
+        text: Some("t".to_string().into()),
+        key: Some("k".to_string().into()),
+        djust_id: Some("zz".to_string().into()),
         // #[serde(skip)] — must NOT widen the array.
-        cached_html: Some("<li>cached</li>".to_string()),
+        cached_html: Some("<li>cached</li>".to_string().into()),
     };
     let bytes = rmp_serde::to_vec(&v).unwrap();
     let vals: Vec<serde_json::Value> =
