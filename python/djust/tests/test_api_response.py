@@ -396,7 +396,9 @@ def test_dispatch_permission_denied_in_api_response_surfaces_403(http_request):
     assert response.status_code == 403
     payload = json.loads(response.content)
     assert payload["error"] == "permission_denied"
-    assert payload["message"] == "nope"
+    # The exception's text never reaches the client (#4170).
+    assert payload["message"] == "Permission denied"
+    assert b"nope" not in response.content
 
 
 def test_dispatch_permission_denied_in_serialize_surfaces_403(http_request):
@@ -417,7 +419,9 @@ def test_dispatch_permission_denied_in_serialize_surfaces_403(http_request):
     assert response.status_code == 403
     payload = json.loads(response.content)
     assert payload["error"] == "permission_denied"
-    assert payload["message"] == "blocked by serializer"
+    # The exception's text never reaches the client (#4170).
+    assert payload["message"] == "Permission denied"
+    assert b"blocked by serializer" not in response.content
 
 
 def test_api_request_flag_set_before_mount_runs(http_request):
