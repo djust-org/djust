@@ -40,6 +40,7 @@ function createDom() {
     }
     dom.window.WebSocket = MockWebSocket;
     dom.window.eval(clientCode);
+    dom.window.document.dispatchEvent(new dom.window.Event('DOMContentLoaded'));
     return { dom, sent };
 }
 
