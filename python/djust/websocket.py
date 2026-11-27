@@ -2217,12 +2217,16 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
             ref=event_ref,
         )
         turn._locked = True  # the flush runs under the render lock
-        await run_turn(
-            turn,
-            lambda _turn: self._dispatch_single_event_body(
-                target_view, event_name, params, event_ref
-            ),
-        )
+        from .security.error_handling import event_error_ref
+
+        # #4322: a replay's error frames never carry another event's ref.
+        with event_error_ref(None):
+            await run_turn(
+                turn,
+                lambda _turn: self._dispatch_single_event_body(
+                    target_view, event_name, params, event_ref
+                ),
+            )
 
     async def _dispatch_single_event_body(
         self,

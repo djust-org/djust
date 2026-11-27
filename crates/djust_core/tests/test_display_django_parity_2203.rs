@@ -118,13 +118,13 @@ fn a_dict_renders_in_insertion_order() {
     let mut m = IndexMap::new();
     m.insert("a".into(), Value::Integer(1));
     m.insert("b".into(), Value::Integer(2));
-    assert_eq!(Value::Object(m).to_string(), "{'a': 1, 'b': 2}");
+    assert_eq!(Value::Object(Box::new(m)).to_string(), "{'a': 1, 'b': 2}");
 
     // Insertion order, not sorted order — build it backwards to tell them apart.
     let mut rev = IndexMap::new();
     rev.insert("b".into(), Value::Integer(2));
     rev.insert("a".into(), Value::Integer(1));
-    assert_eq!(Value::Object(rev).to_string(), "{'b': 2, 'a': 1}");
+    assert_eq!(Value::Object(Box::new(rev)).to_string(), "{'b': 2, 'a': 1}");
 }
 
 #[test]
@@ -136,7 +136,7 @@ fn dict_rendering_is_stable_across_repeated_construction() {
         for k in ["alpha", "beta", "gamma", "delta", "epsilon"] {
             m.insert(k.into(), Value::Integer(1));
         }
-        Value::Object(m).to_string()
+        Value::Object(Box::new(m)).to_string()
     };
     let first = build();
     for _ in 0..20 {
@@ -151,7 +151,7 @@ fn an_object_with_a_dunder_str_still_uses_it() {
     let mut m = IndexMap::new();
     m.insert("__str__".into(), Value::String("Model object".into()));
     m.insert("pk".into(), Value::Integer(1));
-    assert_eq!(Value::Object(m).to_string(), "Model object");
+    assert_eq!(Value::Object(Box::new(m)).to_string(), "Model object");
 }
 
 #[test]
@@ -177,7 +177,7 @@ fn a_dunder_str_object_renders_its_str() {
     // A model instance renders via `__str__`, so `{{ obj }}` shows the model.
     let mut m = IndexMap::new();
     m.insert("__str__".into(), Value::String("Model object".into()));
-    assert_eq!(Value::Object(m).to_string(), "Model object");
+    assert_eq!(Value::Object(Box::new(m)).to_string(), "Model object");
 }
 
 /// A dict VIEW names its container, as Python's `str()` does (#2340).

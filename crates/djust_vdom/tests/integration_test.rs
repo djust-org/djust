@@ -451,7 +451,7 @@ fn test_id_counter_produces_unique_ids() {
     // Collect all IDs from the tree (recursively to catch all nodes)
     fn collect_ids(node: &djust_vdom::VNode, ids: &mut Vec<String>) {
         if let Some(id) = &node.djust_id {
-            ids.push(id.clone());
+            ids.push(String::from(id.clone()));
         }
         for child in &node.children {
             collect_ids(child, ids);

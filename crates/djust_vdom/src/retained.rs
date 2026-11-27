@@ -5,7 +5,6 @@
 //! `djust_base::retained` for what that does and does not include.
 
 use crate::VNode;
-use djust_base::retained::table_bytes;
 use std::mem::size_of;
 
 /// What a tree holds, split by what holds it.
@@ -20,7 +19,7 @@ pub struct TreeBytes {
     pub node_structs: usize,
     /// Tag names.
     pub tags: usize,
-    /// Attribute tables and the names and values in them.
+    /// Attribute vectors and the names and values in them.
     pub attrs: usize,
     /// Text content.
     pub text: usize,
@@ -51,16 +50,16 @@ impl VNode {
             out.text_nodes += 1;
         }
         out.tags += self.tag.capacity();
-        out.attrs += table_bytes(self.attrs.capacity(), size_of::<(String, String)>())
+        out.attrs += self.attrs.capacity() * size_of::<(String, String)>()
             + self
                 .attrs
                 .iter()
                 .map(|(k, v)| k.capacity() + v.capacity())
                 .sum::<usize>();
-        out.text += self.text.as_ref().map_or(0, String::capacity);
-        out.ids += self.key.as_ref().map_or(0, String::capacity)
-            + self.djust_id.as_ref().map_or(0, String::capacity)
-            + self.cached_html.as_ref().map_or(0, String::capacity);
+        out.text += self.text.as_ref().map_or(0, |s| s.len());
+        out.ids += self.key.as_ref().map_or(0, |s| s.len())
+            + self.djust_id.as_ref().map_or(0, |s| s.len())
+            + self.cached_html.as_ref().map_or(0, |s| s.len());
         out.node_structs += self.children.capacity() * size_of::<VNode>();
         for child in &self.children {
             child.add_retained(out);

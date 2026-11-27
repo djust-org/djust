@@ -6,10 +6,12 @@
  * an in-browser panel with the error message, triggering event, Python
  * traceback, hint, and validation details when present.
  *
- * Deferred state saves use a nonblocking status in every mode; a successful
- * render of the same view/target clears it. Persistent error overlays are
- * only active when `window.DEBUG_MODE === true` (set by the `djust_tags`
- * template tag when Django DEBUG=True). Production builds receive no
+ * Deferred state saves use a nonblocking status in every mode instead
+ * (36a-save-status.js, core). Since #4320 this module is the `error-overlay`
+ * client chunk, which the core bundle loads only when `window.DEBUG_MODE` is
+ * true; the full bundle includes it. Persistent error overlays are only
+ * active when `window.DEBUG_MODE === true` (set by the `djust_tags` template
+ * tag when Django DEBUG=True). Production builds receive no
  * overlay at all — the server strips `traceback` / `debug_detail` / `hint`
  * in non-DEBUG mode, so the overlay would have nothing interesting to show.
  *
@@ -21,47 +23,6 @@
 (function initErrorOverlay() {
     const OVERLAY_ID = 'djust-error-overlay';
     const STYLE_ID = 'djust-error-overlay-style';
-    const STATUS_ID = 'djust-save-status';
-    const saving = new Map();
-
-    function _owner(detail) {
-        return JSON.stringify([
-            typeof detail.view === 'string' ? detail.view : null,
-            typeof detail.target_id === 'string' ? detail.target_id : null,
-        ]);
-    }
-
-    function _clearSaving(detail) {
-        const key = _owner(detail);
-        const entry = saving.get(key);
-        if (!entry) return;
-        entry.remove();
-        saving.delete(key);
-        if (!saving.size) document.getElementById(STATUS_ID)?.remove();
-    }
-
-    function _showSaving(detail) {
-        let status = document.getElementById(STATUS_ID);
-        if (!status) {
-            status = document.createElement('div');
-            status.id = STATUS_ID;
-            status.setAttribute('role', 'status');
-            status.setAttribute('aria-live', 'polite');
-            status.style.cssText = 'position:fixed;bottom:16px;right:16px;z-index:99998;' +
-                'pointer-events:none;padding:12px;background:#1e293b;color:#fff;border-radius:8px;';
-            document.body.appendChild(status);
-        }
-        const key = _owner(detail);
-        let entry = saving.get(key);
-        if (!entry) {
-            entry = document.createElement('div');
-            saving.set(key, entry);
-            status.appendChild(entry);
-        }
-        // Only the message, never traceback or HTML. The server's literal
-        // boolean distinguishes a deferred save from a persistent error.
-        entry.textContent = typeof detail.error === 'string' ? detail.error : 'Saving your change…';
-    }
 
     function _escape(s) {
         if (s == null) return '';
@@ -213,23 +174,13 @@
         // #4164: a reconnect that restored an older state than the page
         // showed, and changes not saved yet, are notices of the same kind.
         const notice = detail.code === 'state_error' || detail.code === 'state_not_restored';
-        if (notice && detail.transient === true) {
-            _showSaving(detail);
-            return;
-        }
-        _clearSaving(detail);
+        // The notice itself is 36a-save-status.js (core, every mode).
+        if (notice && detail.transient === true) return;
         if (window.DEBUG_MODE) _render(detail);
     }
 
     if (typeof window !== 'undefined') {
         window.addEventListener('djust:error', _onError);
-        window.addEventListener('djust:rendered', e => _clearSaving(e.detail || {}));
-        for (const event of ['djust:before-navigate', 'pagehide']) {
-            window.addEventListener(event, () => {
-                saving.clear();
-                document.getElementById(STATUS_ID)?.remove();
-            });
-        }
         window.addEventListener('keydown', _onKeyDown);
         // Expose for tests and for manual triggering from devtools.
         window.djustErrorOverlay = {

@@ -20,7 +20,7 @@ use std::collections::HashMap;
 /// Collect every element dj-id in pre-order (document) order.
 fn collect_ids(node: &VNode, out: &mut Vec<String>) {
     if let Some(id) = &node.djust_id {
-        out.push(id.clone());
+        out.push(String::from(id.clone()));
     }
     for c in &node.children {
         collect_ids(c, out);
@@ -131,7 +131,7 @@ fn gate_off_naive_reuse_without_rewalk_collides() {
     let cached = parse_html("<li><span>A</span></li>").unwrap(); // ids 0,1
                                                                  // Two items share the same cached subtree (e.g. two identical-content rows).
     let mut tree = VNode::element("ul");
-    tree.djust_id = Some("z".to_string());
+    tree.djust_id = Some(Box::<str>::from("z".to_string()));
     tree.attrs.insert("dj-id".to_string(), "z".to_string());
     tree.children.push(cached.clone());
     tree.children.push(cached.clone());
@@ -188,7 +188,7 @@ fn splice_errs_on_missing_cached_subtree() {
 #[test]
 fn attrs_serialize_in_sorted_order() {
     let mut node = VNode::element("li");
-    node.djust_id = Some("a".to_string());
+    node.djust_id = Some(Box::<str>::from("a".to_string()));
     node.attrs.insert("dj-id".to_string(), "a".to_string());
     node.attrs.insert("dj-key".to_string(), "k".to_string());
     node.attrs.insert("class".to_string(), "row".to_string());

@@ -638,7 +638,7 @@ class TestEveryFilteredOperandSiteIsAccountedFor:
     #: through one of :attr:`SHARED_RESOLVERS`.
     WITH_BINDING_SITE = (
         "for (name, expression) in assignments {\n"
-        "                let (value, safe) = get_value_safe(expression, context)?;"
+        "        let (value, safe) = get_value_safe(expression, context)?;"
     )
     INCLUDE_BINDING_SITE = (
         "for (key, expression) in with_vars {\n"

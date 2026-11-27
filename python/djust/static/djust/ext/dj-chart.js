@@ -55,8 +55,13 @@
     // by Chart.js/plugins. Never retain parsed objects that the library may
     // mutate; removed and empty attributes remain distinct.
     const inputs = new WeakMap();
+    // dj-id is the patcher's node address, not an input: the first answer
+    // to an HTTP-only page adds it to every element (#4322).
+    function inputAttrs(el) {
+        return Array.from(el.attributes).filter((attr) => attr.name !== 'dj-id');
+    }
     function rememberInputs(el) {
-        inputs.set(el, Array.from(el.attributes, (attr) => [attr.name, attr.value]));
+        inputs.set(el, inputAttrs(el).map((attr) => [attr.name, attr.value]));
     }
 
     /** The user-supplied library, or null when they forgot to load it. */
@@ -123,7 +128,7 @@
             if (this.el.getAttribute('dj-chart-update') === 'always') return true;
             const previous = inputs.get(this.el);
             if (!this._chart || !previous) return true; // retry late library loading
-            return this.el.attributes.length !== previous.length ||
+            return inputAttrs(this.el).length !== previous.length ||
                 previous.some(([name, value]) => this.el.getAttribute(name) !== value);
         },
 

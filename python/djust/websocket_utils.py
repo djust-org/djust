@@ -356,7 +356,7 @@ async def _validate_event_security(
                     "Per-handler rate limit exceeded for '%s' (dropped)",
                     sanitize_for_log(event_name),
                 )
-                await ws.send_error("Rate limit exceeded, event dropped")
+                await ws.send_error("Rate limit exceeded, event dropped", code="rate_limited")
                 return None
             rate_limiter.warnings += 1
             logger.warning(
@@ -372,7 +372,7 @@ async def _validate_event_security(
                     ip_tracker.add_cooldown(client_ip, cooldown)
                 await ws.close(code=4429)
                 return None
-            await ws.send_error("Rate limit exceeded, event dropped")
+            await ws.send_error("Rate limit exceeded, event dropped", code="rate_limited")
             return None
 
     # Handler-level permission check

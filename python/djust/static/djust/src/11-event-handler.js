@@ -377,7 +377,7 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     // Build clean server params (strip underscore-prefixed internal properties)
     const serverParams = {};
     for (const key of Object.keys(params)) {
-        if (key === '_targetElement' || key === '_slotId' || key === '_optimisticUpdateId' || key === '_skipLoading' || key === '_djTargetSelector') {
+        if (key === '_targetElement' || key === '_slotId' || key === '_optimisticUpdateId' || key === '_skipLoading' || key === '_djTargetSelector' || key === '_onRequest') {
             continue;
         }
         // eslint-disable-next-line security/detect-object-injection
@@ -547,6 +547,13 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
 
     const httpRequest = teardown ? null
         : registerEventRequest(_localEventTransport, eventName, triggerElement);
+    // #4322: a hook's pushEvent over this transport reads the request's
+    // outcome; `httpOutcome` is what the request settles with (cancelled
+    // when it stays null: the page changed, or the protocol differs). A
+    // keepalive teardown send registers no request: its answer is never
+    // read, so the hook's pushEvent settles `cancelled` (hooks.md).
+    let httpOutcome = null;
+    if (httpRequest && typeof params._onRequest === 'function') params._onRequest(httpRequest.promise.outcome);
     // Keepalive teardown sends deliberately outlive the outgoing page.
     const httpController = teardown ? null : new AbortController();
     if (httpController) _pendingHttpControllers.add(httpController);
@@ -615,6 +622,7 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
                         return;
                     }
                     if (body && typeof body.error === 'string') {
+                        httpOutcome = eventErrorOutcome(body);
                         detail = {
                             error: body.error,
                             // Stable refusal code (#3319), e.g. 'permission_denied'.
@@ -626,6 +634,7 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
                         };
                     }
                 } catch (_e) { /* a non-JSON error body keeps the status message */ }
+                if (!httpOutcome) httpOutcome = eventErrorOutcome({error: detail.error, code: response.status === 429 ? 'rate_limited' : null});
                 window.dispatchEvent(new CustomEvent('djust:error', {detail}));
             }
             throw new Error(`HTTP error! status: ${response.status}`);
@@ -678,13 +687,24 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
         // when it names `view_id`, #3104), then the effects. This request
         // settles here, by name, not by `ref`. An embedded child's answer
         // resolves to whether it was applied (an HTTP lazy fill reads it).
-        return await applyRenderFrame(_localEventTransport, data, {eventName, trigger: triggerElement});
+        const applied = await applyRenderFrame(_localEventTransport, data, {eventName, trigger: triggerElement});
+        // `ok` only once the answer is in the page (#4322); a failed apply
+        // settles as an error below.
+        httpOutcome = {status: 'ok', reply: data};
+        return applied;
 
     } catch (error) {
-        if (!httpController?.signal.aborted) console.error('[LiveView] HTTP fallback failed:', error);
+        if (!httpController?.signal.aborted) {
+            console.error('[LiveView] HTTP fallback failed:', error);
+            // Not delivered (a network failure), or a broken answer.
+            if (!httpOutcome && ownsHttpResponse()) {
+                httpOutcome = error && error.name === 'TypeError' ? {status: 'disconnected'}
+                    : eventErrorOutcome({error: String(error && error.message)});
+            }
+        }
     } finally {
         if (httpController) _pendingHttpControllers.delete(httpController);
-        if (httpRequest) cancelEventRequests(_localEventTransport, httpRequest.ref);
+        if (httpRequest) cancelEventRequests(_localEventTransport, httpRequest.ref, httpOutcome);
         if (releaseHttpEvent) releaseHttpEvent();
     }
 }

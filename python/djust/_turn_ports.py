@@ -174,12 +174,15 @@ class RuntimeTurnPort:
             )
         elif kind == "rate_limited":
             if turn.kind not in _SERVER_KINDS:
-                await transport.send(
-                    {
-                        "type": "rate_limit_exceeded",
-                        "message": refusal.message or "Too many requests, please slow down",
-                    }
-                )
+                frame: Dict[str, Any] = {
+                    "type": "rate_limit_exceeded",
+                    "message": refusal.message or "Too many requests, please slow down",
+                }
+                # The refused event's ref (#4322), as the global gate sends it
+                # (#4309): the client settles that request as rate limited.
+                if "ref" in (ref_fields := _ref_fields(turn)):
+                    frame["ref"] = ref_fields["ref"]
+                await transport.send(frame)
                 await self._send_turn_ack(turn)
             return
         if close and not is_mount:

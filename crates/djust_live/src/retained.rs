@@ -113,16 +113,22 @@ pub(super) fn report(view: &RustLiveViewBackend) -> HashMap<String, usize> {
         .map(VNode::retained_bytes)
         .unwrap_or_default();
     let last_html = view.last_html.as_ref().map_or(0, String::capacity);
-    let node_html_cache = strings(&view.node_html_cache);
+    // The per-child fragments of top-level wrappers (#4315) are the same
+    // cache, one level down.
+    let node_html_cache = strings(&view.node_html_cache)
+        + view.node_child_cache.capacity()
+            * size_of::<Option<djust_templates::renderer::ChildFragments>>()
+        + view
+            .node_child_cache
+            .iter()
+            .flatten()
+            .map(djust_templates::renderer::ChildFragments::retained_bytes)
+            .sum::<usize>();
     let text_node_index = view.text_node_index.as_ref().map_or(0, |index| {
         index.capacity() * size_of::<TextNodeEntry>()
             + index
                 .iter()
-                .map(|e| {
-                    e.path.capacity() * size_of::<usize>()
-                        + e.text.capacity()
-                        + e.djust_id.capacity()
-                })
+                .map(|e| e.path.len() * size_of::<u32>())
                 .sum::<usize>()
     });
     let fragment_text_map = view.fragment_text_map.as_ref().map_or(0, |map| {

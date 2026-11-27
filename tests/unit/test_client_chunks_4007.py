@@ -21,7 +21,8 @@ from django.test import RequestFactory, override_settings
 
 import djust
 from djust.config import config
-from djust.mixins.post_processing import CLIENT_CHUNKS, PostProcessingMixin
+from djust._client_chunks import CLIENT_CHUNKS
+from djust.mixins.post_processing import PostProcessingMixin
 
 ROOT = Path(__file__).resolve().parents[2]
 STATIC = ROOT / "python/djust/static/djust"

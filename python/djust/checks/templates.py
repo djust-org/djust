@@ -174,6 +174,8 @@ _T012_EXEMPT_ATTRIBUTES = frozenset(
         "dj-remove",
         "dj-remove-duration",
         "dj-transition",
+        # A lazy-chunk selector (#4320); a display marker, not an event binding.
+        "dj-transition-group",
         "dj-scroll-into-view",
         "dj-sticky-scroll",
         "dj-ignore-attrs",

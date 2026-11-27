@@ -1533,7 +1533,7 @@ fn add_typed_operands(
         // never-authored `String`. See `typed_operands` for the full classification.
         context_map
             .map
-            .insert(TYPED_ARGS_KEY.to_string(), Value::Object(typed));
+            .insert(TYPED_ARGS_KEY.to_string(), Value::Object(Box::new(typed)));
     }
 }
 
@@ -2862,19 +2862,287 @@ pub fn render_nodes_collecting<L: TemplateLoader>(
     context: &Context,
     loader: Option<&L>,
 ) -> Result<(String, Vec<String>)> {
+    let rendered = render_nodes_collecting_with_children(nodes, &[], context, loader)?;
+    Ok((rendered.html, rendered.fragments))
+}
+
+/// [`render_nodes_collecting`], also filling the per-child fragment cache of
+/// every top-level `{% if %}` / `{% with %}` / `{% block %}` (#4315), so the
+/// first partial render after it can already reuse a wrapper's children.
+/// `child_deps` is `parser::extract_wrapper_child_deps` of `nodes`; it decides
+/// which children are worth keeping (empty: keep every child).
+pub fn render_nodes_collecting_with_children<L: TemplateLoader>(
+    nodes: &[Node],
+    child_deps: &[Option<crate::parser::WrapperChildDeps>],
+    context: &Context,
+    loader: Option<&L>,
+) -> Result<PartialRender> {
     let mut context = context.clone();
-    let mut output = String::new();
-    let mut fragments = Vec::with_capacity(nodes.len());
-    for node in nodes {
+    let mut rendered = PartialRender {
+        html: String::new(),
+        fragments: Vec::with_capacity(nodes.len()),
+        children: Vec::with_capacity(nodes.len()),
+        changed: Vec::new(),
+    };
+    for (i, node) in nodes.iter().enumerate() {
+        let mut children = None;
+        let deps = child_deps.get(i).and_then(Option::as_ref);
         // Per-node dj-model records, replayed for a node a later partial
         // render serves from the cache (`model_bindings::reuse_node`).
         let mark = crate::model_bindings::begin_node();
-        let fragment = render_effectful_node_output::<L, String>(node, &mut context, loader)?;
+        let fragment = match collecting_plan(node, deps) {
+            Some(plan) => {
+                render_wrapper_children::<L>(node, &mut context, loader, &plan, &mut children)?
+            }
+            None => render_effectful_node_output::<L, String>(node, &mut context, loader)?,
+        };
         crate::model_bindings::end_node(mark);
-        output.push_str(&fragment);
-        fragments.push(fragment);
+        rendered.html.push_str(&fragment);
+        rendered
+            .children
+            .push(children.map(|c| c.fingerprinted(&fragment)));
+        rendered.fragments.push(fragment);
     }
-    Ok((output, fragments))
+    rendered.children = drop_empty(rendered.children);
+    Ok(rendered)
+}
+
+/// A page with no cached wrapper keeps no per-node slots for one (the
+/// retained-memory report counts them, #3998).
+fn drop_empty(children: ChildFragmentCache) -> ChildFragmentCache {
+    if children.iter().all(Option::is_none) {
+        Vec::new()
+    } else {
+        children
+    }
+}
+
+/// The cached fragments of one top-level wrapper's children (#4315).
+///
+/// Built when the wrapper renders, stored beside its top-level fragment, and
+/// consulted the next time the wrapper re-renders: a child whose own
+/// dependencies did not change is reused instead of re-rendered. Only the
+/// children worth reusing keep a fragment (`None` for literal text and other
+/// dependency-free children, which re-render for the price of a copy, and for
+/// `"*"` children, which always re-render).
+///
+/// The entry records the top-level fragment it was rendered with (its length
+/// and hash). An entry is used only while the stored top-level fragment is
+/// still that one, so a cache the caller replaced or cleared without
+/// clearing this one can never serve children of a different render.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ChildFragments {
+    /// The body these children belong to (see `WrapperChildDeps::bodies`).
+    branch: u8,
+    parent_len: usize,
+    parent_hash: u64,
+    fragments: Vec<Option<String>>,
+}
+
+/// One `Option<ChildFragments>` per top-level node, parallel to the fragment
+/// cache; `None` for a node that is not a cached wrapper (#4315).
+pub type ChildFragmentCache = Vec<Option<ChildFragments>>;
+
+fn fragment_hash(fragment: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    fragment.hash(&mut hasher);
+    hasher.finish()
+}
+
+impl ChildFragments {
+    fn fingerprinted(mut self, parent: &str) -> Self {
+        self.parent_len = parent.len();
+        self.parent_hash = fragment_hash(parent);
+        self
+    }
+
+    /// Was this entry rendered with the top-level fragment `parent`?
+    pub fn belongs_to(&self, parent: &str) -> bool {
+        self.parent_len == parent.len() && self.parent_hash == fragment_hash(parent)
+    }
+
+    /// Heap bytes this entry holds, for the retained-memory report (#3998).
+    pub fn retained_bytes(&self) -> usize {
+        self.fragments.capacity() * std::mem::size_of::<Option<String>>()
+            + self
+                .fragments
+                .iter()
+                .flatten()
+                .map(String::capacity)
+                .sum::<usize>()
+    }
+}
+
+/// What [`render_nodes_partial_with_children`] and
+/// [`render_nodes_collecting_with_children`] return.
+#[derive(Debug, Default)]
+pub struct PartialRender {
+    pub html: String,
+    /// One fragment per top-level node; they concatenate to `html`.
+    pub fragments: Vec<String>,
+    /// The per-child cache for the next partial render (#4315).
+    pub children: ChildFragmentCache,
+    /// Indices of the top-level nodes that were re-rendered.
+    pub changed: Vec<usize>,
+}
+
+/// How one top-level wrapper renders its children (#4315).
+struct ChildPlan<'a> {
+    /// The wrapper's per-child dependencies; `None` renders and keeps every
+    /// child (no dependency information).
+    deps: Option<&'a crate::parser::WrapperChildDeps>,
+    /// `None` in a collecting render: every child renders.
+    changed_keys: Option<&'a HashSet<String>>,
+    /// The entry from the previous render, already checked against the
+    /// cached top-level fragment.
+    cached: Option<&'a ChildFragments>,
+    /// The partial renderer's sibling latch as it stood BEFORE this wrapper:
+    /// an earlier node may have bound a name a child reads.
+    latch: bool,
+}
+
+/// A collecting render renders every child (`changed_keys: None` makes every
+/// child stale) but still uses the deps to keep only reusable children.
+fn collecting_plan<'a>(
+    node: &Node,
+    deps: Option<&'a crate::parser::WrapperChildDeps>,
+) -> Option<ChildPlan<'a>> {
+    is_child_cached_wrapper(node).then_some(ChildPlan {
+        deps,
+        changed_keys: None,
+        cached: None,
+        latch: true,
+    })
+}
+
+fn is_child_cached_wrapper(node: &Node) -> bool {
+    matches!(
+        node.unlocated(),
+        Node::If { .. } | Node::With { .. } | Node::Block { .. }
+    )
+}
+
+/// Render one top-level `{% if %}` / `{% with %}` / `{% block %}` child by
+/// child against its fragment cache (#4315), filling `out` with the
+/// children's fragments for the next render.
+///
+/// The wrapper itself (the condition, the `{% with %}` operands, the `dj-if`
+/// boundary markers) always renders; that is the point of the call. A child
+/// re-renders under the same rule [`render_nodes_partial_with_children`]
+/// applies to a top-level node, with the latch carried over from the
+/// top-level list: when its dependencies are unknown or `"*"`, when one of
+/// them changed or is a name the wrapper binds, when an earlier node (top
+/// level or a preceding child) may have bound a name, or when there is no
+/// cached fragment for it in this branch.
+fn render_wrapper_children<L: TemplateLoader>(
+    node: &Node,
+    context: &mut Context,
+    loader: Option<&L>,
+    plan: &ChildPlan<'_>,
+    out: &mut Option<ChildFragments>,
+) -> Result<String> {
+    // The same frame `render_effectful_node_output` puts around a located
+    // node: its registry namespace, its identity, its error location.
+    if let Node::Located {
+        nodes,
+        span,
+        source,
+        origin,
+        registry_namespace,
+        ..
+    } = node
+    {
+        let _namespace = crate::registry_scope::NamespaceGuard::enter(*registry_namespace);
+        let previous = context.replace_node_identity(Some((source.as_ptr() as usize, span.0)));
+        let rendered = render_wrapper_children::<L>(&nodes[0], context, loader, plan, out);
+        context.replace_node_identity(previous);
+        return rendered.map_err(|error| {
+            error
+                .at(Some(*span))
+                .with_template_source(source, origin.as_deref().unwrap_or("<unknown source>"))
+        });
+    }
+    let mut body = |children: &[Node], branch: u8, context: &mut Context| -> Result<String> {
+        let deps = plan
+            .deps
+            .and_then(|deps| deps.bodies.get(usize::from(branch)))
+            .filter(|deps| deps.len() == children.len());
+        let cached = plan
+            .cached
+            .filter(|cached| cached.branch == branch && cached.fragments.len() == children.len());
+        let mut latch = plan.latch;
+        let mut output = String::new();
+        let mut fragments = Vec::with_capacity(children.len());
+        for (j, child) in children.iter().enumerate() {
+            let child_deps = deps.and_then(|deps| deps.get(j));
+            latch |= child_deps.is_none_or(|d| d.contains("*") && node_may_bind_names(child));
+            let reusable = child_deps.and_then(|d| {
+                let stale = (latch && !d.is_empty())
+                    || d.is_empty()
+                    || d.contains("*")
+                    || d.iter().any(|dep| {
+                        plan.changed_keys.is_none_or(|keys| keys.contains(dep))
+                            || plan.deps.is_some_and(|w| w.scoped.contains(dep))
+                    });
+                if stale {
+                    None
+                } else {
+                    cached.and_then(|cached| cached.fragments[j].as_ref())
+                }
+            });
+            // A child's cached fragment carries no record of the `dj-model`
+            // bindings it emitted, so while a recording runs a child that may
+            // emit one renders instead (the record is then this render's own,
+            // for the branch actually taken; `model_bindings`).
+            let reusable = reusable.filter(|_| {
+                !(crate::model_bindings::is_recording()
+                    && crate::model_bindings::nodes_may_emit_binding(std::slice::from_ref(child)))
+            });
+            let html = match reusable {
+                Some(html) => html.clone(),
+                None => render_effectful_node_output::<L, String>(child, context, loader)?,
+            };
+            output.push_str(&html);
+            // Keep what a later render could reuse: a child with known,
+            // non-empty, non-wildcard dependencies.
+            let keep = child_deps.is_none_or(|d| !d.is_empty() && !d.contains("*"));
+            fragments.push(keep.then_some(html));
+        }
+        *out = Some(ChildFragments {
+            branch,
+            parent_len: 0,
+            parent_hash: 0,
+            fragments,
+        });
+        Ok(output)
+    };
+    let html = match node {
+        Node::If {
+            condition,
+            true_nodes,
+            false_nodes,
+            in_tag_context,
+            marker_id,
+        } => render_if_output(
+            condition,
+            true_nodes,
+            false_nodes,
+            *in_tag_context,
+            marker_id.as_deref(),
+            context,
+            &mut body,
+        )?,
+        Node::With { assignments, nodes } => {
+            render_with_output(assignments, nodes, context, &mut body)?
+        }
+        Node::Block { nodes, .. } => render_block_output(nodes, context, &mut body)?,
+        other => render_effectful_node_output::<L, String>(other, context, loader)?,
+    };
+    // `render_effectful_node_output` clears what the node's operands left in
+    // the provenance-flatten buffer; the wrapper's operands are no exception.
+    context.take_provenance_flatten();
+    Ok(html)
 }
 
 /// Can rendering `node` bind a name that a LATER sibling reads (#4124)?
@@ -2968,6 +3236,7 @@ pub fn node_may_bind_names(node: &Node) -> bool {
 ///
 /// Returns `(full_html, new_fragments, changed_indices)`.
 /// Nodes whose deps are disjoint from `changed_keys` reuse their cached HTML.
+/// Without a per-child cache; see [`render_nodes_partial_with_children`].
 pub fn render_nodes_partial<L: TemplateLoader>(
     nodes: &[Node],
     node_deps: &[HashSet<String>],
@@ -2976,12 +3245,56 @@ pub fn render_nodes_partial<L: TemplateLoader>(
     changed_keys: &HashSet<String>,
     node_html_cache: &[String],
 ) -> Result<(String, Vec<String>, Vec<usize>)> {
+    let rendered = render_nodes_partial_with_children(
+        nodes,
+        node_deps,
+        context,
+        loader,
+        changed_keys,
+        node_html_cache,
+        ChildCacheInput::default(),
+    )?;
+    Ok((rendered.html, rendered.fragments, rendered.changed))
+}
+
+/// The per-child half of the partial render's input (#4315).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ChildCacheInput<'a> {
+    /// `parser::extract_wrapper_child_deps` of the same node list.
+    pub deps: &'a [Option<crate::parser::WrapperChildDeps>],
+    /// The previous render's [`PartialRender::children`].
+    pub fragments: &'a [Option<ChildFragments>],
+}
+
+/// Partial render with a per-child fragment cache inside top-level
+/// `{% if %}` / `{% with %}` / `{% block %}` bodies (#4315).
+///
+/// A top-level node is reused or re-rendered as before. A wrapper that
+/// re-renders (its condition read a changed key, or it contains a `"*"`
+/// child such as a custom tag or an `{% include %}`) now renders its body
+/// child by child: a child whose own dependencies did not change reuses its
+/// fragment from the previous render, so a `{% for %}` nested in
+/// `{% if show %}` is not redrawn when only a sibling's key changed.
+/// A wrapper reused whole keeps its child entry for a later render.
+pub fn render_nodes_partial_with_children<L: TemplateLoader>(
+    nodes: &[Node],
+    node_deps: &[HashSet<String>],
+    context: &Context,
+    loader: Option<&L>,
+    changed_keys: &HashSet<String>,
+    node_html_cache: &[String],
+    children: ChildCacheInput<'_>,
+) -> Result<PartialRender> {
     let mut context = context.clone();
-    let mut output = String::new();
-    let mut fragments = Vec::with_capacity(nodes.len());
-    let mut changed = Vec::new();
+    let mut rendered = PartialRender {
+        html: String::new(),
+        fragments: Vec::with_capacity(nodes.len()),
+        children: Vec::with_capacity(nodes.len()),
+        changed: Vec::new(),
+    };
     let mut context_may_have_changed = false;
     for (i, node) in nodes.iter().enumerate() {
+        let latch_before = context_may_have_changed;
         // A wildcard node READS keys we cannot name, so it always re-renders
         // itself. Only a node that may also BIND names (an assign tag, an
         // `as <var>` form, a bridged tag that may write the context, an
@@ -3000,20 +3313,50 @@ pub fn render_nodes_partial<L: TemplateLoader>(
                 || i >= node_html_cache.len()
                 || deps.iter().any(|dep| changed_keys.contains(dep))
         });
-        let html = if needs_render {
-            changed.push(i);
-            let mark = crate::model_bindings::begin_node();
-            let html = render_effectful_node_output::<L, String>(node, &mut context, loader)?;
-            crate::model_bindings::end_node(mark);
-            html
-        } else {
+        // The previous render's children of this node, if they belong to the
+        // cached fragment they would be reused under.
+        let previous = children
+            .fragments
+            .get(i)
+            .and_then(Option::as_ref)
+            .filter(|entry| {
+                node_html_cache
+                    .get(i)
+                    .is_some_and(|parent| entry.belongs_to(parent))
+            });
+        let (html, child_entry) = if !needs_render {
             crate::model_bindings::reuse_node(i);
-            node_html_cache[i].clone()
+            (node_html_cache[i].clone(), previous.cloned())
+        } else {
+            rendered.changed.push(i);
+            let mark = crate::model_bindings::begin_node();
+            let rendered_node = if is_child_cached_wrapper(node) {
+                let plan = ChildPlan {
+                    deps: children.deps.get(i).and_then(Option::as_ref),
+                    changed_keys: Some(changed_keys),
+                    cached: previous,
+                    latch: latch_before,
+                };
+                let mut entry = None;
+                let html =
+                    render_wrapper_children::<L>(node, &mut context, loader, &plan, &mut entry)?;
+                let entry = entry.map(|entry| entry.fingerprinted(&html));
+                (html, entry)
+            } else {
+                (
+                    render_effectful_node_output::<L, String>(node, &mut context, loader)?,
+                    None,
+                )
+            };
+            crate::model_bindings::end_node(mark);
+            rendered_node
         };
-        output.push_str(&html);
-        fragments.push(html);
+        rendered.html.push_str(&html);
+        rendered.fragments.push(html);
+        rendered.children.push(child_entry);
     }
-    Ok((output, fragments, changed))
+    rendered.children = drop_empty(rendered.children);
+    Ok(rendered)
 }
 
 /// No-op loader for when no loader is provided
@@ -3207,6 +3550,188 @@ impl std::ops::Deref for BridgedContextMap {
     fn deref(&self) -> &Self::Target {
         &self.map
     }
+}
+
+/// `{% if %}` with the body render supplied by the caller (#4315).
+///
+/// The one statement of the arm: [`render_node_output`] renders the body that
+/// fires as a plain node list, and the partial renderer renders it child by
+/// child against its per-child fragment cache (`render_wrapper_children`).
+/// `render_body` gets the branch that fires, `0` for the true body and `1`
+/// for the false one.
+fn render_if_output<R: RenderOutput>(
+    condition: &str,
+    true_nodes: &[Node],
+    false_nodes: &[Node],
+    in_tag_context: bool,
+    marker_id: Option<&str>,
+    context: &mut Context,
+    mut render_body: impl FnMut(&[Node], u8, &mut Context) -> Result<R>,
+) -> Result<R> {
+    let condition_result = evaluate_condition_for_if(condition, context)?;
+    // Condition operands are evaluated but their bytes are not emitted.
+    context.take_provenance_flatten();
+    // #2519: the plain-backend path (and the engine built without the
+    // `liveview` feature) renders `{% if %}` exactly as Django does —
+    // no placeholder, no boundary pair. One switch for both forms.
+    let markers = dj_if_markers_enabled(context);
+
+    // Render the body that fires (truthy/falsy branch).
+    let mut body = if condition_result {
+        render_body(true_nodes, 0, context)?
+    } else if false_nodes.is_empty() {
+        if in_tag_context || !markers {
+            // Inside an HTML attribute value: a comment node would produce
+            // malformed HTML (e.g. class="btn <!--dj-if-->"). Emit empty
+            // string instead. Fix for issue #380. Same answer when
+            // markers are off (#2519).
+            R::default()
+        } else if !nodes_contain_elements(true_nodes) && !nodes_contain_elements(false_nodes) {
+            // Pure-text conditional with no else: keep the legacy
+            // single-comment placeholder (issue #295 / DJE-053).
+            // Element-bearing branches drop into the dj-if pair
+            // path below, which serves the same sibling-stability
+            // role (closing tag adjacent to opening).
+            R::context_neutral("<!--dj-if-->".to_string())
+        } else {
+            // Element-bearing if with no else and false condition:
+            // emit empty body inside the wrapping pair below.
+            R::default()
+        }
+    } else {
+        render_body(false_nodes, 1, context)?
+    };
+    if R::TRACKED && body.has_origin() {
+        body.identify(if condition_result { "then" } else { "else" });
+    }
+
+    // Decide whether to wrap in `<!--dj-if id="if-N"-->` /
+    // `<!--/dj-if-->` boundary markers. Wrap iff:
+    //   - NOT in an HTML attribute context (comments would
+    //     break attribute strings, issue #380).
+    //   - At least one branch is element-bearing (text-only
+    //     conditionals don't need keyed boundaries — text
+    //     positions are sibling-stable already).
+    //   - The parser assigned a marker_id (production
+    //     templates always go through `parser::parse()`
+    //     which assigns IDs in document order).
+    //
+    // Foundation 1 of 3 toward issue #1358 (keyed VDOM diff
+    // for conditional subtrees, re-open of #256 Option A).
+    // Iter 2 (client patch applier) and Iter 3 (Rust VDOM
+    // differ) follow in subsequent PRs. The markers are
+    // metadata only — browsers ignore HTML comments — so
+    // this iter is zero-observable-behavior.
+    if markers
+        && !in_tag_context
+        && (nodes_contain_elements(true_nodes) || nodes_contain_elements(false_nodes))
+    {
+        if let Some(id) = marker_id {
+            // Append the per-iteration loop path (#1832) so an
+            // `{% if %}` rendered inside a `{% for %}` gets a UNIQUE
+            // id per iteration (the parser-assigned `if-<hash>-N` is
+            // the SAME compile-time ordinal for every iteration, so
+            // without this suffix the id is duplicated N times,
+            // producing unpairable MoveSubtree patches on re-render).
+            // Outside any loop the path is absent/empty, so the id is
+            // unchanged `if-<hash>-N` (backward compatible). Inside a
+            // loop iteration the open marker becomes
+            // `if-<hash>-N-<path>` (e.g. `if-<hash>-0-0`); the close
+            // marker stays `<!--/dj-if-->` (it carries no id). The id
+            // is treated as an opaque string by the Rust differ and
+            // the JS client — neither parses the `-N` structure.
+            //
+            // The path is a `Context` FIELD the `{% for %}` arm writes,
+            // never a context key (#2529): a user context key of the old
+            // name `__djust_if_loop_path` was interpolated raw here and
+            // forged live markup. The accessor's grammar is `(-<digits>)*`.
+            //
+            // The per-instance namespace (#2686) is the same idea on
+            // the instance axis: `id` is derived from the template
+            // SOURCE, so two `template_name` LiveComponent instances of
+            // one class — each a fresh `RustLiveView` whose counter
+            // restarts at 0 — emit the identical `if-<hash>-0` into one
+            // parent buffer, and the client resolves subtree patches by
+            // FIRST match. Also a `Context` FIELD with a validated
+            // grammar (`[A-Za-z0-9_]*`) for the #2529 reason. Empty for
+            // every non-component render, so ids are unchanged there.
+            let namespace = context.dj_if_id_namespace();
+            let namespace = if namespace.is_empty() {
+                String::new()
+            } else {
+                format!("-{namespace}")
+            };
+            // The include-site path (#2689) is the same idea again,
+            // on the third axis: two `{% include %}`s of one fragment
+            // in one page render the same parsed template into one
+            // buffer, so both emit `if-<hash>-0`. Segments are
+            // `-i<hex>_<n>`, disjoint from the loop path's pure-digit
+            // segments, so the two concatenate unambiguously.
+            let include_path = context.dj_if_include_path();
+            let loop_path = context.dj_if_loop_path();
+            let mut wrapped = R::context_neutral(format!(
+                "<!--dj-if id=\"{id}{namespace}{include_path}{loop_path}\"-->"
+            ));
+            wrapped.append(&body);
+            wrapped.append(&R::context_neutral("<!--/dj-if-->".to_owned()));
+            return Ok(wrapped);
+        }
+    }
+
+    Ok(body)
+}
+
+/// `{% with %}` with the body render supplied by the caller (#4315); see
+/// [`render_if_output`].
+fn render_with_output<R: RenderOutput>(
+    assignments: &[(String, String)],
+    nodes: &[Node],
+    context: &mut Context,
+    mut render_body: impl FnMut(&[Node], u8, &mut Context) -> Result<R>,
+) -> Result<R> {
+    // Resolve all operands before introducing any of the new names.
+    let mut bindings = Vec::new();
+    let mut pending = Vec::new();
+    for (name, expression) in assignments {
+        let (value, safe) = get_value_safe(expression, context)?;
+        bindings.push((
+            name.clone(),
+            value,
+            safe,
+            R::TRACKED && expression_is_literal(expression, context),
+            captured_expression(expression, context),
+        ));
+        if let Some(path) = bare_dotted_path(expression) {
+            pending.push((name.clone(), context.alias_path(path)));
+        }
+    }
+    let bound: Vec<&str> = assignments.iter().map(|(name, _)| name.as_str()).collect();
+    context.with_scope(|inner| {
+        for (name, value, safe, literal, capture) in bindings {
+            inner.bind(name.clone(), value, safe);
+            if literal {
+                inner.mark_template_literal(&name);
+            }
+            if let Some(capture) = capture {
+                inner.mark_captured_literals(&name, capture);
+            }
+        }
+        register_binding_aliases(inner, pending, &bound);
+        render_body(nodes, 0, inner)
+    })
+}
+
+/// `{% block %}` with the body render supplied by the caller (#4315); see
+/// [`render_if_output`].
+fn render_block_output<R: RenderOutput>(
+    nodes: &[Node],
+    context: &mut Context,
+    mut render_body: impl FnMut(&[Node], u8, &mut Context) -> Result<R>,
+) -> Result<R> {
+    context.with_scope(|inner| {
+        inner.enter_base_block();
+        render_body(nodes, 0, inner)
+    })
 }
 
 pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
@@ -3740,121 +4265,15 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             false_nodes,
             in_tag_context,
             marker_id,
-        } => {
-            let condition_result = evaluate_condition_for_if(condition, context)?;
-            // Condition operands are evaluated but their bytes are not emitted.
-            context.take_provenance_flatten();
-            // #2519: the plain-backend path (and the engine built without the
-            // `liveview` feature) renders `{% if %}` exactly as Django does —
-            // no placeholder, no boundary pair. One switch for both forms.
-            let markers = dj_if_markers_enabled(context);
-
-            // Render the body that fires (truthy/falsy branch).
-            let mut body = if condition_result {
-                render_nodes_output::<L, R>(true_nodes, context, loader)?
-            } else if false_nodes.is_empty() {
-                if *in_tag_context || !markers {
-                    // Inside an HTML attribute value: a comment node would produce
-                    // malformed HTML (e.g. class="btn <!--dj-if-->"). Emit empty
-                    // string instead. Fix for issue #380. Same answer when
-                    // markers are off (#2519).
-                    R::default()
-                } else if !nodes_contain_elements(true_nodes)
-                    && !nodes_contain_elements(false_nodes)
-                {
-                    // Pure-text conditional with no else: keep the legacy
-                    // single-comment placeholder (issue #295 / DJE-053).
-                    // Element-bearing branches drop into the dj-if pair
-                    // path below, which serves the same sibling-stability
-                    // role (closing tag adjacent to opening).
-                    R::context_neutral("<!--dj-if-->".to_string())
-                } else {
-                    // Element-bearing if with no else and false condition:
-                    // emit empty body inside the wrapping pair below.
-                    R::default()
-                }
-            } else {
-                render_nodes_output::<L, R>(false_nodes, context, loader)?
-            };
-            if R::TRACKED && body.has_origin() {
-                body.identify(if condition_result { "then" } else { "else" });
-            }
-
-            // Decide whether to wrap in `<!--dj-if id="if-N"-->` /
-            // `<!--/dj-if-->` boundary markers. Wrap iff:
-            //   - NOT in an HTML attribute context (comments would
-            //     break attribute strings, issue #380).
-            //   - At least one branch is element-bearing (text-only
-            //     conditionals don't need keyed boundaries — text
-            //     positions are sibling-stable already).
-            //   - The parser assigned a marker_id (production
-            //     templates always go through `parser::parse()`
-            //     which assigns IDs in document order).
-            //
-            // Foundation 1 of 3 toward issue #1358 (keyed VDOM diff
-            // for conditional subtrees, re-open of #256 Option A).
-            // Iter 2 (client patch applier) and Iter 3 (Rust VDOM
-            // differ) follow in subsequent PRs. The markers are
-            // metadata only — browsers ignore HTML comments — so
-            // this iter is zero-observable-behavior.
-            if markers
-                && !*in_tag_context
-                && (nodes_contain_elements(true_nodes) || nodes_contain_elements(false_nodes))
-            {
-                if let Some(id) = marker_id {
-                    // Append the per-iteration loop path (#1832) so an
-                    // `{% if %}` rendered inside a `{% for %}` gets a UNIQUE
-                    // id per iteration (the parser-assigned `if-<hash>-N` is
-                    // the SAME compile-time ordinal for every iteration, so
-                    // without this suffix the id is duplicated N times,
-                    // producing unpairable MoveSubtree patches on re-render).
-                    // Outside any loop the path is absent/empty, so the id is
-                    // unchanged `if-<hash>-N` (backward compatible). Inside a
-                    // loop iteration the open marker becomes
-                    // `if-<hash>-N-<path>` (e.g. `if-<hash>-0-0`); the close
-                    // marker stays `<!--/dj-if-->` (it carries no id). The id
-                    // is treated as an opaque string by the Rust differ and
-                    // the JS client — neither parses the `-N` structure.
-                    //
-                    // The path is a `Context` FIELD the `{% for %}` arm writes,
-                    // never a context key (#2529): a user context key of the old
-                    // name `__djust_if_loop_path` was interpolated raw here and
-                    // forged live markup. The accessor's grammar is `(-<digits>)*`.
-                    //
-                    // The per-instance namespace (#2686) is the same idea on
-                    // the instance axis: `id` is derived from the template
-                    // SOURCE, so two `template_name` LiveComponent instances of
-                    // one class — each a fresh `RustLiveView` whose counter
-                    // restarts at 0 — emit the identical `if-<hash>-0` into one
-                    // parent buffer, and the client resolves subtree patches by
-                    // FIRST match. Also a `Context` FIELD with a validated
-                    // grammar (`[A-Za-z0-9_]*`) for the #2529 reason. Empty for
-                    // every non-component render, so ids are unchanged there.
-                    let namespace = context.dj_if_id_namespace();
-                    let namespace = if namespace.is_empty() {
-                        String::new()
-                    } else {
-                        format!("-{namespace}")
-                    };
-                    // The include-site path (#2689) is the same idea again,
-                    // on the third axis: two `{% include %}`s of one fragment
-                    // in one page render the same parsed template into one
-                    // buffer, so both emit `if-<hash>-0`. Segments are
-                    // `-i<hex>_<n>`, disjoint from the loop path's pure-digit
-                    // segments, so the two concatenate unambiguously.
-                    let include_path = context.dj_if_include_path();
-                    let loop_path = context.dj_if_loop_path();
-                    let mut wrapped = R::context_neutral(format!(
-                        "<!--dj-if id=\"{id}{namespace}{include_path}{loop_path}\"-->"
-                    ));
-                    wrapped.append(&body);
-                    wrapped.append(&R::context_neutral("<!--/dj-if-->".to_owned()));
-                    return Ok(wrapped);
-                }
-            }
-
-            Ok(body)
-        }
+        } => render_if_output(
+            condition,
+            true_nodes,
+            false_nodes,
+            *in_tag_context,
+            marker_id.as_deref(),
+            context,
+            |nodes, _branch, context| render_nodes_output::<L, R>(nodes, context, loader),
+        ),
 
         Node::For {
             var_names,
@@ -4286,7 +4705,7 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                             // which is Django's order: `loop_dict` is written at
                             // the top of the iteration and `context[loopvar]` at
                             // the bottom.
-                            ctx.set("forloop".to_string(), Value::Object(loop_dict.clone()));
+                            ctx.set("forloop".to_string(), Value::Object(Box::new(loop_dict.clone())));
 
                             // The grant this item carries (#2361). Non-empty only
                             // for a NORMALISED operand, where the positional
@@ -4711,10 +5130,11 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             }
         }
 
-        Node::Block { name: _, nodes } => context.with_scope(|inner| {
-            inner.enter_base_block();
-            render_nodes_output::<L, R>(nodes, inner, loader)
-        }),
+        Node::Block { name: _, nodes } => {
+            render_block_output(nodes, context, |nodes, _branch, context| {
+                render_nodes_output::<L, R>(nodes, context, loader)
+            })
+        }
 
         Node::Include {
             origin,
@@ -5095,35 +5515,8 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
         }
 
         Node::With { assignments, nodes } => {
-            // Resolve all operands before introducing any of the new names.
-            let mut bindings = Vec::new();
-            let mut pending = Vec::new();
-            for (name, expression) in assignments {
-                let (value, safe) = get_value_safe(expression, context)?;
-                bindings.push((
-                    name.clone(),
-                    value,
-                    safe,
-                    R::TRACKED && expression_is_literal(expression, context),
-                    captured_expression(expression, context),
-                ));
-                if let Some(path) = bare_dotted_path(expression) {
-                    pending.push((name.clone(), context.alias_path(path)));
-                }
-            }
-            let bound: Vec<&str> = assignments.iter().map(|(name, _)| name.as_str()).collect();
-            context.with_scope(|inner| {
-                for (name, value, safe, literal, capture) in bindings {
-                    inner.bind(name.clone(), value, safe);
-                    if literal {
-                        inner.mark_template_literal(&name);
-                    }
-                    if let Some(capture) = capture {
-                        inner.mark_captured_literals(&name, capture);
-                    }
-                }
-                register_binding_aliases(inner, pending, &bound);
-                render_nodes_output::<L, R>(nodes, inner, loader)
+            render_with_output(assignments, nodes, context, |nodes, _branch, context| {
+                render_nodes_output::<L, R>(nodes, context, loader)
             })
         }
 
@@ -5363,7 +5756,7 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             context.with_scope(|scoped| {
                 scoped.bind(
                     "block".to_string(),
-                    Value::Object(indexmap::IndexMap::new()),
+                    Value::Object(Box::new(indexmap::IndexMap::new())),
                     false,
                 );
                 scoped.mark_safe("block.super".to_string());
@@ -8504,7 +8897,7 @@ mod tests {
         })
         .collect();
         let mut context = Context::new();
-        context.set("m".chars().collect(), Value::Object(model));
+        context.set("m".chars().collect(), Value::Object(Box::new(model)));
         for (src, want) in [
             ("{% if 'name' in m %}YES{% else %}NO{% endif %}", "NO"),
             ("{% if 'zzz' in m %}YES{% else %}NO{% endif %}", "NO"),
@@ -8529,7 +8922,7 @@ mod tests {
         let mut map = IndexMap::new();
         map.insert("2".into(), Value::Bool(true));
         map.insert("5".into(), Value::String("hello".to_string()));
-        context.set("mydict".to_string(), Value::Object(map));
+        context.set("mydict".to_string(), Value::Object(Box::new(map)));
 
         // Key exists → found
         context.set("key".to_string(), Value::String("2".to_string()));
@@ -8556,7 +8949,7 @@ mod tests {
         // case the coercion was said to protect and never did.
         let mut int_keyed = IndexMap::new();
         int_keyed.insert(djust_core::ObjectKey::Int(5), Value::Bool(true));
-        context.set("mydict".to_string(), Value::Object(int_keyed));
+        context.set("mydict".to_string(), Value::Object(Box::new(int_keyed)));
         context.set("key".to_string(), Value::Integer(5));
         assert_eq!(render_nodes(&nodes, &context).unwrap(), "found");
         context.set("key".to_string(), Value::String("5".to_string()));
@@ -8574,7 +8967,7 @@ mod tests {
 
         let mut map = IndexMap::new();
         map.insert("42".into(), Value::Bool(true));
-        context.set("mydict".to_string(), Value::Object(map));
+        context.set("mydict".to_string(), Value::Object(Box::new(map)));
 
         // Integer value, filter converts to string "42", should match dict key
         context.set("val".to_string(), Value::Integer(42));
@@ -8899,7 +9292,7 @@ mod tests {
         let mut context = Context::new();
         let mut user = IndexMap::new();
         user.insert("name".into(), Value::String("Alice".to_string()));
-        context.set("user".to_string(), Value::Object(user));
+        context.set("user".to_string(), Value::Object(Box::new(user)));
         let result = render_nodes(&nodes, &context).unwrap();
         assert_eq!(result, "Alice");
     }
@@ -9125,7 +9518,7 @@ mod tests {
         // value_to_arg_string should serialize Value::Object as JSON
         let mut map = IndexMap::new();
         map.insert("key".into(), Value::String("val".to_string()));
-        let obj = Value::Object(map);
+        let obj = Value::Object(Box::new(map));
         let json = serde_json::to_string(&obj).unwrap();
         assert_eq!(json, r#"{"key":"val"}"#);
     }
@@ -9159,7 +9552,7 @@ mod tests {
         );
         let mut obj = IndexMap::new();
         obj.insert("key".into(), Value::String("val".to_string()));
-        ctx.set("obj".to_string(), Value::Object(obj));
+        ctx.set("obj".to_string(), Value::Object(Box::new(obj)));
         ctx.set("count".to_string(), Value::Integer(42));
         ctx.set("name".to_string(), Value::String("hello".to_string()));
         ctx
@@ -9203,7 +9596,7 @@ mod tests {
             Value::List(vec![Value::Integer(1)]),
             Value::List(Vec::new()),
             Value::Tuple(vec![Value::Integer(1)]),
-            Value::Object(IndexMap::new()),
+            Value::Object(Box::new(IndexMap::new())),
             // A serialized model: `list(model)` raises, so BOTH probes say "not iterable".
             Value::Object(
                 [
@@ -9222,7 +9615,8 @@ mod tests {
                         },
                     )
                 })
-                .collect(),
+                .collect::<indexmap::IndexMap<_, _>>()
+                .into(),
             ),
             // A dict that merely carries a text `__str__` is user data and iterates its keys.
             Value::Object(
@@ -9234,7 +9628,8 @@ mod tests {
                             Value::String(v.chars().collect()),
                         )
                     })
-                    .collect(),
+                    .collect::<indexmap::IndexMap<_, _>>()
+                    .into(),
             ),
             Value::DictView {
                 kind: djust_core::DictViewKind::Keys,
@@ -9406,7 +9801,10 @@ mod tests {
         assert_eq!(value_to_arg_string(&list), "[1,2]");
         let mut map = IndexMap::new();
         map.insert("key".into(), Value::String("val".to_string()));
-        assert_eq!(value_to_arg_string(&Value::Object(map)), r#"{"key":"val"}"#);
+        assert_eq!(
+            value_to_arg_string(&Value::Object(Box::new(map))),
+            r#"{"key":"val"}"#
+        );
         assert_eq!(value_to_arg_string(&Value::Integer(42)), "42");
         // Scalars go through Display, so this follows it to `True` (#2203).
         assert_eq!(value_to_arg_string(&Value::Bool(true)), "True");
@@ -9423,7 +9821,7 @@ mod tests {
             let mut map = IndexMap::new();
             map.insert("id".into(), Value::Integer(1));
             map.insert("name".into(), cell);
-            Value::List(vec![Value::Object(map)])
+            Value::List(vec![Value::Object(Box::new(map))])
         };
         assert!(text_loses_a_member(&row(Value::SafeString(
             "<i>N</i>".into()
@@ -9431,11 +9829,11 @@ mod tests {
         assert!(text_loses_a_member(&row(Value::Float(f64::NAN))));
         assert!(text_loses_a_member(&row(Value::Float(f64::INFINITY))));
         assert!(text_loses_a_member(&row(Value::Float(f64::NEG_INFINITY))));
-        assert!(text_loses_a_member(&Value::List(vec![Value::NamedTuple {
-            name: "Col".into(),
-            fields: vec!["key".into()],
-            items: vec![Value::String("name".into())],
-        }])));
+        assert!(text_loses_a_member(&Value::List(vec![Value::named_tuple(
+            "Col".into(),
+            vec!["key".into()],
+            vec![Value::String("name".into())]
+        )])));
         // Nested deeper than a row: a cell holding a list.
         assert!(text_loses_a_member(&row(Value::List(vec![
             Value::SafeString("x".into())
@@ -9450,7 +9848,7 @@ mod tests {
         let mut int_keyed = IndexMap::new();
         int_keyed.insert(djust_core::ObjectKey::Int(1), Value::String("a".into()));
         assert!(text_loses_a_member(&Value::List(vec![Value::Object(
-            int_keyed
+            Box::new(int_keyed)
         )])));
         // A scalar operand is not a container: the existing rules decide it.
         assert!(!text_loses_a_member(&Value::SafeString("x".into())));
@@ -10354,11 +10752,17 @@ mod tests {
         let mut b = indexmap::IndexMap::new();
         b.insert("b".into(), Value::Integer(2));
         b.insert("a".into(), Value::Integer(1));
-        assert!(values_equal(&Value::Object(a.clone()), &Value::Object(b)));
+        assert!(values_equal(
+            &Value::Object(Box::new(a.clone())),
+            &Value::Object(Box::new(b))
+        ));
 
         let mut c = indexmap::IndexMap::new();
         c.insert("a".into(), Value::Integer(1));
-        assert!(!values_equal(&Value::Object(a), &Value::Object(c)));
+        assert!(!values_equal(
+            &Value::Object(Box::new(a)),
+            &Value::Object(Box::new(c))
+        ));
     }
 
     #[test]
@@ -10389,7 +10793,7 @@ mod tests {
     fn test_2335_only_an_equal_pair_continues_the_walk() {
         // Python compares with `==` FIRST, so equal-but-unorderable elements
         // do not stop the walk...
-        let d = Value::Object(indexmap::IndexMap::new());
+        let d = Value::Object(Box::new(indexmap::IndexMap::new()));
         assert_eq!(
             try_compare(
                 &l(vec![d.clone(), Value::Integer(1)]),
@@ -10436,7 +10840,7 @@ mod tests {
         assert_eq!(try_compare(&Value::None, &Value::Integer(1)), None);
         assert!(values_equal(&Value::Missing, &Value::Missing));
         // A dict against anything, including itself.
-        let d = Value::Object(indexmap::IndexMap::new());
+        let d = Value::Object(Box::new(indexmap::IndexMap::new()));
         assert_eq!(try_compare(&d, &d), None);
         // And the orderable pairs still answer, so `None` is not swallowing
         // everything.

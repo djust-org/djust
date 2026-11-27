@@ -9904,13 +9904,11 @@ class SortableGridNode(template.Node):
         items = kw.get("items", [])
         columns = kw.get("columns", 3)
         move_event = kw.get("move_event", "reorder")
-        gap = safe_css_length(kw.get("gap", "0.75rem"), "0.75rem")
         disabled = kw.get("disabled", False)
         custom_class = kw.get("class", "")
 
         e_event = escape(str(move_event))
         e_class = escape(str(custom_class))
-        e_gap = conditional_escape(str(gap))
 
         classes = ["dj-sortable-grid"]
         if disabled:
@@ -10327,14 +10325,12 @@ class DashboardGridNode(template.Node):
         panels = kw.get("panels", [])
         columns = kw.get("columns", 4)
         row_height = kw.get("row_height", "200px")
-        gap = safe_css_length(kw.get("gap", "1rem"), "1rem")
         move_event = kw.get("move_event", "dashboard_move")
         resize_event = kw.get("resize_event", "dashboard_resize")
         custom_class = kw.get("class", "")
 
         e_move = escape(str(move_event))
         e_resize = escape(str(resize_event))
-        e_gap = conditional_escape(str(gap))
         e_class = escape(str(custom_class))
 
         classes = ["dj-dashboard-grid"]

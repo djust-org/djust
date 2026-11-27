@@ -287,7 +287,10 @@ fn for_if_iteration_unique_id_1832() {
     item2.insert("name".into(), Value::String("b".to_string()));
     c.set(
         "items".into(),
-        Value::List(vec![Value::Object(item1), Value::Object(item2)]),
+        Value::List(vec![
+            Value::Object(Box::new(item1)),
+            Value::Object(Box::new(item2)),
+        ]),
     );
     let result = render(template, &c);
     // The per-template hash prefix is replaced with a fixed token so the

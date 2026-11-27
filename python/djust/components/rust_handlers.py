@@ -3172,7 +3172,7 @@ def _checked_raw_handler(name: str, compile_func: Any, library: Any) -> Any:
             try:
                 self.compile_func(parser, _token(self.name, args))
             except BodyReached:
-                pass
+                return  # the tag compiled up to its body: the arguments are valid
             except BaseException as exc:
                 _stamp(exc)
                 raise

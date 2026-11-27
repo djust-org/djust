@@ -286,8 +286,8 @@ pub(crate) fn lookup_segment<'a>(current: &'a Value, part: &str) -> Option<&'a V
     //     today (it has no index arm below, and none of the carried names
     //     parses as an integer) and correct anyway, so the two cannot come
     //     apart if either set grows.
-    if let Value::NamedTuple { fields, items, .. } = current {
-        if let Some(index) = fields.iter().position(|field| field == part) {
+    if let Value::NamedTuple { meta, items } = current {
+        if let Some(index) = meta.fields.iter().position(|field| field == part) {
             return items.get(index);
         }
     }
@@ -3926,7 +3926,7 @@ mod tests {
         user.insert("name".into(), Value::String("John".to_string()));
         user.insert("age".into(), Value::Integer(30));
 
-        ctx.set("user".to_string(), Value::Object(user));
+        ctx.set("user".to_string(), Value::Object(Box::new(user)));
 
         assert!(matches!(ctx.get("user.name"), Some(Value::String(s)) if s == "John"));
         assert!(matches!(ctx.get("user.age"), Some(Value::Integer(30))));
@@ -4008,7 +4008,7 @@ mod tests {
         let mut ctx = Context::new();
         let mut map = IndexMap::new();
         map.insert("0".into(), Value::String("<b>v</b>".to_string()));
-        ctx.set("p".to_string(), Value::Object(map));
+        ctx.set("p".to_string(), Value::Object(Box::new(map)));
         ctx.mark_safe("p.0".to_string());
         assert!(!ctx.items_are_safe("p"));
     }
@@ -4107,7 +4107,7 @@ mod tests {
         map.insert("a".into(), Value::Integer(1));
         map.insert("b".into(), Value::Integer(2));
         let mut ctx = Context::new();
-        ctx.set("d".to_string(), Value::Object(map));
+        ctx.set("d".to_string(), Value::Object(Box::new(map)));
         ctx
     }
 
@@ -4184,7 +4184,7 @@ mod tests {
         let mut map = indexmap::IndexMap::new();
         map.insert("items".into(), Value::Integer(5));
         let mut ctx = Context::new();
-        ctx.set("d".to_string(), Value::Object(map));
+        ctx.set("d".to_string(), Value::Object(Box::new(map)));
         assert_eq!(ctx.resolve("d.items").unwrap().unwrap().to_string(), "5");
     }
 
@@ -4209,9 +4209,9 @@ mod tests {
         let mut inner = indexmap::IndexMap::new();
         inner.insert("x".into(), Value::Integer(9));
         let mut outer = indexmap::IndexMap::new();
-        outer.insert("inner".into(), Value::Object(inner));
+        outer.insert("inner".into(), Value::Object(Box::new(inner)));
         let mut ctx = Context::new();
-        ctx.set("d".to_string(), Value::Object(outer));
+        ctx.set("d".to_string(), Value::Object(Box::new(outer)));
         match ctx.resolve("d.inner.keys").unwrap().unwrap() {
             Value::DictView { kind, items } => {
                 assert_eq!(kind, crate::DictViewKind::Keys);

@@ -404,6 +404,16 @@ class AssignsSnapshot(dict):  # type: ignore[type-arg]
         super().__init__()
         self.fingerprints: Dict[int, SnapshotEntry] = {}
 
+    def __eq__(self, other: object) -> bool:
+        # Value semantics are the dict's: ``fingerprints`` is a side channel
+        # (the walks) and never takes part in equality.
+        return dict.__eq__(self, other)  # type: ignore[no-any-return]
+
+    def __ne__(self, other: object) -> bool:
+        return dict.__ne__(self, other)  # type: ignore[no-any-return]
+
+    __hash__ = None  # type: ignore[assignment]  # mutable, like dict
+
 
 class ChangedKeys(set):  # type: ignore[type-arg]
     """``_compute_changed_keys(pre, post)``: the changed names, plus the post walks.
@@ -427,6 +437,16 @@ class ChangedKeys(set):  # type: ignore[type-arg]
         #: (#4325): which rows of a list the handler changed in place.
         self.pre_fingerprints: Optional[Dict[int, SnapshotEntry]] = None
         self.turn: Any = None
+
+    def __eq__(self, other: object) -> bool:
+        # Value semantics are the set's: the walks and the turn are a side
+        # channel and never take part in equality.
+        return set.__eq__(self, other)  # type: ignore[no-any-return]
+
+    def __ne__(self, other: object) -> bool:
+        return set.__ne__(self, other)  # type: ignore[no-any-return]
+
+    __hash__ = None  # type: ignore[assignment]  # mutable, like set
 
 
 def changed_keys_after(changed: Any, post: Any, pre: Any = None) -> ChangedKeys:

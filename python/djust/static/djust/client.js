@@ -1245,6 +1245,18 @@ function applyEffect(effect) {
 }
 
 /**
+ * Settle the event a ``rate_limit_exceeded`` frame names (#4309, #4322) as
+ * ``rate_limited``, end its loading state and apply what it held back.
+ * Returns false when the frame names no request of this transport.
+ */
+async function settleRateLimitedEvent(transport, data) {
+    if (data.ref == null || _pendingEventOwners.get(data.ref) !== transport) return false;
+    cancelEventRequests(transport, data.ref, eventErrorOutcome({error: data.message, code: 'rate_limited'}));
+    if (!hasPendingEventRequests(transport)) await flushServerUpdates(transport);
+    return true;
+}
+
+/**
  * Handle a frame both socket transports apply the same way. Returns false for
  * a frame type this does not know, so the caller can report it.
  *
@@ -1253,6 +1265,12 @@ function applyEffect(effect) {
  */
 async function dispatchCommonFrame(transport, data) {
     switch (data.type) {
+        case 'rate_limit_exceeded':
+            // SSE (and any transport without its own case, #4322): a
+            // turn-policy refusal names the dropped event's ref.
+            await settleRateLimitedEvent(transport, data);
+            return true;
+
         case 'view_refused':
             // A view beside the page view is refused (login, permission, an
             // `on_mount` redirect): its container shows it, the page does
@@ -1849,8 +1867,9 @@ class LiveViewWebSocket {
             optimisticUpdates.clear();
             pendingEvents.clear();
 
-            // Event sequencing (#560): clear pending event state
-            cancelEventRequests(this);
+            // Event sequencing (#560): clear pending event state. Their
+            // outcome (#4322): lost with the connection, unless we closed it.
+            cancelEventRequests(this, null, {status: this._intentionalDisconnect ? 'cancelled' : 'disconnected'});
             takeServerUpdates(this);
 
             // Remove loading indicators from DOM
@@ -2480,7 +2499,7 @@ class LiveViewWebSocket {
                 // Clear pending event refs (#560)
                 if (data.source !== 'async' &&
                     (data.ref == null || _pendingEventOwners.get(data.ref) === this)) {
-                    cancelEventRequests(this, data.ref ?? null);
+                    cancelEventRequests(this, data.ref ?? null, eventErrorOutcome(data));
                     // A failed event does not invalidate earlier server pushes.
                     // Retain them until the other owned requests settle, then
                     // apply with the same version checks as a successful reply.
@@ -2581,10 +2600,7 @@ class LiveViewWebSocket {
                 if (data.ref != null) {
                     // The dropped event's own request (#4309): settle it, end
                     // its loading state, and apply what it held back.
-                    if (_pendingEventOwners.get(data.ref) === this) {
-                        cancelEventRequests(this, data.ref);
-                        if (!hasPendingEventRequests(this)) await flushServerUpdates(this);
-                    }
+                    await settleRateLimitedEvent(this, data);
                 } else if (this.lastEventName) {
                     // Stop loading state if applicable
                     globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
@@ -2932,7 +2948,7 @@ class LiveViewWebSocket {
                 ...slotFrameFields(slotId || slotIdFor(triggerElement))
             });
         } catch (error) {
-            cancelEventRequests(this, request.ref);
+            cancelEventRequests(this, request.ref, {status: 'disconnected'});
             throw error;
         }
         return request.promise;
@@ -3226,8 +3242,14 @@ class LiveViewSSE {
 
             // Track reconnections for form recovery
             if (this._hasConnectedBefore) {
+                // #4322: the server replaced the session, so an answer to an
+                // event sent before the drop is lost; settle it now.
+                cancelEventRequests(this, null, {status: 'disconnected'});
                 if (window.djust) window.djust._isReconnect = true;
                 this._replacingView = true;
+                // #4322: the page still shows this view; its mount is morphed
+                // in, as over WebSocket, so widgets keep their instances.
+                this._reconnectView = this.primaryViewPath;
             }
             this._hasConnectedBefore = true;
 
@@ -3265,7 +3287,7 @@ class LiveViewSSE {
             // URL names the previous page; open a fresh owner-bound stream for
             // the current route instead of remounting the wrong view.
             if (this.eventSource && pageUrl !== window.location.pathname + window.location.search) {
-                this.disconnect();
+                this.disconnect({status: 'disconnected'});
                 this.connect(this.primaryViewPath, djustQueryParams(window.location.search));
                 return;
             }
@@ -3278,11 +3300,14 @@ class LiveViewSSE {
             // and the reconnect must earn its own.
             if (this.eventSource && this.eventSource.readyState !== EventSource.CLOSED) {
                 this._streamAcked = false;
+                // #4322: the reconnect gets a fresh server session; pending
+                // answers on the dropped one never arrive.
+                cancelEventRequests(this, null, {status: 'disconnected'});
             }
             if (this.eventSource && this.eventSource.readyState === EventSource.CLOSED
                 && !this._streamAcked && !this._freshIdRetried) {
                 const retryParams = this._connectParams || {};
-                this.disconnect(); // resets the flag; set it for this retry
+                this.disconnect({status: 'disconnected'}); // resets the flag; set it for this retry
                 this._freshIdRetried = true;
                 this.connect(this.primaryViewPath, retryParams);
                 return;
@@ -3292,7 +3317,7 @@ class LiveViewSSE {
             if (this.eventSource && this.eventSource.readyState === EventSource.CLOSED) {
                 console.warn('[SSE] EventSource closed unexpectedly.');
                 this.enabled = false;
-                cancelEventRequests(this);
+                cancelEventRequests(this, null, {status: 'disconnected'});
                 // Connection state CSS classes
                 document.body.classList.add('dj-disconnected');
                 document.body.classList.remove('dj-connected');
@@ -3305,14 +3330,17 @@ class LiveViewSSE {
 
     /**
      * Cleanly close the SSE stream (e.g. during TurboNav page transitions).
+     * @param {Object|null} [why] how pending events settle (#4322): omitted
+     *   for an intentional close ('cancelled'); the stream-drop paths pass
+     *   {status: 'disconnected'}.
      */
-    disconnect() {
+    disconnect(why = null) {
         this._parameterContracts = new Map();
         this._parameterContractApplied = new Map();
         this._parameterContractHeld = new Map();
         this._parameterContractFrames = new WeakMap();
         this._parameterContractSequence = 0;
-        cancelEventRequests(this);
+        cancelEventRequests(this, null, why);
         // TurboNav may already have replaced the URL/DOM. Cancel immediately,
         // before a delayed close callback could send old-view edits to the new URL.
         cancelPendingRateLimits();
@@ -3423,7 +3451,7 @@ class LiveViewSSE {
                         if (typeof data.view === 'string') container.setAttribute('dj-view', data.view);
                         applyRootPoll(container, data.root_poll);
                         const hasDataDjAttrs = data.has_ids === true;
-                        if (hasDataDjAttrs && !this._replacingView) {
+                        if (hasDataDjAttrs && (!this._replacingView || data.view === this._reconnectView)) {
                             // The page was prerendered over HTTP: morph it
                             // against the mount HTML, as the WebSocket mount
                             // does (#1610), so mount-time state such as
@@ -3446,6 +3474,7 @@ class LiveViewSSE {
                     }
                 }
                 this._replacingView = false;
+                this._reconnectView = null;
                 // The views hydrated beside the page view lived on the session
                 // that closed (a reconnect, a fresh-id retry): mount them on this
                 // one (#3252). None are registered on the first mount, and a
@@ -3491,7 +3520,7 @@ class LiveViewSSE {
                     }
                 }));
                 if (data.source !== 'async') {
-                    cancelEventRequests(this, data.ref ?? null);
+                    cancelEventRequests(this, data.ref ?? null, eventErrorOutcome(data));
                 }
                 if (data.source !== 'async' && data.ref == null && this.lastEventName) {
                     globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
@@ -3520,6 +3549,7 @@ class LiveViewSSE {
         // has_ids describes the incoming markup, not whether the current DOM
         // already represents it. Navigation must replace the previous page.
         this._replacingView = true;
+        this._reconnectView = null;
         this.primaryViewPath = outgoing.view;
         this.viewMounted = false;
         this._freshIdRetried = false; // #3164: a new page gets its own retry
@@ -3564,10 +3594,10 @@ class LiveViewSSE {
                 type: 'event', event: eventName, params, ref: request.ref,
                 ...slotFrameFields(slotId || slotIdFor(triggerElement)),
             })) {
-                cancelEventRequests(this, request.ref);
+                cancelEventRequests(this, request.ref, {status: 'disconnected'});
             }
         } catch (error) {
-            cancelEventRequests(this, request.ref);
+            cancelEventRequests(this, request.ref, {status: 'disconnected'});
             throw error;
         }
         return request.promise;
@@ -3683,13 +3713,16 @@ class LiveViewSSE {
                     protocolMismatch(this);
                     return null;
                 }
-                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                if (!r.ok) throw Object.assign(new Error(`HTTP ${r.status}`), {status: r.status});
                 return r.json();
             })
             .catch(err => {
                 console.error('[SSE] Message POST failed:', err);
                 if (eventName && data.ref != null) {
-                    cancelEventRequests(this, data.ref);
+                    // #4322: refused by the server (429: rate limited), or not delivered.
+                    cancelEventRequests(this, data.ref, err.status
+                        ? eventErrorOutcome({error: err.message, code: err.status === 429 ? 'rate_limited' : null})
+                        : {status: 'disconnected'});
                 } else if (eventName) {
                     globalLoadingManager.stopLoading(eventName, triggerElement);
                     this.lastEventName = null;
@@ -3793,6 +3826,7 @@ const _pendingEventNames = new Map();    // ref -> event name for pending events
 const _pendingTriggerEls = new Map();    // ref -> trigger element for loading state
 const _pendingEventResolvers = new Map(); // ref -> resolve() for Promise-based sendEvent (#1315)
 const _pendingEventOwners = new Map();   // ref -> transport instance
+const _pendingEventOutcomes = new Map(); // ref -> settle(outcome) for pushEvent's outcome (#4322)
 const _pendingAsyncBatches = new Map();  // opaque server batch -> originating control
 const _tickBuffer = [];                  // server-initiated render frames held during pending events
 const _tickBufferOwners = new WeakMap();
@@ -3856,7 +3890,26 @@ function registerEventRequest(transport, eventName, triggerElement) {
     transport.lastEventName = eventName;
     transport.lastTriggerElement = triggerElement;
     const promise = new Promise(resolve => _pendingEventResolvers.set(ref, resolve));
+    // #4322: how the request ended, for a hook's pushEvent(..., {outcome: true}):
+    // {status, reply, error}. Rides on the promise, so every transport's
+    // sendEvent hands it out unchanged.
+    promise.outcome = new Promise(settle => _pendingEventOutcomes.set(ref, settle));
     return { ref, promise };
+}
+
+/**
+ * The outcome (#4322) of a request settled by an error frame: rejected by the
+ * handler's parameter contract, rate limited, or any other server error.
+ */
+function eventErrorOutcome(data) {
+    const error = {
+        message: typeof data.error === 'string' ? data.error : null,
+        code: typeof data.code === 'string' ? data.code : null,
+        validation_details: data.validation_details || null,
+    };
+    const status = error.code === 'rate_limited' ? 'rate_limited'
+        : error.validation_details ? 'rejected' : 'error';
+    return { status, error };
 }
 
 /** Every async_pending carries its batch token (#4309); false when none is held. */
@@ -3896,6 +3949,8 @@ function acknowledgeEventRequest(transport, data) {
         data.async_pending = false;
     }
     const resolve = _pendingEventResolvers.get(ref);
+    const settle = _pendingEventOutcomes.get(ref);
+    _pendingEventOutcomes.delete(ref);
     _pendingEventRefs.delete(ref);
     _pendingEventNames.delete(ref);
     _pendingTriggerEls.delete(ref);
@@ -3906,16 +3961,28 @@ function acknowledgeEventRequest(transport, data) {
     transport.lastEventName = latest == null ? null : _pendingEventNames.get(latest);
     transport.lastTriggerElement = latest == null ? null : _pendingTriggerEls.get(latest);
     if (resolve) resolve(data.cancelled ? null : data);
+    if (settle) {
+        settle(data.cancelled
+            ? { status: data.status || 'cancelled', reply: data.reply || null, error: data.error || null }
+            // A refused turn (permission, login, flash) still acknowledges.
+            : data.source === 'refusal'
+                ? { status: 'error', reply: data, error: { message: null, code: 'refused', validation_details: null } }
+                : { status: 'ok', reply: data, error: null });
+    }
     return { eventName, trigger };
 }
 
-/** Cancel this transport's requests, never those of a replacement connection. */
-function cancelEventRequests(transport, ref = null) {
+/**
+ * Cancel this transport's requests, never those of a replacement connection.
+ * `why` (#4322) is the outcome they settle with: {status, error, reply};
+ * `cancelled` when omitted.
+ */
+function cancelEventRequests(transport, ref = null, why = null) {
     const refs = ref == null
         ? [..._pendingEventOwners].filter(([, owner]) => owner === transport).map(([key]) => key)
         : [ref];
     for (const key of refs) {
-        const event = acknowledgeEventRequest(transport, { ref: key, cancelled: true });
+        const event = acknowledgeEventRequest(transport, { ...why, ref: key, cancelled: true });
         if (event?.eventName) globalLoadingManager.stopLoading(event.eventName, event.trigger);
     }
     if (ref == null) {
@@ -8867,7 +8934,7 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     // Build clean server params (strip underscore-prefixed internal properties)
     const serverParams = {};
     for (const key of Object.keys(params)) {
-        if (key === '_targetElement' || key === '_slotId' || key === '_optimisticUpdateId' || key === '_skipLoading' || key === '_djTargetSelector') {
+        if (key === '_targetElement' || key === '_slotId' || key === '_optimisticUpdateId' || key === '_skipLoading' || key === '_djTargetSelector' || key === '_onRequest') {
             continue;
         }
         // eslint-disable-next-line security/detect-object-injection
@@ -9037,6 +9104,13 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
 
     const httpRequest = teardown ? null
         : registerEventRequest(_localEventTransport, eventName, triggerElement);
+    // #4322: a hook's pushEvent over this transport reads the request's
+    // outcome; `httpOutcome` is what the request settles with (cancelled
+    // when it stays null: the page changed, or the protocol differs). A
+    // keepalive teardown send registers no request: its answer is never
+    // read, so the hook's pushEvent settles `cancelled` (hooks.md).
+    let httpOutcome = null;
+    if (httpRequest && typeof params._onRequest === 'function') params._onRequest(httpRequest.promise.outcome);
     // Keepalive teardown sends deliberately outlive the outgoing page.
     const httpController = teardown ? null : new AbortController();
     if (httpController) _pendingHttpControllers.add(httpController);
@@ -9105,6 +9179,7 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
                         return;
                     }
                     if (body && typeof body.error === 'string') {
+                        httpOutcome = eventErrorOutcome(body);
                         detail = {
                             error: body.error,
                             // Stable refusal code (#3319), e.g. 'permission_denied'.
@@ -9116,6 +9191,7 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
                         };
                     }
                 } catch (_e) { /* a non-JSON error body keeps the status message */ }
+                if (!httpOutcome) httpOutcome = eventErrorOutcome({error: detail.error, code: response.status === 429 ? 'rate_limited' : null});
                 window.dispatchEvent(new CustomEvent('djust:error', {detail}));
             }
             throw new Error(`HTTP error! status: ${response.status}`);
@@ -9168,13 +9244,24 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
         // when it names `view_id`, #3104), then the effects. This request
         // settles here, by name, not by `ref`. An embedded child's answer
         // resolves to whether it was applied (an HTTP lazy fill reads it).
-        return await applyRenderFrame(_localEventTransport, data, {eventName, trigger: triggerElement});
+        const applied = await applyRenderFrame(_localEventTransport, data, {eventName, trigger: triggerElement});
+        // `ok` only once the answer is in the page (#4322); a failed apply
+        // settles as an error below.
+        httpOutcome = {status: 'ok', reply: data};
+        return applied;
 
     } catch (error) {
-        if (!httpController?.signal.aborted) console.error('[LiveView] HTTP fallback failed:', error);
+        if (!httpController?.signal.aborted) {
+            console.error('[LiveView] HTTP fallback failed:', error);
+            // Not delivered (a network failure), or a broken answer.
+            if (!httpOutcome && ownsHttpResponse()) {
+                httpOutcome = error && error.name === 'TypeError' ? {status: 'disconnected'}
+                    : eventErrorOutcome({error: String(error && error.message)});
+            }
+        }
     } finally {
         if (httpController) _pendingHttpControllers.delete(httpController);
-        if (httpRequest) cancelEventRequests(_localEventTransport, httpRequest.ref);
+        if (httpRequest) cancelEventRequests(_localEventTransport, httpRequest.ref, httpOutcome);
         if (releaseHttpEvent) releaseHttpEvent();
     }
 }
@@ -13619,17 +13706,33 @@ window.djust.viewSlots = {
 // ============================================================================
 //
 // The auto-injected client is the CORE bundle (client-core.min.js). The
-// heaviest optional modules are built as separate chunk files under
+// optional modules are built as separate chunk files under
 // static/djust/chunks/ by scripts/build-client.sh, and this module loads one
 // only when the page needs it:
 //
-//   uploads         [dj-upload], [dj-upload-drop], or a mount that declares
-//                   uploads (upload_configs)
-//   virtual-list    [dj-virtual]
-//   cursor-overlay  [dj-hook="CursorOverlay"]
-//   tutorial        #dj-tutorial-bubble ({% tutorial_bubble %})
-//   service-worker  a service worker controls the page, or the app calls
-//                   djust.registerServiceWorker()
+//   uploads              [dj-upload], [dj-upload-drop], or a mount that
+//                        declares uploads (upload_configs)
+//   virtual-list         [dj-virtual]
+//   cursor-overlay       [dj-hook="CursorOverlay"]
+//   tutorial             #dj-tutorial-bubble ({% tutorial_bubble %})
+//   service-worker       a service worker controls the page, or the app calls
+//                        djust.registerServiceWorker()
+//   component-behaviors  a djust.components widget (.rich-select, .combobox,
+//                        .kanban, ...: see 53-component-behaviors.js)
+//   keyboard-nav         [role="dialog"], [role="tablist"], .dj-modal,
+//                        .dj-accordion, .dj-dropdown, .dj-dropdown-menu
+//   error-overlay        window.DEBUG_MODE (Django DEBUG); never in production
+//   dj-style             <meta name="djust-styles" content="attrs"> in the
+//                        head (LIVEVIEW_CONFIG csp_strict_styles)
+//   flip                 [dj-flip]
+//   transitions          [dj-transition], [dj-remove], [dj-transition-group]
+//   infinite-scroll      [dj-viewport-top], [dj-viewport-bottom]
+//   prefetch             a[dj-prefetch], or a service worker controls the page
+//   track-static         [dj-track-static]
+//   dialog               dialog[dj-dialog]
+//
+// The SSE transport (03b-sse.js) stays in core: see
+// docs/website/guides/client-bundle.md, "What stays in core".
 //
 // djustInit() (14-init.js) scans the document, loads the chunks it needs and
 // only then binds and connects, so a page that uses a chunk behaves exactly as
@@ -13652,7 +13755,44 @@ const _DJUST_CHUNK_SELECTORS = {
     'virtual-list': '[dj-virtual]',
     'cursor-overlay': '[dj-hook="CursorOverlay"]',
     'tutorial': '#dj-tutorial-bubble',
+    // The widgets 53-component-behaviors.js serves (its header lists them).
+    'component-behaviors': '.rich-select,.combobox,.dj-theme-toggle,.popover-wrapper,' +
+        '.dj-popconfirm-wrapper,.collapsible,.ctx-wrapper,.code-block-copy,.dropzone,' +
+        '.kanban,.rte,.multi-select,.split-pane',
+    'keyboard-nav': '[role="dialog"],.dj-modal,[role="tablist"],.dj-accordion,' +
+        '.dj-dropdown,.dj-dropdown-menu',
+    'flip': '[dj-flip]',
+    'transitions': '[dj-transition],[dj-remove],[dj-transition-group]',
+    'infinite-scroll': '[dj-viewport-top],[dj-viewport-bottom]',
+    'prefetch': 'a[dj-prefetch]',
+    'track-static': '[dj-track-static]',
+    'dialog': 'dialog[dj-dialog]',
 };
+
+function _djustSwControlled() {
+    return typeof navigator !== 'undefined' && !!navigator.serviceWorker &&
+        !!navigator.serviceWorker.controller;
+}
+
+// Chunks a page needs for a reason other than an element: checked at every
+// scan (init, TurboNav swap, patch), whatever the scanned subtree.
+const _DJUST_CHUNK_PAGE_TRIGGERS = {
+    'service-worker': _djustSwControlled,
+    // The hover layer of 22-prefetch.js posts to the controlling worker.
+    'prefetch': _djustSwControlled,
+    // The persistent overlay only renders under DEBUG (set by the server).
+    'error-overlay': function () { return window.DEBUG_MODE === true; },
+    // 54-dj-style.js reads the server-rendered head once.
+    'dj-style': function () {
+        return !!(document.head &&
+            document.head.querySelector('meta[name="djust-styles"][content="attrs"]'));
+    },
+};
+
+function _djustIsChunkName(name) {
+    return Object.prototype.hasOwnProperty.call(_DJUST_CHUNK_SELECTORS, name) ||
+        Object.prototype.hasOwnProperty.call(_DJUST_CHUNK_PAGE_TRIGGERS, name);
+}
 
 // Captured while this bundle executes; null when it was evaluated, not loaded.
 const _djustClientScript = document.currentScript || null;
@@ -13733,7 +13873,7 @@ function _djustIsCoreBundle() {
  * Public as `djust.loadClientChunk(name)`.
  */
 function loadClientChunk(name) {
-    if (!Object.prototype.hasOwnProperty.call(_DJUST_CHUNK_SELECTORS, name) && name !== 'service-worker') {
+    if (!_djustIsChunkName(name)) {
         return Promise.reject(new Error('[djust] unknown client chunk: ' + name));
     }
     // eslint-disable-next-line security/detect-object-injection
@@ -13779,19 +13919,32 @@ function _djustNeededChunks(root, changes) {
     if (!_djustIsCoreBundle()) return [];
     const scope = root || document;
     const needed = [];
-    for (const name of Object.keys(_DJUST_CHUNK_SELECTORS)) {
+    const pending = Object.keys(_DJUST_CHUNK_SELECTORS).filter(function (name) {
         // eslint-disable-next-line security/detect-object-injection
-        if (_djustChunkLoaded[name] || _djustChunkFailed[name]) continue;
+        return !_djustChunkLoaded[name] && !_djustChunkFailed[name];
+    });
+    // #4001: after a patch, only what it inserted or re-attributed.
+    const matches = function (selector) {
+        return changes ? _changedMatches(changes, selector).length > 0
+            : !!((scope.matches && scope.matches(selector)) ||
+                (scope.querySelector && scope.querySelector(selector)));
+    };
+    // One pass over the scanned elements for every pending selector; only a
+    // hit is narrowed down to the chunks it names.
+    if (pending.length && matches(pending.map(function (name) {
         // eslint-disable-next-line security/detect-object-injection
-        const selector = _DJUST_CHUNK_SELECTORS[name];
-        // #4001: after a patch, only what it inserted or re-attributed.
-        if (changes ? _changedMatches(changes, selector).length > 0
-            : (scope.matches && scope.matches(selector)) ||
-            (scope.querySelector && scope.querySelector(selector))) needed.push(name);
+        return _DJUST_CHUNK_SELECTORS[name];
+    }).join(','))) {
+        for (const name of pending) {
+            // eslint-disable-next-line security/detect-object-injection
+            if (matches(_DJUST_CHUNK_SELECTORS[name])) needed.push(name);
+        }
     }
-    if (!_djustChunkLoaded['service-worker'] && !_djustChunkFailed['service-worker'] &&
-        typeof navigator !== 'undefined' && navigator.serviceWorker && navigator.serviceWorker.controller) {
-        needed.push('service-worker');
+    for (const name of Object.keys(_DJUST_CHUNK_PAGE_TRIGGERS)) {
+        // eslint-disable-next-line security/detect-object-injection
+        if (_djustChunkLoaded[name] || _djustChunkFailed[name] || needed.indexOf(name) !== -1) continue;
+        // eslint-disable-next-line security/detect-object-injection
+        if (_DJUST_CHUNK_PAGE_TRIGGERS[name]()) needed.push(name);
     }
     return needed;
 }
@@ -13931,6 +14084,24 @@ if (!window.djust._sw) {
     };
 }
 
+// djust.resetViewport / teardownInfiniteScroll act on the containers the
+// infinite-scroll chunk tracks; before it has loaded there are none, so they
+// do nothing. djust.initInfiniteScroll stays undefined until then: core skips
+// the dj-viewport-* pass without it.
+if (!window.djust.resetViewport) window.djust.resetViewport = function () {};
+if (!window.djust.teardownInfiniteScroll) window.djust.teardownInfiniteScroll = function () {};
+
+// The last element focused outside any dialog, tracked from the start (#4320).
+// keyboard-nav returns focus there when a modal closes; when that chunk loads
+// after a patch rendered the first modal, showModal() has already moved focus
+// into the dialog, so the opener is known only from here. 51-keyboard-nav.js
+// seeds its own tracker with it.
+let _djustOutsideFocus = null;
+document.addEventListener('focusin', function (e) {
+    const el = e.target;
+    if (el && el.closest && !el.closest('[role="dialog"], .dj-modal')) _djustOutsideFocus = el;
+}, true);
+
 // Called by each chunk after its code has run (see build-client.sh).
 const _DJUST_CHUNK_READY = {
     'uploads': function () {
@@ -13949,6 +14120,23 @@ const _DJUST_CHUNK_READY = {
     'service-worker': function () {
         if (_djustSwMountData) window.djust._sw.applyMountMetadata(_djustSwMountData);
         _djustSwMountData = null;
+        // The hover prefetch layer posts to the worker this page now uses.
+        if (_djustSwControlled()) _djustBackgroundLoad('prefetch');
+    },
+    // These modules set themselves up when they run (each installs its
+    // document listeners or observer and scans the page at once when the
+    // document is already parsed), so their handlers have nothing to do.
+    'component-behaviors': function () {},
+    'keyboard-nav': function () {},
+    'error-overlay': function () {},
+    'dj-style': function () {},
+    'flip': function () {},
+    'transitions': function () {},
+    'prefetch': function () {},
+    'track-static': function () {},
+    'dialog': function () {},
+    'infinite-scroll': function () {
+        if (window.djustInitialized) window.djust.initInfiniteScroll(document);
     },
 };
 
@@ -13980,6 +14168,8 @@ function _djustExposeChunkScope() {
         isWSConnected: isWSConnected,
         slotIdFor: slotIdFor,
         slotFrameFields: slotFrameFields,
+        _destroyDetachedHooks: _destroyDetachedHooks,
+        get _djustOutsideFocus() { return _djustOutsideFocus; },
     });
 }
 
@@ -16740,23 +16930,61 @@ function _createHookInstance(hookDef, el) {
     // built here. The hand-built frame had no `ref`, so the server's reply
     // could not be told from the reply to another event: with one other event
     // pending it resolved THAT event's promise, and the hook itself got no
-    // acknowledgment at all. Returns the promise `sendEvent` returns: it
-    // resolves with the server's reply frame, or `null` when the event was
-    // cancelled or there is no live connection to send it on.
-    instance.pushEvent = function(event, payload = {}) {
+    // acknowledgment at all. The promise resolves with the server's reply
+    // frame, or `null` when the event did not succeed (an error, a refusal,
+    // cancelled, or no live connection to send it on).
+    //
+    // #4322: `{outcome: true}` resolves with how the event ended instead:
+    // {status, reply, error}, status one of ok / error / rejected /
+    // rate_limited / cancelled / disconnected, after the reply frame has been
+    // applied. Never rejects. On a page that chose the HTTP transport the
+    // event is a page POST, like a dj-click; a WebSocket or SSE page whose
+    // connection is down does not fall back to POSTs (status disconnected).
+    instance.pushEvent = function(event, payload = {}, options = null) {
         const transport = window.djust.liveViewInstance;
-        // A hook inside a view mounted beside the page view talks to that
-        // view, not the page view (#3252): its slot is named explicitly, and
-        // the hook's element is not passed as the trigger, so it takes no
-        // loading state from its own events.
-        const sent = transport && typeof transport.sendEvent === 'function'
-            ? transport.sendEvent(event, payload, null, slotIdFor(el))
-            : false;
-        if (!sent) {
-            console.warn(`[dj-hook] Cannot pushEvent "${event}" — no live connection`);
-            return Promise.resolve(null);
+        const slot = slotIdFor(el);
+        let outcome;
+        if (transport && transport.httpOnly === true && !slot) {
+            outcome = new Promise((resolve) => {
+                const done = () => resolve({ status: 'cancelled', reply: null, error: null });
+                // _rateBypass: a hook's event is sent as asked, over every
+                // transport (no handler debounce on the socket path either).
+                window.djust.handleEvent(event, Object.assign({}, payload, {
+                    _skipLoading: true,
+                    _onRequest: (settled) => settled.then(resolve),
+                }), true).then(done, done);
+            });
+        } else {
+            // A hook inside a view mounted beside the page view talks to that
+            // view, not the page view (#3252): its slot is named explicitly,
+            // and the hook's element is not passed as the trigger, so it takes
+            // no loading state from its own events.
+            let sent = false;
+            try {
+                sent = transport && typeof transport.sendEvent === 'function'
+                    ? transport.sendEvent(event, payload, null, slot)
+                    : false;
+            } catch (_err) {
+                // The socket refused the send (#4322): the transport settled
+                // the request as disconnected; the hook's promise never rejects.
+                sent = false;
+            }
+            if (!sent) {
+                console.warn(`[dj-hook] Cannot pushEvent "${event}" — no live connection`);
+                outcome = Promise.resolve({ status: 'disconnected', reply: null, error: null });
+            } else if (!(options && options.outcome)) {
+                // The reply frame when the event succeeded, else null (a
+                // refusal acknowledges with a frame too), as over HTTP.
+                return sent.outcome ? sent.outcome.then((o) => (o.status === 'ok' ? o.reply : null)) : sent;
+            } else {
+                // Settled once the frames received so far are applied, so the
+                // reply's DOM change and effects are in the page.
+                outcome = (sent.outcome || sent.then((reply) => ({
+                    status: reply ? 'ok' : 'cancelled', reply: reply || null, error: null,
+                }))).then((o) => Promise.resolve(transport._inflight).then(() => o, () => o));
+            }
         }
-        return sent;
+        return options && options.outcome ? outcome : outcome.then((o) => (o.status === 'ok' ? o.reply : null));
     };
 
     // handleEvent: register a callback for server-pushed events
@@ -20124,6 +20352,11 @@ window.djust.bindModelElements = bindModelElements;
         if (root.matches && root.matches('script[type="djust/hook"]')) scripts.unshift(root);
         for (const scriptEl of scripts) {
             if (scriptEl.dataset.djustHookRegistered === '1') continue;
+            // #4322: a morph re-syncs this element's attributes to the server's
+            // render, which has neither the sentinel nor (over a socket) the
+            // nonce. The same node with the same body is already registered;
+            // running it again would need 'unsafe-eval' under a nonce CSP.
+            if (scriptEl._djustHookBody === scriptEl.textContent) continue;
             const hookName = scriptEl.getAttribute('data-hook');
             if (!hookName) {
                 // Mark as processed so we don't keep scanning it.
@@ -20159,6 +20392,7 @@ window.djust.bindModelElements = bindModelElements;
                 // eslint-disable-next-line security/detect-object-injection
                 globalThis.djust.hooks[hookName] = definition;
                 scriptEl.dataset.djustHookRegistered = '1';
+                scriptEl._djustHookBody = scriptEl.textContent;
                 if (globalThis.djustDebug) {
                     console.debug('[colocated-hook] Registered %s', hookName);
                 }
@@ -20193,6 +20427,7 @@ window.djust.bindModelElements = bindModelElements;
         // eslint-disable-next-line security/detect-object-injection
         const registered = !!(globalThis.djust.hooks && globalThis.djust.hooks[hookName]);
         scriptEl.dataset.djustHookRegistered = registered ? '1' : 'error';
+        if (registered) scriptEl._djustHookBody = scriptEl.textContent;
         if (globalThis.djustDebug) {
             console.debug('[colocated-hook] %s %s with the page nonce',
                 registered ? 'Registered' : 'Could not register', hookName);
@@ -21079,10 +21314,12 @@ globalThis.djust.djDialog = {
  * an in-browser panel with the error message, triggering event, Python
  * traceback, hint, and validation details when present.
  *
- * Deferred state saves use a nonblocking status in every mode; a successful
- * render of the same view/target clears it. Persistent error overlays are
- * only active when `window.DEBUG_MODE === true` (set by the `djust_tags`
- * template tag when Django DEBUG=True). Production builds receive no
+ * Deferred state saves use a nonblocking status in every mode instead
+ * (36a-save-status.js, core). Since #4320 this module is the `error-overlay`
+ * client chunk, which the core bundle loads only when `window.DEBUG_MODE` is
+ * true; the full bundle includes it. Persistent error overlays are only
+ * active when `window.DEBUG_MODE === true` (set by the `djust_tags` template
+ * tag when Django DEBUG=True). Production builds receive no
  * overlay at all — the server strips `traceback` / `debug_detail` / `hint`
  * in non-DEBUG mode, so the overlay would have nothing interesting to show.
  *
@@ -21094,47 +21331,6 @@ globalThis.djust.djDialog = {
 (function initErrorOverlay() {
     const OVERLAY_ID = 'djust-error-overlay';
     const STYLE_ID = 'djust-error-overlay-style';
-    const STATUS_ID = 'djust-save-status';
-    const saving = new Map();
-
-    function _owner(detail) {
-        return JSON.stringify([
-            typeof detail.view === 'string' ? detail.view : null,
-            typeof detail.target_id === 'string' ? detail.target_id : null,
-        ]);
-    }
-
-    function _clearSaving(detail) {
-        const key = _owner(detail);
-        const entry = saving.get(key);
-        if (!entry) return;
-        entry.remove();
-        saving.delete(key);
-        if (!saving.size) document.getElementById(STATUS_ID)?.remove();
-    }
-
-    function _showSaving(detail) {
-        let status = document.getElementById(STATUS_ID);
-        if (!status) {
-            status = document.createElement('div');
-            status.id = STATUS_ID;
-            status.setAttribute('role', 'status');
-            status.setAttribute('aria-live', 'polite');
-            status.style.cssText = 'position:fixed;bottom:16px;right:16px;z-index:99998;' +
-                'pointer-events:none;padding:12px;background:#1e293b;color:#fff;border-radius:8px;';
-            document.body.appendChild(status);
-        }
-        const key = _owner(detail);
-        let entry = saving.get(key);
-        if (!entry) {
-            entry = document.createElement('div');
-            saving.set(key, entry);
-            status.appendChild(entry);
-        }
-        // Only the message, never traceback or HTML. The server's literal
-        // boolean distinguishes a deferred save from a persistent error.
-        entry.textContent = typeof detail.error === 'string' ? detail.error : 'Saving your change…';
-    }
 
     function _escape(s) {
         if (s == null) return '';
@@ -21286,12 +21482,85 @@ globalThis.djust.djDialog = {
         // #4164: a reconnect that restored an older state than the page
         // showed, and changes not saved yet, are notices of the same kind.
         const notice = detail.code === 'state_error' || detail.code === 'state_not_restored';
-        if (notice && detail.transient === true) {
-            _showSaving(detail);
-            return;
-        }
-        _clearSaving(detail);
+        // The notice itself is 36a-save-status.js (core, every mode).
+        if (notice && detail.transient === true) return;
         if (window.DEBUG_MODE) _render(detail);
+    }
+
+    if (typeof window !== 'undefined') {
+        window.addEventListener('djust:error', _onError);
+        window.addEventListener('keydown', _onKeyDown);
+        // Expose for tests and for manual triggering from devtools.
+        window.djustErrorOverlay = {
+            show: (detail) => _render(detail || {}),
+            dismiss: () => {
+                const o = document.getElementById(OVERLAY_ID);
+                if (o) o.remove();
+            },
+        };
+    }
+})();
+// ============================================================================
+// Deferred-save status (#4164): a nonblocking notice, in every mode
+// ============================================================================
+//
+// A `djust:error` frame that is a deferred state save (code `state_error` or
+// `state_not_restored` with the server's literal `transient: true`) shows a
+// small polite status in the corner instead of an error; a successful render
+// of the same view/target clears it, and so does any other error for it.
+//
+// Split out of 36-error-overlay.js (#4320): this part is core, in every mode,
+// while the DEBUG error overlay is the `error-overlay` client chunk, loaded
+// only when `window.DEBUG_MODE` is true.
+
+(function initSaveStatus() {
+    const STATUS_ID = 'djust-save-status';
+    const saving = new Map();
+
+    function _owner(detail) {
+        return JSON.stringify([
+            typeof detail.view === 'string' ? detail.view : null,
+            typeof detail.target_id === 'string' ? detail.target_id : null,
+        ]);
+    }
+
+    function _clearSaving(detail) {
+        const key = _owner(detail);
+        const entry = saving.get(key);
+        if (!entry) return;
+        entry.remove();
+        saving.delete(key);
+        if (!saving.size) document.getElementById(STATUS_ID)?.remove();
+    }
+
+    function _showSaving(detail) {
+        let status = document.getElementById(STATUS_ID);
+        if (!status) {
+            status = document.createElement('div');
+            status.id = STATUS_ID;
+            status.setAttribute('role', 'status');
+            status.setAttribute('aria-live', 'polite');
+            status.style.cssText = 'position:fixed;bottom:16px;right:16px;z-index:99998;' +
+                'pointer-events:none;padding:12px;background:#1e293b;color:#fff;border-radius:8px;';
+            document.body.appendChild(status);
+        }
+        const key = _owner(detail);
+        let entry = saving.get(key);
+        if (!entry) {
+            entry = document.createElement('div');
+            saving.set(key, entry);
+            status.appendChild(entry);
+        }
+        // Only the message, never traceback or HTML. The server's literal
+        // boolean distinguishes a deferred save from a persistent error.
+        entry.textContent = typeof detail.error === 'string' ? detail.error : 'Saving your change…';
+    }
+
+    function _onError(e) {
+        const detail = (e && e.detail) || {};
+        const notice = detail.code === 'state_error' || detail.code === 'state_not_restored';
+        if (notice && detail.transient === true) _showSaving(detail);
+        else _clearSaving(detail);
     }
 
     if (typeof window !== 'undefined') {
@@ -21303,15 +21572,6 @@ globalThis.djust.djDialog = {
                 document.getElementById(STATUS_ID)?.remove();
             });
         }
-        window.addEventListener('keydown', _onKeyDown);
-        // Expose for tests and for manual triggering from devtools.
-        window.djustErrorOverlay = {
-            show: (detail) => _render(detail || {}),
-            dismiss: () => {
-                const o = document.getElementById(OVERLAY_ID);
-                if (o) o.remove();
-            },
-        };
     }
 })();
 
@@ -23984,7 +24244,12 @@ globalThis.djust.djTransitionGroup = {
     // The last element focused outside any dialog. A native <dialog> may
     // already hold focus when the presence observer sees it (showModal()
     // moves focus in), so this, not activeElement, is where focus returns.
+    // Seeded from the core's tracker (13c-chunk-loader.js, #4320): loaded as a
+    // chunk after a patch rendered the first modal, this module starts after
+    // the opener lost focus to the dialog. (No `x ? y : z` here: the chunk
+    // build reads `name :` as an object key and would not rewrite it.)
     let _lastOutsideFocus = null;
+    if (typeof _djustOutsideFocus !== 'undefined') _lastOutsideFocus = _djustOutsideFocus;
 
     // -----------------------------------------------------------------------
     // Helpers

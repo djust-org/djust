@@ -134,7 +134,6 @@ def check_preset_contrast(app_configs: Any, **kwargs: Any) -> list[CheckMessage]
 @register(Tags.compatibility)
 def check_css_prefix(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     """Validate css_prefix is safe and well-formed."""
-    import re
 
     errors: list[CheckMessage] = []
     # The unvalidated config: ``get_theme_config()`` raises on a prefix this check exists to

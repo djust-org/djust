@@ -246,7 +246,7 @@ fn row_attrs(root: &VNode, list_id: &str) -> Vec<(String, String, Option<String>
             (
                 c.attrs.get("id").cloned().unwrap_or_default(),
                 c.attrs.get("data-pk").cloned().unwrap_or_default(),
-                c.djust_id.clone(),
+                c.djust_id.clone().map(String::from),
             )
         })
         .collect()

@@ -15,9 +15,11 @@
 //!   `allowed_model_fields`).
 //! * Output reused from a cache without rendering contributes what it recorded
 //!   when it was rendered: the partial renderer replays per-node records
-//!   ([`begin_node`] / [`end_node`] / [`reuse_node`]); the loop caches are not
-//!   used for a body that may emit a binding while a recording runs
-//!   ([`nodes_may_emit_binding`]).
+//!   ([`begin_node`] / [`end_node`] / [`reuse_node`]); the loop caches and
+//!   the per-child cache of a top-level `{% if %}` / `{% with %}` /
+//!   `{% block %}` (#4315) are not used for a body or child that may emit a
+//!   binding while a recording runs ([`nodes_may_emit_binding`]), so such a
+//!   child renders and records for the branch actually taken.
 //!
 //! A recording is a stack frame on a thread-local: a nested render (a Python
 //! tag rendering a template through another entry point) pushes its own frame
@@ -354,6 +356,105 @@ mod tests {
             (vec!["a".into(), "e".into()], vec![vec!["e".into()]])
         );
         assert!(!is_recording());
+    }
+
+    /// A collecting render, then partial renders through the per-child cache
+    /// of top-level wrappers (#4315), each under its own recording as
+    /// `RustLiveView` runs them. Returns each render's bindings.
+    /// One render: the changed keys (ignored for the first) and what to set.
+    type Step<'a> = (&'a [&'a str], &'a [(&'a str, Value)]);
+
+    fn partial_bindings(source: &str, renders: &[Step<'_>]) -> Vec<Vec<String>> {
+        let template = Template::new(source).unwrap();
+        let loader = Loader(std::collections::HashMap::new());
+        let mut ctx = Context::new();
+        let mut fragments = Vec::new();
+        let mut children = Vec::new();
+        let mut records = Vec::new();
+        let mut out = Vec::new();
+        for (i, (changed, vars)) in renders.iter().enumerate() {
+            for (k, v) in vars.iter() {
+                ctx.set((*k).into(), v.clone());
+            }
+            let recording = Recording::begin(std::mem::take(&mut records));
+            let rendered = if i == 0 {
+                template
+                    .render_with_loader_collecting_children(&ctx, &loader)
+                    .unwrap()
+            } else {
+                let changed = changed.iter().map(|k| (*k).to_string()).collect();
+                template
+                    .render_with_loader_partial_children(
+                        &ctx, &loader, &changed, &fragments, &children,
+                    )
+                    .unwrap()
+            };
+            fragments = rendered.fragments;
+            children = rendered.children;
+            let (fields, nodes) = recording.finish();
+            records = nodes;
+            out.push(fields);
+        }
+        out
+    }
+
+    #[test]
+    fn a_wrapper_child_reused_from_the_child_cache_still_counts() {
+        // `count` re-renders the `{% if show %}` wrapper; the nested
+        // `{% if staff %}` and the loop read nothing that changed, so the
+        // child cache would serve them without rendering their text.
+        let src = r#"<p>x</p>{% if show %}{{ count }}{% if staff %}<input dj-model="note">{% endif %}{% for r in rows %}<input dj-model="title">{% endfor %}{% endif %}{% if staff %}<input dj-model="top">{% endif %}"#;
+        let rows = Value::List(vec![Value::Integer(1)]);
+        let first: &[(&str, Value)] = &[
+            ("show", Value::Bool(true)),
+            ("staff", Value::Bool(true)),
+            ("count", Value::Integer(1)),
+            ("rows", rows),
+        ];
+        let got = partial_bindings(
+            src,
+            &[
+                (&[], first),
+                (&["count"], &[("count", Value::Integer(2))]),
+                (&["count"], &[("count", Value::Integer(3))]),
+            ],
+        );
+        for fields in &got {
+            assert_eq!(fields, &["note", "title", "top"]);
+        }
+    }
+
+    #[test]
+    fn a_wrapper_child_counts_only_for_the_branch_rendered() {
+        let src = r#"<p>x</p>{% if show %}{{ count }}{% if staff %}<input dj-model="note">{% endif %}{% else %}{{ count }}<input dj-model="search">{% endif %}{% with c=count %}{{ c }}{% if staff %}<input dj-model="other">{% endif %}{% endwith %}"#;
+        let first: &[(&str, Value)] = &[
+            ("show", Value::Bool(true)),
+            ("staff", Value::Bool(true)),
+            ("count", Value::Integer(1)),
+        ];
+        let got = partial_bindings(
+            src,
+            &[
+                (&[], first),
+                // The outer branch flips: its children are not reused.
+                (&["show"], &[("show", Value::Bool(false))]),
+                (
+                    &["show", "count"],
+                    &[("show", Value::Bool(true)), ("count", Value::Integer(2))],
+                ),
+                // The nested branch flips while its wrapper re-renders.
+                (
+                    &["staff", "count"],
+                    &[("staff", Value::Bool(false)), ("count", Value::Integer(3))],
+                ),
+                (&["count"], &[("count", Value::Integer(4))]),
+            ],
+        );
+        assert_eq!(got[0], ["note", "other"]);
+        assert_eq!(got[1], ["other", "search"]);
+        assert_eq!(got[2], ["note", "other"]);
+        assert!(got[3].is_empty(), "{:?}", got[3]);
+        assert!(got[4].is_empty(), "{:?}", got[4]);
     }
 
     #[test]

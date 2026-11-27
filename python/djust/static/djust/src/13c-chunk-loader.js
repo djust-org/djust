@@ -3,17 +3,33 @@
 // ============================================================================
 //
 // The auto-injected client is the CORE bundle (client-core.min.js). The
-// heaviest optional modules are built as separate chunk files under
+// optional modules are built as separate chunk files under
 // static/djust/chunks/ by scripts/build-client.sh, and this module loads one
 // only when the page needs it:
 //
-//   uploads         [dj-upload], [dj-upload-drop], or a mount that declares
-//                   uploads (upload_configs)
-//   virtual-list    [dj-virtual]
-//   cursor-overlay  [dj-hook="CursorOverlay"]
-//   tutorial        #dj-tutorial-bubble ({% tutorial_bubble %})
-//   service-worker  a service worker controls the page, or the app calls
-//                   djust.registerServiceWorker()
+//   uploads              [dj-upload], [dj-upload-drop], or a mount that
+//                        declares uploads (upload_configs)
+//   virtual-list         [dj-virtual]
+//   cursor-overlay       [dj-hook="CursorOverlay"]
+//   tutorial             #dj-tutorial-bubble ({% tutorial_bubble %})
+//   service-worker       a service worker controls the page, or the app calls
+//                        djust.registerServiceWorker()
+//   component-behaviors  a djust.components widget (.rich-select, .combobox,
+//                        .kanban, ...: see 53-component-behaviors.js)
+//   keyboard-nav         [role="dialog"], [role="tablist"], .dj-modal,
+//                        .dj-accordion, .dj-dropdown, .dj-dropdown-menu
+//   error-overlay        window.DEBUG_MODE (Django DEBUG); never in production
+//   dj-style             <meta name="djust-styles" content="attrs"> in the
+//                        head (LIVEVIEW_CONFIG csp_strict_styles)
+//   flip                 [dj-flip]
+//   transitions          [dj-transition], [dj-remove], [dj-transition-group]
+//   infinite-scroll      [dj-viewport-top], [dj-viewport-bottom]
+//   prefetch             a[dj-prefetch], or a service worker controls the page
+//   track-static         [dj-track-static]
+//   dialog               dialog[dj-dialog]
+//
+// The SSE transport (03b-sse.js) stays in core: see
+// docs/website/guides/client-bundle.md, "What stays in core".
 //
 // djustInit() (14-init.js) scans the document, loads the chunks it needs and
 // only then binds and connects, so a page that uses a chunk behaves exactly as
@@ -36,7 +52,44 @@ const _DJUST_CHUNK_SELECTORS = {
     'virtual-list': '[dj-virtual]',
     'cursor-overlay': '[dj-hook="CursorOverlay"]',
     'tutorial': '#dj-tutorial-bubble',
+    // The widgets 53-component-behaviors.js serves (its header lists them).
+    'component-behaviors': '.rich-select,.combobox,.dj-theme-toggle,.popover-wrapper,' +
+        '.dj-popconfirm-wrapper,.collapsible,.ctx-wrapper,.code-block-copy,.dropzone,' +
+        '.kanban,.rte,.multi-select,.split-pane',
+    'keyboard-nav': '[role="dialog"],.dj-modal,[role="tablist"],.dj-accordion,' +
+        '.dj-dropdown,.dj-dropdown-menu',
+    'flip': '[dj-flip]',
+    'transitions': '[dj-transition],[dj-remove],[dj-transition-group]',
+    'infinite-scroll': '[dj-viewport-top],[dj-viewport-bottom]',
+    'prefetch': 'a[dj-prefetch]',
+    'track-static': '[dj-track-static]',
+    'dialog': 'dialog[dj-dialog]',
 };
+
+function _djustSwControlled() {
+    return typeof navigator !== 'undefined' && !!navigator.serviceWorker &&
+        !!navigator.serviceWorker.controller;
+}
+
+// Chunks a page needs for a reason other than an element: checked at every
+// scan (init, TurboNav swap, patch), whatever the scanned subtree.
+const _DJUST_CHUNK_PAGE_TRIGGERS = {
+    'service-worker': _djustSwControlled,
+    // The hover layer of 22-prefetch.js posts to the controlling worker.
+    'prefetch': _djustSwControlled,
+    // The persistent overlay only renders under DEBUG (set by the server).
+    'error-overlay': function () { return window.DEBUG_MODE === true; },
+    // 54-dj-style.js reads the server-rendered head once.
+    'dj-style': function () {
+        return !!(document.head &&
+            document.head.querySelector('meta[name="djust-styles"][content="attrs"]'));
+    },
+};
+
+function _djustIsChunkName(name) {
+    return Object.prototype.hasOwnProperty.call(_DJUST_CHUNK_SELECTORS, name) ||
+        Object.prototype.hasOwnProperty.call(_DJUST_CHUNK_PAGE_TRIGGERS, name);
+}
 
 // Captured while this bundle executes; null when it was evaluated, not loaded.
 const _djustClientScript = document.currentScript || null;
@@ -117,7 +170,7 @@ function _djustIsCoreBundle() {
  * Public as `djust.loadClientChunk(name)`.
  */
 function loadClientChunk(name) {
-    if (!Object.prototype.hasOwnProperty.call(_DJUST_CHUNK_SELECTORS, name) && name !== 'service-worker') {
+    if (!_djustIsChunkName(name)) {
         return Promise.reject(new Error('[djust] unknown client chunk: ' + name));
     }
     // eslint-disable-next-line security/detect-object-injection
@@ -163,19 +216,32 @@ function _djustNeededChunks(root, changes) {
     if (!_djustIsCoreBundle()) return [];
     const scope = root || document;
     const needed = [];
-    for (const name of Object.keys(_DJUST_CHUNK_SELECTORS)) {
+    const pending = Object.keys(_DJUST_CHUNK_SELECTORS).filter(function (name) {
         // eslint-disable-next-line security/detect-object-injection
-        if (_djustChunkLoaded[name] || _djustChunkFailed[name]) continue;
+        return !_djustChunkLoaded[name] && !_djustChunkFailed[name];
+    });
+    // #4001: after a patch, only what it inserted or re-attributed.
+    const matches = function (selector) {
+        return changes ? _changedMatches(changes, selector).length > 0
+            : !!((scope.matches && scope.matches(selector)) ||
+                (scope.querySelector && scope.querySelector(selector)));
+    };
+    // One pass over the scanned elements for every pending selector; only a
+    // hit is narrowed down to the chunks it names.
+    if (pending.length && matches(pending.map(function (name) {
         // eslint-disable-next-line security/detect-object-injection
-        const selector = _DJUST_CHUNK_SELECTORS[name];
-        // #4001: after a patch, only what it inserted or re-attributed.
-        if (changes ? _changedMatches(changes, selector).length > 0
-            : (scope.matches && scope.matches(selector)) ||
-            (scope.querySelector && scope.querySelector(selector))) needed.push(name);
+        return _DJUST_CHUNK_SELECTORS[name];
+    }).join(','))) {
+        for (const name of pending) {
+            // eslint-disable-next-line security/detect-object-injection
+            if (matches(_DJUST_CHUNK_SELECTORS[name])) needed.push(name);
+        }
     }
-    if (!_djustChunkLoaded['service-worker'] && !_djustChunkFailed['service-worker'] &&
-        typeof navigator !== 'undefined' && navigator.serviceWorker && navigator.serviceWorker.controller) {
-        needed.push('service-worker');
+    for (const name of Object.keys(_DJUST_CHUNK_PAGE_TRIGGERS)) {
+        // eslint-disable-next-line security/detect-object-injection
+        if (_djustChunkLoaded[name] || _djustChunkFailed[name] || needed.indexOf(name) !== -1) continue;
+        // eslint-disable-next-line security/detect-object-injection
+        if (_DJUST_CHUNK_PAGE_TRIGGERS[name]()) needed.push(name);
     }
     return needed;
 }
@@ -315,6 +381,24 @@ if (!window.djust._sw) {
     };
 }
 
+// djust.resetViewport / teardownInfiniteScroll act on the containers the
+// infinite-scroll chunk tracks; before it has loaded there are none, so they
+// do nothing. djust.initInfiniteScroll stays undefined until then: core skips
+// the dj-viewport-* pass without it.
+if (!window.djust.resetViewport) window.djust.resetViewport = function () {};
+if (!window.djust.teardownInfiniteScroll) window.djust.teardownInfiniteScroll = function () {};
+
+// The last element focused outside any dialog, tracked from the start (#4320).
+// keyboard-nav returns focus there when a modal closes; when that chunk loads
+// after a patch rendered the first modal, showModal() has already moved focus
+// into the dialog, so the opener is known only from here. 51-keyboard-nav.js
+// seeds its own tracker with it.
+let _djustOutsideFocus = null;
+document.addEventListener('focusin', function (e) {
+    const el = e.target;
+    if (el && el.closest && !el.closest('[role="dialog"], .dj-modal')) _djustOutsideFocus = el;
+}, true);
+
 // Called by each chunk after its code has run (see build-client.sh).
 const _DJUST_CHUNK_READY = {
     'uploads': function () {
@@ -333,6 +417,23 @@ const _DJUST_CHUNK_READY = {
     'service-worker': function () {
         if (_djustSwMountData) window.djust._sw.applyMountMetadata(_djustSwMountData);
         _djustSwMountData = null;
+        // The hover prefetch layer posts to the worker this page now uses.
+        if (_djustSwControlled()) _djustBackgroundLoad('prefetch');
+    },
+    // These modules set themselves up when they run (each installs its
+    // document listeners or observer and scans the page at once when the
+    // document is already parsed), so their handlers have nothing to do.
+    'component-behaviors': function () {},
+    'keyboard-nav': function () {},
+    'error-overlay': function () {},
+    'dj-style': function () {},
+    'flip': function () {},
+    'transitions': function () {},
+    'prefetch': function () {},
+    'track-static': function () {},
+    'dialog': function () {},
+    'infinite-scroll': function () {
+        if (window.djustInitialized) window.djust.initInfiniteScroll(document);
     },
 };
 
@@ -364,6 +465,8 @@ function _djustExposeChunkScope() {
         isWSConnected: isWSConnected,
         slotIdFor: slotIdFor,
         slotFrameFields: slotFrameFields,
+        _destroyDetachedHooks: _destroyDetachedHooks,
+        get _djustOutsideFocus() { return _djustOutsideFocus; },
     });
 }
 

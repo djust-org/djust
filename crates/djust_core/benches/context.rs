@@ -22,7 +22,7 @@ fn create_test_value(depth: usize, width: usize) -> Value {
                 create_test_value(depth - 1, width),
             );
         }
-        Value::Object(obj)
+        Value::Object(Box::new(obj))
     }
 }
 
@@ -52,19 +52,19 @@ fn bench_context_nested_get(c: &mut Criterion) {
     theme.insert("name".into(), Value::String("dark".to_string()));
 
     let mut settings = IndexMap::new();
-    settings.insert("theme".into(), Value::Object(theme));
+    settings.insert("theme".into(), Value::Object(Box::new(theme)));
     settings.insert("notifications".into(), Value::Bool(true));
 
     let mut profile = IndexMap::new();
-    profile.insert("settings".into(), Value::Object(settings));
+    profile.insert("settings".into(), Value::Object(Box::new(settings)));
     profile.insert("bio".into(), Value::String("Developer".to_string()));
 
     let mut user = IndexMap::new();
-    user.insert("profile".into(), Value::Object(profile));
+    user.insert("profile".into(), Value::Object(Box::new(profile)));
     user.insert("name".into(), Value::String("John".to_string()));
 
     let mut ctx = Context::new();
-    ctx.set("user".to_string(), Value::Object(user));
+    ctx.set("user".to_string(), Value::Object(Box::new(user)));
 
     let lookups = vec![
         ("1_level", "user.name"),

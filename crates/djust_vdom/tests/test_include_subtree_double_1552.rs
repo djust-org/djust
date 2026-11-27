@@ -203,7 +203,7 @@ fn apply_all_id_aware(client: &mut VNode, patches: &[Patch], new_vdom: &VNode) {
             Patch::SetText { d, text, .. } => {
                 if let Some(target_id) = d.as_ref() {
                     if let Some(target) = find_by_djust_id_mut(client, target_id) {
-                        target.text = Some(text.clone());
+                        target.text = Some(Box::<str>::from(text.clone()));
                     }
                 }
             }

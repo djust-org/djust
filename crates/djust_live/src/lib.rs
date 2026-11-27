@@ -465,6 +465,14 @@ pub struct RustLiveViewBackend {
     /// generation and the answer. A stale answer only records when not needed
     /// or grants just the unconditional bindings.
     dj_model_gate: Option<DjModelGate>,
+    /// Per-child fragments of each top-level `{% if %}` / `{% with %}` /
+    /// `{% block %}`, parallel to `node_html_cache` (#4315). An entry records
+    /// the top-level fragment it was rendered with and is ignored once that
+    /// fragment is replaced, so a site that replaces `node_html_cache` without
+    /// clearing this cannot serve stale children (the clearing sites clear
+    /// both, to free the memory). Not part of the serialized state: a restored view
+    /// re-renders a wrapper's children once.
+    node_child_cache: djust_templates::renderer::ChildFragmentCache,
     /// Context keys that changed since the last render (None = full render)
     changed_keys: Option<HashSet<String>>,
     /// Maps template node index → (VDOM path, djust_id) for text-only fragments.
@@ -534,19 +542,42 @@ pub struct RustLiveViewBackend {
     render_env: Option<RenderEnv>,
 }
 
+/// One text node of the text-region index: where its run sits in the
+/// pre-hydration HTML, and its path in the tree.
+///
+/// Only positions (#4319): the node's text and id are read from the tree at
+/// `path` when a fast path needs them, rather than kept here as a second copy
+/// of every text on the page.
 #[derive(Clone, Debug)]
 struct TextNodeEntry {
     /// Byte offset in the pre-hydration HTML where this text node begins.
     html_start: usize,
     /// Byte offset where the HTML text run ends (exclusive).
     html_end: usize,
-    /// VDOM path to this text node.
-    path: Vec<usize>,
-    /// Decoded text content as stored in the VDOM (may differ from the
-    /// raw HTML bytes if the source had entities like `&amp;`).
-    text: String,
-    /// dj-id of the enclosing element (empty for un-ided text nodes).
-    djust_id: String,
+    /// VDOM path to this text node, as child indices (a node never has
+    /// 2**32 children; `build_text_node_index` declines if one did).
+    path: Box<[u32]>,
+}
+
+impl TextNodeEntry {
+    /// The path as the tree and the patches spell it.
+    fn path(&self) -> Vec<usize> {
+        self.path.iter().map(|&i| i as usize).collect()
+    }
+}
+
+/// The text node at `path`: its text and its own dj-id (empty when it has
+/// none), as the index used to keep them (#4319). `None` when `path` does
+/// not name a text node holding text.
+fn text_node_at<'a>(vdom: &'a VNode, path: &[usize]) -> Option<(&'a str, &'a str)> {
+    let node = get_vdom_node(vdom, path)?;
+    if !node.is_text() {
+        return None;
+    }
+    Some((
+        node.text.as_deref()?,
+        node.djust_id.as_deref().unwrap_or(""),
+    ))
 }
 
 #[pymethods]
@@ -579,6 +610,7 @@ impl RustLiveViewBackend {
             node_binding_records: Vec::new(),
             last_dj_model_bindings: None,
             dj_model_gate: None,
+            node_child_cache: Vec::new(),
             changed_keys: None,
             fragment_text_map: None,
             text_node_index: None,
@@ -610,6 +642,7 @@ impl RustLiveViewBackend {
             self.authenticated_model_fields.clear();
             self.last_html = None;
             self.node_html_cache.clear();
+            self.node_child_cache.clear();
             self.fragment_text_map = None;
             self.text_node_index = None;
             self.loop_render_cache.clear();
@@ -638,6 +671,7 @@ impl RustLiveViewBackend {
             // The old page's bindings do not authorize a different origin.
             self.authenticated_model_fields.clear();
             self.node_html_cache.clear();
+            self.node_child_cache.clear();
             self.last_html = None;
             self.fragment_text_map = None;
             self.text_node_index = None;
@@ -1041,6 +1075,7 @@ impl RustLiveViewBackend {
         // tracked context key does. Loop fragments have the same constraint.
         if *self.template_source == *new_template_source {
             self.node_html_cache.clear();
+            self.node_child_cache.clear();
             self.fragment_text_map = None;
             self.loop_render_cache.clear();
             return;
@@ -1051,6 +1086,7 @@ impl RustLiveViewBackend {
             self.authenticated_model_fields.clear();
         }
         self.node_html_cache = Vec::new(); // Invalidate partial render cache
+        self.node_child_cache = Vec::new();
         self.last_html = None; // Invalidate text fast path cache
         self.fragment_text_map = None; // Invalidate fragment→VDOM map
         self.text_node_index = None; // Invalidate text-region fast-path index
@@ -1200,6 +1236,7 @@ impl RustLiveViewBackend {
     /// in tests to produce a control output for byte-equality comparison.
     fn clear_fragment_cache(&mut self) {
         self.node_html_cache = Vec::new();
+        self.node_child_cache = Vec::new();
         self.last_html = None;
         self.fragment_text_map = None;
         self.text_node_index = None;
@@ -1512,6 +1549,7 @@ impl RustLiveViewBackend {
                 self.authenticated_partial_root = is_root;
                 self.authenticated_model_fields = fields;
                 self.node_html_cache.clear();
+                self.node_child_cache.clear();
                 self.last_html = None;
                 self.text_node_index = None;
                 return Ok((rendered.html[start..end].to_owned(), spans, origins));
@@ -1519,6 +1557,7 @@ impl RustLiveViewBackend {
             // Invalidate partial render cache — render() bypasses the diff pipeline
             // so the cache would be stale for the next render_with_diff() call.
             self.node_html_cache = Vec::new();
+            self.node_child_cache = Vec::new();
             self.last_html = None; // Invalidate text fast path cache
             self.text_node_index = None; // Invalidate text-region fast-path index
 
@@ -1675,6 +1714,7 @@ impl RustLiveViewBackend {
                 if self.potential_authenticated_partial_root && self.template_origin.is_some() {
                     self.changed_keys = None;
                     self.node_html_cache.clear();
+                    self.node_child_cache.clear();
                     template_arc.render_with_loader_named(
                         &context,
                         &loader,
@@ -1686,23 +1726,26 @@ impl RustLiveViewBackend {
                 {
                     let changed = self.changed_keys.take().unwrap_or_default();
                     template_arc
-                        .render_with_loader_partial(
+                        .render_with_loader_partial_children(
                             &context,
                             &loader,
                             &changed,
                             &self.node_html_cache,
+                            &self.node_child_cache,
                         )
-                        .map(|(html, fragments, _changed_indices)| {
-                            self.node_html_cache = fragments;
-                            html
+                        .map(|rendered| {
+                            self.node_html_cache = rendered.fragments;
+                            self.node_child_cache = rendered.children;
+                            rendered.html
                         })
                 } else {
                     self.changed_keys = None;
                     template_arc
-                        .render_with_loader_collecting(&context, &loader)
-                        .map(|(html, fragments)| {
-                            self.node_html_cache = fragments;
-                            html
+                        .render_with_loader_collecting_children(&context, &loader)
+                        .map(|rendered| {
+                            self.node_html_cache = rendered.fragments;
+                            self.node_child_cache = rendered.children;
+                            rendered.html
                         })
                 }
             };
@@ -1735,9 +1778,16 @@ impl RustLiveViewBackend {
                 // placeholders are the manifest's, in order.
                 let open = format!("<{sentinel_tag} ");
                 let mut ph_iter = loop_parse_manifest.iter().filter(|m| m.placeholder);
-                for frag in self.node_html_cache.iter_mut() {
+                for (i, frag) in self.node_html_cache.iter_mut().enumerate() {
                     if frag.contains(&open) {
                         *frag = Self::expand_loop_placeholders(frag, &mut ph_iter, &sentinel_tag);
+                        // A wrapper's child fragments hold the same reduced
+                        // placeholders; drop them rather than expand them
+                        // apart from their parent (#4315). The entry would no
+                        // longer match the expanded fragment anyway.
+                        if let Some(entry) = self.node_child_cache.get_mut(i) {
+                            *entry = None;
+                        }
                     }
                 }
                 Self::reconstruct_full_loop_html(&reduced_html, &loop_parse_manifest, &sentinel_tag)
@@ -2067,6 +2117,7 @@ impl RustLiveViewBackend {
             self.version += 1;
             self.last_html = Some(full_html.clone());
             self.node_html_cache = Vec::new();
+            self.node_child_cache = Vec::new();
             self.fragment_text_map = None;
             self.text_node_index = None; // positions moved; rebuilt by the next full parse
             self.set_component_html(component_id, html);
@@ -2091,6 +2142,7 @@ impl RustLiveViewBackend {
         self.last_html = None;
         self.version = 0;
         self.node_html_cache = Vec::new();
+        self.node_child_cache = Vec::new();
         self.changed_keys = None;
         self.fragment_text_map = None;
         self.text_node_index = None;
@@ -2111,6 +2163,7 @@ impl RustLiveViewBackend {
         self.last_root_ns = None;
         self.last_html = None;
         self.node_html_cache = Vec::new();
+        self.node_child_cache = Vec::new();
         self.changed_keys = None;
         self.fragment_text_map = None;
         self.text_node_index = None;
@@ -2217,6 +2270,7 @@ impl RustLiveViewBackend {
             node_binding_records: Vec::new(),
             last_dj_model_bindings: None,
             dj_model_gate: None,
+            node_child_cache: Vec::new(),
             changed_keys: None,
             fragment_text_map: None,
             text_node_index: None,
@@ -2612,6 +2666,7 @@ impl RustLiveViewBackend {
         self.authenticated_partial_root = authenticated;
         self.last_html = None;
         self.node_html_cache.clear();
+        self.node_child_cache.clear();
         self.fragment_text_map = None;
         self.text_node_index = None;
         self.changed_keys = None;
@@ -2702,6 +2757,7 @@ impl RustLiveViewBackend {
                 if self.potential_authenticated_partial_root && self.template_origin.is_some() {
                     self.changed_keys = None;
                     self.node_html_cache.clear();
+                    self.node_child_cache.clear();
                     template_arc
                         .render_with_loader_named(
                             &context,
@@ -2713,24 +2769,27 @@ impl RustLiveViewBackend {
                     // Partial render: only re-render nodes whose deps changed
                     let changed = self.changed_keys.take().unwrap_or_default();
                     template_arc
-                        .render_with_loader_partial(
+                        .render_with_loader_partial_children(
                             &context,
                             &loader,
                             &changed,
                             &self.node_html_cache,
+                            &self.node_child_cache,
                         )
-                        .map(|(html, fragments, changed_indices)| {
-                            self.node_html_cache = fragments;
-                            (html, changed_indices)
+                        .map(|rendered| {
+                            self.node_html_cache = rendered.fragments;
+                            self.node_child_cache = rendered.children;
+                            (rendered.html, rendered.changed)
                         })
                 } else {
                     // Full render: first render or no change info
                     self.changed_keys = None;
                     template_arc
-                        .render_with_loader_collecting(&context, &loader)
-                        .map(|(html, fragments)| {
-                            self.node_html_cache = fragments;
-                            (html, vec![])
+                        .render_with_loader_collecting_children(&context, &loader)
+                        .map(|rendered| {
+                            self.node_html_cache = rendered.fragments;
+                            self.node_child_cache = rendered.children;
+                            (rendered.html, vec![])
                         })
                 }
             };
@@ -2780,9 +2839,16 @@ impl RustLiveViewBackend {
                 // placeholders are the manifest's, in order.
                 let open = format!("<{sentinel_tag} ");
                 let mut ph_iter = loop_parse_manifest.iter().filter(|m| m.placeholder);
-                for frag in self.node_html_cache.iter_mut() {
+                for (i, frag) in self.node_html_cache.iter_mut().enumerate() {
                     if frag.contains(&open) {
                         *frag = Self::expand_loop_placeholders(frag, &mut ph_iter, &sentinel_tag);
+                        // A wrapper's child fragments hold the same reduced
+                        // placeholders; drop them rather than expand them
+                        // apart from their parent (#4315). The entry would no
+                        // longer match the expanded fragment anyway.
+                        if let Some(entry) = self.node_child_cache.get_mut(i) {
+                            *entry = None;
+                        }
                     }
                 }
                 Self::reconstruct_full_loop_html(&reduced_html, &loop_parse_manifest, &sentinel_tag)
@@ -2884,7 +2950,7 @@ impl RustLiveViewBackend {
                             {
                                 let (path, djust_id) = frag_map.get(idx).unwrap();
                                 if let Some(node) = get_vdom_node_mut(&mut vdom, path) {
-                                    node.text = Some(new_text.clone());
+                                    node.text = Some(new_text.clone().into());
                                     node.cached_html = None;
                                 }
                                 let d = if djust_id.is_empty() {
@@ -6730,9 +6796,9 @@ fn try_text_region_fast_path(
         return None;
     }
 
-    let path = entry.path.clone();
-    let old_text = entry.text.clone();
-    let djust_id = entry.djust_id.clone();
+    let path = entry.path();
+    let (old_text, djust_id) = text_node_at(old_vdom, &path)?;
+    let (old_text, djust_id) = (old_text.to_string(), djust_id.to_string());
     let old_html_end = entry.html_end;
 
     // The index's byte range is the node's RAW html; the VDOM holds the
@@ -6784,7 +6850,6 @@ fn try_text_region_fast_path(
     // changed entry grows/shrinks by (new_mid - old_mid) bytes, and
     // every downstream entry's HTML range shifts by the same amount.
     let new_html_end = old_html_end + new_mid.len() - old_mid.len();
-    text_node_index[entry_idx].text = new_text.clone();
     text_node_index[entry_idx].html_end = new_html_end;
     if new_mid.len() != old_mid.len() {
         let delta_add = new_mid.len() as isize - old_mid.len() as isize;
@@ -6842,7 +6907,7 @@ fn apply_text_region_edits(vdom: &mut VNode, edits: &[TextRegionEdit]) -> bool {
     }
     for edit in edits {
         if let Some(node) = get_vdom_node_mut(vdom, &edit.path) {
-            node.text = Some(edit.text.clone());
+            node.text = Some(edit.text.clone().into());
             node.cached_html = None;
         }
     }
@@ -6935,15 +7000,12 @@ fn try_multi_text_region_fast_path(
             if new_raw.bytes().any(|b| b == b'>') || text_change_needs_parse(old_raw, new_raw) {
                 return None;
             }
-            if !get_vdom_node(old_vdom, &entry.path).is_some_and(|n| n.is_text()) {
+            let entry_path = entry.path();
+            let (old_text, _) = text_node_at(old_vdom, &entry_path)?;
+            if text_node_value(old_vdom, &entry_path, old_raw).as_deref() != Some(old_text) {
                 return None;
             }
-            if text_node_value(old_vdom, &entry.path, old_raw).as_deref()
-                != Some(entry.text.as_str())
-            {
-                return None;
-            }
-            let new_text = text_node_value(old_vdom, &entry.path, new_raw)?;
+            let new_text = text_node_value(old_vdom, &entry_path, new_raw)?;
             if is_html_whitespace_only(&new_text) {
                 return None;
             }
@@ -6977,19 +7039,16 @@ fn try_multi_text_region_fast_path(
     let mut patches = Vec::with_capacity(changes.len());
     let mut edits = Vec::with_capacity(changes.len());
     for (idx, _, new_text) in &changes {
-        let entry = &text_node_index[*idx];
-        edits.push(TextRegionEdit {
-            path: entry.path.clone(),
-            text: new_text.clone(),
-        });
-        let d = if entry.djust_id.is_empty() {
+        let path = text_node_index[*idx].path();
+        let (_, own_id) = text_node_at(old_vdom, &path)?;
+        let d = if own_id.is_empty() {
             None
         } else {
-            Some(entry.djust_id.clone())
+            Some(own_id.to_string())
         };
         // The parent's dj-id plus this node's index in it (#4001), as the
         // tree diff emits them; only together, and only when the parent has one.
-        let (parent_d, index) = match entry.path.split_last() {
+        let (parent_d, index) = match path.split_last() {
             Some((&index, parent_path)) => get_vdom_node(old_vdom, parent_path)
                 .and_then(|parent| parent.djust_id.clone())
                 .filter(|id| !id.is_empty())
@@ -6997,11 +7056,15 @@ fn try_multi_text_region_fast_path(
             None => (None, None),
         };
         patches.push(djust_vdom::Patch::SetText {
-            path: entry.path.clone(),
+            path: path.clone(),
             d,
             text: new_text.clone(),
-            parent_d,
+            parent_d: Option::map(parent_d, String::from),
             index,
+        });
+        edits.push(TextRegionEdit {
+            path,
+            text: new_text.clone(),
         });
     }
 
@@ -7011,11 +7074,10 @@ fn try_multi_text_region_fast_path(
     let mut pending = changes.into_iter().peekable();
     for (j, entry) in text_node_index.iter_mut().enumerate().skip(first) {
         let start = (entry.html_start as isize + delta) as usize;
-        if let Some((_, new_run_len, new_text)) = pending.next_if(|c| c.0 == j) {
+        if let Some((_, new_run_len, _)) = pending.next_if(|c| c.0 == j) {
             let old_run_len = entry.html_end - entry.html_start;
             entry.html_start = start;
             entry.html_end = start + new_run_len;
-            entry.text = new_text;
             delta += new_run_len as isize - old_run_len as isize;
         } else {
             entry.html_end =
@@ -7918,7 +7980,7 @@ fn runs_match_text_nodes(
             })
 }
 
-/// Build the sorted `(html_start, html_end, path, text, djust_id)` index
+/// Build the sorted `(html_start, html_end, path)` index
 /// used by `try_text_region_fast_path`. Returns empty if HTML and VDOM
 /// text-node counts don't agree (e.g. due to `<script>`/`<style>` in
 /// the document, which the scanner refuses to count).
@@ -7947,18 +8009,18 @@ fn build_text_node_index(html: &str, vdom: &VNode) -> Vec<TextNodeEntry> {
         .map(|(s, e, _)| (s + scan_from, e + scan_from))
         .collect();
 
-    runs.into_iter()
-        .zip(vdom_nodes)
-        .map(
-            |((html_start, html_end), (path, text, djust_id))| TextNodeEntry {
-                html_start,
-                html_end,
-                path,
-                text,
-                djust_id,
-            },
-        )
-        .collect()
+    let mut index = Vec::with_capacity(runs.len());
+    for ((html_start, html_end), (path, _text, _djust_id)) in runs.into_iter().zip(vdom_nodes) {
+        let Ok(path) = path.into_iter().map(u32::try_from).collect() else {
+            return Vec::new();
+        };
+        index.push(TextNodeEntry {
+            html_start,
+            html_end,
+            path,
+        });
+    }
+    index
 }
 
 fn build_fragment_text_map(
@@ -8082,7 +8144,11 @@ fn collect_vdom_text_nodes(
                 );
                 if preserving_parent || !is_html_whitespace_only(text) {
                     let djust_id = child.djust_id.clone().unwrap_or_default();
-                    entries.push((current_path.clone(), text.clone(), djust_id));
+                    entries.push((
+                        current_path.clone(),
+                        String::from(text.clone()),
+                        String::from(djust_id),
+                    ));
                 }
             }
         } else {
@@ -8709,8 +8775,7 @@ mod dj_root_selection_3031 {
             out.push_str(&format!("{:?}", node.text.as_deref().unwrap_or("")));
             return;
         }
-        let mut attrs: Vec<_> = node.attrs.iter().filter(|(k, _)| *k != "dj-id").collect();
-        attrs.sort();
+        let attrs: Vec<_> = node.attrs.iter().filter(|(k, _)| *k != "dj-id").collect();
         out.push_str(&format!("<{} {attrs:?}>", node.tag));
         for child in &node.children {
             shape(child, out);
@@ -9378,7 +9443,7 @@ mod fast_path_flag_tests {
             Value::String(format!("Post {id}")),
         );
         m.insert(ObjectKey::Str("views".to_string()), Value::Integer(views));
-        Value::Object(m)
+        Value::Object(Box::new(m))
     }
 
     fn state(label: &str, highlight_id: i64, views7: i64) -> HashMap<String, Value> {
@@ -10025,7 +10090,7 @@ mod text_region_in_place_4325 {
                 let mut m = IndexMap::new();
                 m.insert(ObjectKey::Str(own("a")), Value::String(own(a)));
                 m.insert(ObjectKey::Str(own("b")), Value::String(own(b)));
-                Value::Object(m)
+                Value::Object(Box::new(m))
             })
             .collect();
         let mut s = HashMap::new();
@@ -10040,16 +10105,9 @@ mod text_region_in_place_4325 {
         s.chars().collect()
     }
 
-    /// An index entry's byte range, path and text.
-    fn span(e: &TextNodeEntry) -> (usize, usize, Vec<usize>, String) {
-        let TextNodeEntry {
-            html_start,
-            html_end,
-            path,
-            text,
-            ..
-        } = e;
-        (*html_start, *html_end, path.clone(), own(text))
+    /// An index entry's byte range and path.
+    fn span(e: &TextNodeEntry) -> (usize, usize, Vec<usize>) {
+        (e.html_start, e.html_end, e.path())
     }
 
     const BASE: [(&str, &str); 4] = [("a0", "b0"), ("a1", "b1"), ("a2", "b2"), ("a3", "b3")];
@@ -10187,9 +10245,7 @@ mod text_region_in_place_4325 {
         let view = mounted();
         let mut tree = view.last_vdom.clone().expect("tree");
         let before = tree.to_html();
-        let text_path = view.text_node_index.as_ref().expect("index")[0]
-            .path
-            .clone();
+        let text_path = view.text_node_index.as_ref().expect("index")[0].path();
         let edits = [
             TextRegionEdit {
                 path: text_path,

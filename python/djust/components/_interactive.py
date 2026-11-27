@@ -14,7 +14,7 @@ from copy import deepcopy
 import inspect
 from types import FunctionType
 from typing import Literal, NoReturn, Protocol, TypeVar, TypedDict
-from uuid import uuid4
+import uuid as _uuid
 
 from django.utils.html import format_html, format_html_join
 from django.utils.safestring import mark_safe
@@ -151,13 +151,13 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
                 raise ValueError("Dropdown action values must be unique")
             values.add(value)
         ComponentDeclaration.__init__(self, type(self), (_SELECTED, _TOGGLED))
-        LiveComponent.__init__(self, component_id="cmp_" + uuid4().hex)
+        LiveComponent.__init__(self, component_id="cmp_" + _uuid.uuid4().hex)
         self._label = label
         self._items = deepcopy(items)
         self._open = False
         self._selected = ""
         self._visibility = visibility
-        self._observation_lifetime = "obs_" + uuid4().hex
+        self._observation_lifetime = "obs_" + _uuid.uuid4().hex
         self._observation_sequence = 0
         self._observation_registered = False
         self._declaration: DropdownMenu | None = None
@@ -283,7 +283,7 @@ class DropdownMenu(ComponentDeclaration, LiveComponent):
 
     def _renew_observation_lifetime(self) -> None:
         self._bound_owner()
-        self._observation_lifetime = "obs_" + uuid4().hex
+        self._observation_lifetime = "obs_" + _uuid.uuid4().hex
         self._observation_sequence = 0
         self._observation_registered = False
 

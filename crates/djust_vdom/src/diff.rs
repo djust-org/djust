@@ -206,7 +206,7 @@ fn diff_node_into(
         vdom_trace!("Replace at {:?}: <{}> -> <{}>", path, old.tag, new.tag);
         out.push(Patch::Replace {
             path: path.to_vec(),
-            d: old.djust_id.clone(),
+            d: Option::map(old.djust_id.clone(), String::from),
             node: new.clone(),
         });
         return;
@@ -223,8 +223,8 @@ fn diff_node_into(
             };
             out.push(Patch::SetText {
                 path: path.to_vec(),
-                d: old.djust_id.clone(),
-                text: new.text.clone().unwrap_or_default(),
+                d: Option::map(old.djust_id.clone(), String::from),
+                text: String::from(new.text.clone().unwrap_or_default()),
                 parent_d,
                 index,
             });
@@ -270,45 +270,56 @@ fn diff_node_into(
 // ============================================================================
 
 fn diff_attrs(old: &VNode, new: &VNode, path: &[usize], out: &mut Vec<Patch>) {
-    // Deterministic order: sort keys.
-    let mut new_keys: Vec<&String> = new.attrs.keys().collect();
-    new_keys.sort();
-    for key in new_keys {
-        // `dj-id` is an id artifact, never diffed as a normal attribute.
-        if key == "dj-id" {
-            continue;
-        }
-        let new_val = &new.attrs[key];
-        match old.attrs.get(key) {
-            Some(old_val) if old_val == new_val => {}
-            _ => {
-                out.push(Patch::SetAttr {
-                    path: path.to_vec(),
-                    d: old.djust_id.clone(),
-                    key: key.clone(),
-                    value: new_val.clone(),
-                });
+    // Both sides are sorted by name (`Attrs`), so one merge walk finds what
+    // was set and what was removed. The patches keep their order: every
+    // SetAttr in name order, then every RemoveAttr in name order.
+    use std::cmp::Ordering;
+    let d = || old.djust_id.as_deref().map(String::from);
+    let (old_pairs, new_pairs) = (old.attrs.as_slice(), new.attrs.as_slice());
+    let mut removed: Vec<&String> = Vec::new();
+    let (mut i, mut j) = (0, 0);
+    while i < old_pairs.len() || j < new_pairs.len() {
+        let order = match (old_pairs.get(i), new_pairs.get(j)) {
+            (Some((ok, _)), Some((nk, _))) => ok.cmp(nk),
+            (Some(_), None) => Ordering::Less,
+            _ => Ordering::Greater,
+        };
+        match order {
+            // Only in the old tree: removed, unless it is the id artifact
+            // or a dj-* event binding (client-side handlers never go).
+            Ordering::Less => {
+                let key = &old_pairs[i].0;
+                if !key.starts_with("dj-") {
+                    removed.push(key);
+                }
+                i += 1;
+            }
+            // New, or changed. `dj-id` is an id artifact, never diffed as
+            // a normal attribute.
+            Ordering::Greater | Ordering::Equal => {
+                let (key, new_val) = &new_pairs[j];
+                let unchanged = order == Ordering::Equal && old_pairs[i].1 == *new_val;
+                if key != "dj-id" && !unchanged {
+                    out.push(Patch::SetAttr {
+                        path: path.to_vec(),
+                        d: d(),
+                        key: key.clone(),
+                        value: new_val.clone(),
+                    });
+                }
+                if order == Ordering::Equal {
+                    i += 1;
+                }
+                j += 1;
             }
         }
     }
-
-    let mut old_keys: Vec<&String> = old.attrs.keys().collect();
-    old_keys.sort();
-    for key in old_keys {
-        if key == "dj-id" {
-            continue;
-        }
-        // dj-* event bindings must never be removed (client-side handlers).
-        if key.starts_with("dj-") {
-            continue;
-        }
-        if !new.attrs.contains_key(key) {
-            out.push(Patch::RemoveAttr {
-                path: path.to_vec(),
-                d: old.djust_id.clone(),
-                key: key.clone(),
-            });
-        }
+    for key in removed {
+        out.push(Patch::RemoveAttr {
+            path: path.to_vec(),
+            d: d(),
+            key: key.clone(),
+        });
     }
 }
 
@@ -322,16 +333,16 @@ fn diff_children_replace_mode(old: &VNode, new: &VNode, path: &[usize], out: &mu
     for i in (0..old.children.len()).rev() {
         out.push(Patch::RemoveChild {
             path: path.to_vec(),
-            d: d.clone(),
+            d: Option::map(d.clone(), String::from),
             index: i,
-            child_d: old.children[i].djust_id.clone(),
+            child_d: Option::map(old.children[i].djust_id.clone(), String::from),
         });
     }
     // Insert all new children, ascending index.
     for (i, child) in new.children.iter().enumerate() {
         out.push(Patch::InsertChild {
             path: path.to_vec(),
-            d: d.clone(),
+            d: Option::map(d.clone(), String::from),
             index: i,
             node: child.clone(),
             ref_d: None,
@@ -878,7 +889,7 @@ fn reconcile_keyed(
                     d: pid.map(|s| s.to_string()),
                     from: old_abs,
                     to: new_abs,
-                    child_d: old_node.djust_id.clone(),
+                    child_d: Option::map(old_node.djust_id.clone(), String::from),
                 });
             }
             let mut child_path = ppath.to_vec();
@@ -959,7 +970,7 @@ fn reconcile_keyed(
             d: pid.map(|s| s.to_string()),
             from: old_abs,
             to: new_abs,
-            child_d: old_node.djust_id.clone(),
+            child_d: Option::map(old_node.djust_id.clone(), String::from),
         });
     }
 }
@@ -999,7 +1010,7 @@ fn push_remove_child(
         path: ppath.to_vec(),
         d: pid.map(|s| s.to_string()),
         index: old_abs,
-        child_d: old_node.djust_id.clone(),
+        child_d: Option::map(old_node.djust_id.clone(), String::from),
     });
 }
 
@@ -1037,7 +1048,8 @@ pub fn sync_ids(old: &VNode, new: &mut VNode) {
         new.djust_id = old.djust_id.clone();
         if new.attrs.contains_key("dj-id") || old.attrs.contains_key("dj-id") {
             if let Some(id) = &old.djust_id {
-                new.attrs.insert("dj-id".to_string(), id.clone());
+                new.attrs
+                    .insert("dj-id".to_string(), String::from(id.clone()));
             }
         }
     }

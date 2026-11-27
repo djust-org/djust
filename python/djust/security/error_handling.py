@@ -24,8 +24,11 @@ Usage:
         await self.send_json(response)
 """
 
+import contextlib
+import contextvars
+import math
 import traceback
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterator, Optional
 
 
 # Generic error messages for production (no information leakage)
@@ -44,6 +47,44 @@ GENERIC_ERROR_MESSAGES = {
 #: a frame as given; ``build_error_frame`` adds ``debug_detail`` and ``hint``
 #: back (and the abbreviated traceback ``_exc_info`` points at) under DEBUG.
 DEBUG_ONLY_ERROR_KEYS = frozenset({"debug_detail", "hint", "_exc_info"})
+
+#: The ``ref`` of the client event whose turn is running (#4322). An error frame
+#: built while it is set answers that event: ``build_error_frame`` echoes the
+#: ref, so the client settles that one request (a hook's ``pushEvent()`` outcome)
+#: instead of every pending one.
+_event_error_ref: contextvars.ContextVar[Optional[int]] = contextvars.ContextVar(
+    "djust_event_error_ref", default=None
+)
+
+
+def _echo_event_ref(frame: Dict[str, Any]) -> Dict[str, Any]:
+    """Stamp the running event's ref on ``frame`` (#4322).
+
+    An error raised while an event's turn runs answers that event. A frame that
+    names its own ref, or another source (``async``: background work started by
+    the turn inherits this context), keeps what it says.
+    """
+    current_ref = _event_error_ref.get()
+    if current_ref is not None and "ref" not in frame and frame.get("source", "event") == "event":
+        frame["ref"] = current_ref
+    return frame
+
+
+@contextlib.contextmanager
+def event_error_ref(ref: Any) -> Iterator[None]:
+    """Echo ``ref`` on the error frames built inside this block (#4322).
+
+    Only an int, or a finite float, is echoed, as the transports echo it on
+    their other answers; anything else leaves error frames without a ref.
+    """
+    value: Optional[int] = None
+    if type(ref) is int or (type(ref) is float and math.isfinite(ref)):
+        value = int(ref)
+    token = _event_error_ref.set(value)
+    try:
+        yield
+    finally:
+        _event_error_ref.reset(token)
 
 
 def build_error_frame(error: str, **context: Any) -> Dict[str, Any]:
@@ -65,6 +106,7 @@ def build_error_frame(error: str, **context: Any) -> Dict[str, Any]:
     for key, value in context.items():
         if key not in DEBUG_ONLY_ERROR_KEYS:
             frame[key] = value
+    _echo_event_ref(frame)
 
     if getattr(settings, "DEBUG", False):
         debug_detail = context.get("debug_detail")
@@ -317,10 +359,13 @@ def handle_exception(
                     traceback=True,
                 )
                 send_request_exception(exception)
-        return {
-            "type": "error",
-            "error": GENERIC_ERROR_MESSAGES.get(error_type, GENERIC_ERROR_MESSAGES["default"]),
-        }
+        # #4322: inside an event's turn the frame answers that event.
+        return _echo_event_ref(
+            {
+                "type": "error",
+                "error": GENERIC_ERROR_MESSAGES.get(error_type, GENERIC_ERROR_MESSAGES["default"]),
+            }
+        )
 
     # Determine DEBUG mode once
     try:
@@ -407,11 +452,14 @@ def handle_exception(
         # #4180: the signal fires whatever the owner's policy.
         send_request_exception(exception)
 
-    # Create and return safe response
-    return create_safe_error_response(
-        exception=exception,
-        error_type=error_type,
-        event_name=event_name,
-        view_class=view_class,
-        debug_mode=debug_mode,
+    # Create and return safe response; inside an event's turn it answers that
+    # event, DEBUG detail or not (#4322).
+    return _echo_event_ref(
+        create_safe_error_response(
+            exception=exception,
+            error_type=error_type,
+            event_name=event_name,
+            view_class=view_class,
+            debug_mode=debug_mode,
+        )
     )

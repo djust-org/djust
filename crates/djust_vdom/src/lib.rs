@@ -11,15 +11,16 @@ use djust_base::Result;
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::cell::Cell;
-use std::collections::HashMap;
 use std::sync::OnceLock;
 
+pub mod attrs;
 pub mod diff;
 pub mod lis;
 pub mod parser;
 pub mod patch;
 pub mod retained;
 
+pub use attrs::Attrs;
 pub use parser::MAX_VDOM_DEPTH;
 
 /// Check if VDOM tracing is enabled via environment variable.
@@ -352,7 +353,7 @@ fn rewalk_djust_ids(node: &mut VNode) {
         if let Some(slot) = node.attrs.get_mut("dj-id") {
             *slot = id.clone();
         }
-        node.djust_id = Some(id);
+        node.djust_id = Some(Box::<str>::from(id));
     }
     for child in &mut node.children {
         rewalk_djust_ids(child);
@@ -387,26 +388,6 @@ fn from_base62_hex(s: &str) -> Option<u64> {
     u64::from_str_radix(s, 16).ok()
 }
 
-/// Serialize a `HashMap<String,String>` of attributes in SORTED key order so
-/// the wire format (patch JSON / msgpack) is deterministic regardless of the
-/// map's hash-bucket layout. See the `VNode::attrs` field doc (#1970).
-fn serialize_attrs_sorted<S>(
-    attrs: &HashMap<String, String>,
-    serializer: S,
-) -> std::result::Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    use serde::ser::SerializeMap;
-    let mut keys: Vec<&String> = attrs.keys().collect();
-    keys.sort();
-    let mut map = serializer.serialize_map(Some(keys.len()))?;
-    for k in keys {
-        map.serialize_entry(k, &attrs[k])?;
-    }
-    map.end()
-}
-
 /// A virtual DOM node
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VNode {
@@ -420,11 +401,13 @@ pub struct VNode {
     /// cache-OFF path, a byte-identity violation. Sorting also matches
     /// `to_html`'s already-sorted attribute output. Deserialization is the
     /// default `HashMap` (order-insensitive on read).
-    #[serde(serialize_with = "serialize_attrs_sorted")]
-    pub attrs: HashMap<String, String>,
+    ///
+    /// An [`Attrs`] since #4319: the same pairs, kept sorted in a vector
+    /// rather than a hash table, which serializes in that same order.
+    pub attrs: Attrs,
     pub children: Vec<VNode>,
-    pub text: Option<String>,
-    pub key: Option<String>,
+    pub text: Option<Box<str>>,
+    pub key: Option<Box<str>>,
     /// Compact unique identifier for reliable patch targeting (e.g., "0", "1a", "2b")
     /// Stored in DOM as data-d attribute for O(1) querySelector lookup
     ///
@@ -434,18 +417,18 @@ pub struct VNode {
     /// `default` the sequence-visitor deserializer rejects the short array
     /// with `invalid length 5, expected struct VNode with 6 elements`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub djust_id: Option<String>,
+    pub djust_id: Option<Box<str>>,
     /// Cached HTML string for to_html() — set on dj-update="ignore" subtrees
     /// to avoid re-serializing unchanged content on every render.
     #[serde(skip)]
-    pub cached_html: Option<String>,
+    pub cached_html: Option<Box<str>>,
 }
 
 impl VNode {
     pub fn element(tag: impl Into<String>) -> Self {
         Self {
             tag: tag.into(),
-            attrs: HashMap::new(),
+            attrs: Attrs::new(),
             children: Vec::new(),
             text: None,
             key: None,
@@ -457,9 +440,9 @@ impl VNode {
     pub fn text(content: impl Into<String>) -> Self {
         Self {
             tag: "#text".to_string(),
-            attrs: HashMap::new(),
+            attrs: Attrs::new(),
             children: Vec::new(),
-            text: Some(content.into()),
+            text: Some(Box::<str>::from(content.into())),
             key: None,
             djust_id: None,
             cached_html: None,
@@ -467,7 +450,7 @@ impl VNode {
     }
 
     pub fn with_djust_id(mut self, id: impl Into<String>) -> Self {
-        self.djust_id = Some(id.into());
+        self.djust_id = Some(Box::<str>::from(id.into()));
         self
     }
 
@@ -477,7 +460,7 @@ impl VNode {
     }
 
     pub fn with_key(mut self, key: impl Into<String>) -> Self {
-        self.key = Some(key.into());
+        self.key = Some(Box::<str>::from(key.into()));
         self
     }
 
@@ -646,18 +629,9 @@ impl VNode {
         html.push('<');
         html.push_str(&self.tag);
 
-        // Sorting is needed only for multiple attributes. Most hydrated
-        // elements carry just their generated id.
-        if self.attrs.len() <= 1 {
-            for (key, value) in &self.attrs {
-                write_attribute(html, key, value);
-            }
-        } else {
-            let mut attrs: Vec<_> = self.attrs.iter().collect();
-            attrs.sort_unstable_by_key(|(key, _)| *key);
-            for (key, value) in attrs {
-                write_attribute(html, key, value);
-            }
+        // `Attrs` iterates in name order, the order the HTML is written in.
+        for (key, value) in &self.attrs {
+            write_attribute(html, key, value);
         }
 
         if is_void {
@@ -852,10 +826,10 @@ fn key_children_by_id(children: &mut [VNode]) {
             continue;
         };
         if count.get(&id).copied().unwrap_or(0) < 2 {
-            child.key = Some(id);
+            child.key = Some(Box::<str>::from(id));
         } else {
             let n = seen.entry(id.clone()).or_insert(0);
-            child.key = Some(format!("{id}{KEY_OCCURRENCE}{n}"));
+            child.key = Some(format!("{id}{KEY_OCCURRENCE}{n}").into());
             *n += 1;
         }
     }
@@ -967,7 +941,7 @@ fn key_by_id_inner(node: &mut VNode, exempt: bool) {
     }
     if !exempt && node.key.is_none() {
         if let Some(id) = node.attrs.get("id").filter(|id| !id.is_empty()) {
-            node.key = Some(format!("{ID_KEY_PREFIX}{id}"));
+            node.key = Some(format!("{ID_KEY_PREFIX}{id}").into());
         }
     }
     let exempt_children =
@@ -996,7 +970,7 @@ pub fn cache_ignore_subtree_html_in(node: &mut VNode, ns: Namespace) {
         if node.cached_html.is_none() {
             let mut html = String::new();
             node.write_html(&mut html, Place::in_context(ns));
-            node.cached_html = Some(html);
+            node.cached_html = Some(Box::<str>::from(html));
         }
         return; // Don't recurse — entire subtree is cached
     }
@@ -1985,7 +1959,7 @@ fn apply_text_changes(vdom: &mut VNode, changes: Vec<TextChange>) {
         for &index in &change.path {
             node = &mut node.children[index];
         }
-        node.text = Some(change.new_text);
+        node.text = Some(Box::<str>::from(change.new_text));
         let _ = clear_cached_html_on_path(vdom, &change.path);
     }
 }
@@ -2033,7 +2007,12 @@ pub fn try_text_patches(old_vdom: &VNode, old_html: &str, new_html: &str) -> Opt
         .map(|change| {
             let d = get_text_node_at_path(old_vdom, &change.path)
                 .and_then(|node| node.djust_id.clone());
-            set_text_patch(old_vdom, change.path, d, change.new_text)
+            set_text_patch(
+                old_vdom,
+                change.path,
+                Option::map(d, String::from),
+                change.new_text,
+            )
         })
         .collect();
     Some(patches)
@@ -2058,7 +2037,7 @@ pub fn set_text_patch(root: &VNode, path: Vec<usize>, d: Option<String>, text: S
         path,
         d,
         text,
-        parent_d,
+        parent_d: Option::map(parent_d, String::from),
         index,
     }
 }
@@ -2271,7 +2250,7 @@ mod tests {
     fn test_text_node() {
         let node = VNode::text("Hello World");
         assert!(node.is_text());
-        assert_eq!(node.text, Some("Hello World".to_string()));
+        assert_eq!(node.text, Some("Hello World".into()));
     }
 
     #[test]
@@ -2337,8 +2316,7 @@ mod tests {
 
     /// The tree without dj-ids: (tag, sorted attrs, text, children).
     fn shape(node: &VNode) -> String {
-        let mut attrs: Vec<_> = node.attrs.iter().filter(|(k, _)| *k != "dj-id").collect();
-        attrs.sort();
+        let attrs: Vec<_> = node.attrs.iter().filter(|(k, _)| *k != "dj-id").collect();
         let kids: Vec<String> = node.children.iter().map(shape).collect();
         format!("{}{:?}{:?}[{}]", node.tag, attrs, node.text, kids.join(","))
     }
@@ -2585,7 +2563,7 @@ mod tests {
                 VNode::element("g").with_child(VNode::element(tag).with_child(VNode::text("a"))),
                 {
                     let mut comment = VNode::element("#comment");
-                    comment.text = Some("c".to_string());
+                    comment.text = Some(Box::<str>::from("c".to_string()));
                     comment
                 },
             ] {
@@ -2914,7 +2892,7 @@ mod tests {
             let (mut new, ns) = parse_html_with_namespace(new).unwrap();
             fn mark(node: &mut VNode, cache: &str) {
                 if node.attrs.contains_key("dj-update") {
-                    node.cached_html = Some(cache.to_string());
+                    node.cached_html = Some(Box::<str>::from(cache.to_string()));
                 }
                 node.children.iter_mut().for_each(|c| mark(c, cache));
             }

@@ -41,7 +41,7 @@ compatibility with Django's URL resolution and static file handling.
 
 import logging
 import re
-from typing import Any, Callable, ClassVar, Dict, List, Optional, Set, Tuple, Type, Union
+from typing import Any, Callable, ClassVar, Dict, FrozenSet, List, Optional, Set, Tuple, Type, Union
 
 logger = logging.getLogger(__name__)
 
@@ -173,6 +173,27 @@ class TagHandler:
     #: did not change. Leave it ``False`` for a handler that may write any
     #: other name into the context — a wrong ``True`` serves stale HTML.
     BINDS_ONLY_AS_VAR: ClassVar[bool] = False
+
+    #: Promise that ``render``'s output depends ONLY on the tag's resolved
+    #: arguments, plus the context names listed in :attr:`ALSO_READS` (#4315).
+    #: The partial renderer then gives a use that binds nothing the root names
+    #: of its operands as dependencies instead of "anything": the tag keeps its
+    #: cached fragment while those inputs are unchanged, and so does a wrapper
+    #: (``{% if %}``, a loop) around it. Leave it ``False`` for a handler that
+    #: reads anything else — another context key, the request, the clock, the
+    #: database — or the page shows stale output until its arguments change.
+    #: Process and thread state that is not a context key (the active language,
+    #: the URLconf, settings) is assumed fixed for a connection: a change to it
+    #: without a page reload keeps the cached output. The declaration is a
+    #: class attribute, so a subclass inherits it; a subclass that reads more
+    #: must set it back to ``False``. An argument the engine cannot parse
+    #: cleanly (``_("…")``, an unbalanced quote) makes that use "may read
+    #: anything" again.
+    READS_ONLY_ARGS: ClassVar[bool] = False
+
+    #: With :attr:`READS_ONLY_ARGS`, the context names the handler reads
+    #: besides its arguments (``{% url %}`` reads ``request``) (#4315).
+    ALSO_READS: ClassVar[FrozenSet[str]] = frozenset()
 
     #: With ``RETURNS_BINDINGS``, receive the surrounding ``{% autoescape %}``
     #: policy as an ``autoescape=`` keyword: ``render(args, [content,]

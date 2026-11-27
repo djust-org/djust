@@ -58,9 +58,14 @@ class ClientConfigTagHandler(TagHandler):
         # Import here to avoid a circular import with live_tags at module
         # load time. live_tags imports from djust.config which pulls in
         # Django settings — safe to defer to render time.
-        from djust.templatetags.live_tags import _client_config_html
+        from djust.templatetags.live_tags import _client_config_html, _context_view
 
         request = context.get("request") if context else None
+        if request is None:
+            # #4322: a LiveView's render carries the view (or registers it for
+            # the render), not the request; the nonce comes from the view's
+            # request, as on the Django engine and for {% colocated_hook %}.
+            request = getattr(_context_view(context or {}), "request", None)
         # _client_config_html returns a SafeString (mark_safe) — declared
         # ``-> Any`` on the live_tags side, so coerce to ``str`` at this
         # boundary. The Rust CustomTag output path does NOT re-escape the

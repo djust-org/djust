@@ -24,7 +24,7 @@ use indexmap::IndexMap;
 fn row(v: Value) -> Value {
     let mut m = IndexMap::new();
     m.insert("v".into(), v);
-    Value::Object(m)
+    Value::Object(Box::new(m))
 }
 
 fn render_cached(source: &str, ctx: &Context) -> String {

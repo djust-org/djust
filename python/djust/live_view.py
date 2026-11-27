@@ -20,9 +20,6 @@ from .change_detection import CHANGE_DETECTION_IGNORED, deep_digest, fingerprint
 from .serialization import (  # noqa: F401
     DjangoJSONEncoder,
     StateRoundtripJSONEncoder,
-    decode_private_model_refs,
-    decode_state_roundtrip,
-    encode_private_model_refs,
 )
 from .session_utils import (  # noqa: F401
     DEFAULT_SESSION_TTL,
@@ -73,6 +70,7 @@ __all__ = [
     "LiveView",
     "live_view",
     "DjangoJSONEncoder",
+    "StateRoundtripJSONEncoder",
     "DEFAULT_SESSION_TTL",
     "cleanup_expired_sessions",
     "get_session_stats",

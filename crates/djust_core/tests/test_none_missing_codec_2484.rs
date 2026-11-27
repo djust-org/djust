@@ -177,7 +177,8 @@ fn the_pair_stays_distinct_through_every_container_that_can_hold_it() {
             pairs
                 .into_iter()
                 .map(|(k, v)| (djust_core::ObjectKey::Str(k.to_string()), v))
-                .collect(),
+                .collect::<indexmap::IndexMap<_, _>>()
+                .into(),
         )
     };
     match round_trip(&obj(vec![("a", Value::None), ("b", Value::Missing)])) {
@@ -208,7 +209,8 @@ fn a_user_dict_cannot_forge_a_missing_by_near_miss() {
             pairs
                 .into_iter()
                 .map(|(k, v)| (djust_core::ObjectKey::Str(k), v))
-                .collect(),
+                .collect::<indexmap::IndexMap<_, _>>()
+                .into(),
         )
     };
 

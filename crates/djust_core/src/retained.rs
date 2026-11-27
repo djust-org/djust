@@ -20,6 +20,11 @@ fn key_bytes(key: &ObjectKey) -> usize {
         ObjectKey::Tuple(items) => {
             items.capacity() * size_of::<ObjectKey>() + items.iter().map(key_bytes).sum::<usize>()
         }
+        ObjectKey::Other(other) => {
+            size_of::<crate::object_key::OtherKey>()
+                + other.display.capacity()
+                + other.repr.capacity()
+        }
         _ => 0,
     }
 }
@@ -45,19 +50,19 @@ impl Value {
             Value::List(items) | Value::Tuple(items) | Value::DictView { items, .. } => {
                 items_bytes(items)
             }
-            Value::NamedTuple {
-                name,
-                fields,
-                items,
-            } => {
-                name.capacity()
-                    + fields.capacity() * size_of::<String>()
-                    + fields.iter().map(String::capacity).sum::<usize>()
+            Value::NamedTuple { meta, items } => {
+                size_of::<crate::NamedTupleMeta>()
+                    + meta.name.capacity()
+                    + meta.fields.capacity() * size_of::<String>()
+                    + meta.fields.iter().map(String::capacity).sum::<usize>()
                     + items_bytes(items)
             }
             Value::Object(map) => {
-                // IndexMap: an entries Vec of (hash, key, value) plus a table of indices.
-                map.capacity() * (size_of::<usize>() + size_of::<ObjectKey>() + size_of::<Value>())
+                // The box (#4319), then the IndexMap's own heap: an entries
+                // Vec of (hash, key, value) plus a table of indices.
+                size_of::<indexmap::IndexMap<ObjectKey, Value>>()
+                    + map.capacity()
+                        * (size_of::<usize>() + size_of::<ObjectKey>() + size_of::<Value>())
                     + table_bytes(map.capacity(), size_of::<usize>())
                     + map
                         .iter()
@@ -98,5 +103,15 @@ mod tests {
         let small = Value::List((0..10).map(Value::Integer).collect());
         let large = Value::List((0..1000).map(Value::Integer).collect());
         assert!(large.retained_bytes() >= 100 * small.retained_bytes());
+    }
+
+    /// #4319: a view holds one `Value` per list item and per dict entry of
+    /// its state, and one `ObjectKey` per dict entry, so their sizes are most
+    /// of what its Rust copy of the state costs. The large, rare variants are
+    /// boxed to keep them here.
+    #[test]
+    fn a_value_and_a_key_stay_small() {
+        assert!(size_of::<Value>() <= 40, "{}", size_of::<Value>());
+        assert!(size_of::<ObjectKey>() <= 32, "{}", size_of::<ObjectKey>());
     }
 }
