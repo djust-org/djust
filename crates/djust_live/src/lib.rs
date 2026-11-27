@@ -166,12 +166,19 @@ type DjModelFieldsKey = (String, Vec<PathBuf>);
 static DJ_MODEL_FIELDS_CACHE: Lazy<DashMap<DjModelFieldsKey, Vec<String>>> =
     Lazy::new(DashMap::new);
 const DJ_MODEL_FIELDS_CACHE_MAX: usize = 512;
+/// `(all, unconditional)` static dj-model bindings per template (see
+/// `RustLiveView.writable_dj_model_fields`), keyed and bounded like
+/// [`DJ_MODEL_FIELDS_CACHE`].
+type DjModelFieldSplit = (Vec<String>, Vec<String>);
+static DJ_MODEL_FIELD_SPLIT_CACHE: Lazy<DashMap<DjModelFieldsKey, DjModelFieldSplit>> =
+    Lazy::new(DashMap::new);
 
 /// Forget every cached `dj_model_fields(cache=True)` result (hot reload, a
 /// settings change, test isolation).
 #[pyfunction]
 fn clear_dj_model_fields_cache() {
     DJ_MODEL_FIELDS_CACHE.clear();
+    DJ_MODEL_FIELD_SPLIT_CACHE.clear();
 }
 
 /// Serializable representation of RustLiveViewBackend for Redis storage
@@ -1078,6 +1085,67 @@ impl RustLiveViewBackend {
                 }
                 Err(_) => Ok(Vec::new()),
             }
+        })
+    }
+
+    /// The dj-model fields a client may write after the last render: the
+    /// template's static bindings that this view's current state renders.
+    ///
+    /// A binding on an always-rendered path (see
+    /// `djust_templates::extract_dj_model_field_split`) is granted outright. A
+    /// binding inside an `{% if %}`/`{% for %}` branch, a custom block tag, an
+    /// include or a lazy site is granted only when a bindings-only render of
+    /// the current state emits it from template text
+    /// (`Template::render_dj_model_bindings_named`), so an untaken branch
+    /// grants nothing and rendered data can never add a field. That render
+    /// runs only for templates that have such bindings, changes no render
+    /// cache and does not execute inline custom tags. In authenticated
+    /// partial-root mode the provenance-checked fields of the committed page
+    /// are returned. Any failure grants only the unconditional bindings.
+    #[pyo3(signature = (cache=false))]
+    fn writable_dj_model_fields(&self, cache: bool) -> PyResult<Vec<String>> {
+        guard_panic("writable_dj_model_fields", move || {
+            if self.potential_authenticated_partial_root {
+                return Ok(self.authenticated_model_fields.clone());
+            }
+            use djust_templates::inheritance::FilesystemTemplateLoader;
+            let key = (self.template_source.to_string(), self.template_dirs.clone());
+            let loader = FilesystemTemplateLoader::new(self.template_dirs.clone());
+            let cached = if cache {
+                DJ_MODEL_FIELD_SPLIT_CACHE
+                    .get(&key)
+                    .map(|hit| hit.value().clone())
+            } else {
+                None
+            };
+            let (all, unconditional) = match cached {
+                Some(split) => split,
+                None => match djust_templates::extract_dj_model_field_split(
+                    &self.template_source,
+                    Some(&loader),
+                ) {
+                    Ok(split) => {
+                        if cache {
+                            if DJ_MODEL_FIELD_SPLIT_CACHE.len() >= DJ_MODEL_FIELDS_CACHE_MAX {
+                                DJ_MODEL_FIELD_SPLIT_CACHE.clear();
+                            }
+                            DJ_MODEL_FIELD_SPLIT_CACHE.insert(key, split.clone());
+                        }
+                        split
+                    }
+                    Err(_) => return Ok(Vec::new()),
+                },
+            };
+            if all.len() == unconditional.len() {
+                return Ok(all);
+            }
+            let rendered = self.render_dj_model_bindings(&loader).unwrap_or_default();
+            let mut fields: Vec<String> = all
+                .into_iter()
+                .filter(|f| unconditional.contains(f) || rendered.contains(f))
+                .collect();
+            fields.sort();
+            Ok(fields)
         })
     }
 
@@ -2172,6 +2240,38 @@ impl RustLiveViewBackend {
     /// Bind the render-time handle overlay (#3936) in a scope above the state, so a read of a
     /// state model sees its floored handle and the state itself is untouched (no copy of the
     /// shared map). Keys are never marked safe here: `safe_keys` names the state values.
+    /// Bindings-only render of the current state (see
+    /// [`Self::writable_dj_model_fields`]). Builds the context the way
+    /// `render_result` does and touches no render cache.
+    fn render_dj_model_bindings(
+        &self,
+        loader: &djust_templates::inheritance::FilesystemTemplateLoader,
+    ) -> PyResult<Vec<String>> {
+        let template_arc = cached_template(&self.template_source)?;
+        let _render_env = self.render_env.as_ref().map(RenderEnvGuard::install);
+        let _bridge_memo = djust_core::context::BridgeFrameCacheGuard;
+        let mut context = Context::from_shared(self.state.clone());
+        context.set_guard_dynamic_recursive_partials(true);
+        for key in &self.safe_keys {
+            context.mark_safe(key.clone());
+        }
+        context.set_dj_if_id_namespace(self.dj_if_id_namespace.as_str());
+        if let Some(raw) = &self.raw_py_values {
+            let cloned: HashMap<String, Py<PyAny>> = Python::attach(|py| {
+                raw.iter()
+                    .map(|(k, v)| (k.clone(), v.clone_ref(py)))
+                    .collect()
+            });
+            context.set_raw_py_objects(cloned);
+        }
+        self.apply_render_handles(&mut context);
+        Ok(template_arc.render_dj_model_bindings_named(
+            &mut context,
+            loader,
+            self.template_origin.as_deref(),
+        )?)
+    }
+
     fn apply_render_handles(&self, context: &mut Context) {
         if let Some(handles) = &self.render_handles {
             context.push();
@@ -4441,7 +4541,7 @@ fn template_compiled_at_generation(template_source: &str) -> Option<u64> {
 // original-object sidecar for backend callers.
 #[allow(clippy::too_many_arguments)]
 #[pyfunction]
-#[pyo3(signature = (template_source, context, template_dirs, safe_keys=None, auto_call=None, string_if_invalid=None, template_name=None, raw_context=None, *, autoescape=true, compiled_template=None, assignments=None, uncached_template_dirs=None))]
+#[pyo3(signature = (template_source, context, template_dirs, safe_keys=None, auto_call=None, string_if_invalid=None, template_name=None, raw_context=None, *, autoescape=true, compiled_template=None, assignments=None, uncached_template_dirs=None, dj_model_bindings=None))]
 fn render_template_with_dirs(
     template_source: String,
     context: &Bound<'_, PyAny>,
@@ -4455,6 +4555,7 @@ fn render_template_with_dirs(
     compiled_template: Option<PyRef<'_, CompiledTemplate>>,
     assignments: Option<&Bound<'_, PyDict>>,
     uncached_template_dirs: Option<Vec<String>>,
+    dj_model_bindings: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<String> {
     guard_panic("render_template_with_dirs", move || {
         use djust_templates::inheritance::FilesystemTemplateLoader;
@@ -4509,8 +4610,25 @@ fn render_template_with_dirs(
         // Render with the loader to support {% include %} tags
         // The template's own name is what a relative `{% extends "./x" %}`
         // resolves against (#2517); `None` leaves such a name unchanged.
+        // `dj_model_bindings` (a Python set) asks for the template-text
+        // dj-model bindings this render emits: a bindings-only render of the
+        // same context (`Template::render_dj_model_bindings_named`), which
+        // runs no inline custom tag, so nothing the template calls runs twice
+        // with output. An embedded child's allowlist is narrowed to them.
+        let mut binding_ctx = dj_model_bindings.map(|_| ctx.clone());
         let rendered =
             template_arc.render_with_loader_named_mut(&mut ctx, &loader, template_name.as_deref());
+        if let (Some(target), Some(binding_ctx)) = (dj_model_bindings, binding_ctx.as_mut()) {
+            if rendered.is_ok() {
+                for field in template_arc.render_dj_model_bindings_named(
+                    binding_ctx,
+                    &loader,
+                    template_name.as_deref(),
+                )? {
+                    target.call_method1("add", (field,))?;
+                }
+            }
+        }
         if let Some(assignments) = assignments {
             for (name, value) in ctx.root_assignments() {
                 assignments.set_item(name, value.into_pyobject(assignments.py())?)?;
@@ -7993,20 +8111,6 @@ fn dj_model_fields_from_template(
     })
 }
 
-/// The `dj-model` values bound by elements of rendered HTML, outside embedded
-/// child views (see `djust_vdom::lazy_provenance::rendered_model_fields`).
-///
-/// The Python side intersects this with the template's static bindings
-/// ([`dj_model_fields_from_template`] / `RustLiveView.dj_model_fields`), so a
-/// field is writable only when the template binds it AND the branch that binds
-/// it was rendered for this view instance.
-#[pyfunction]
-fn rendered_dj_model_fields(py: Python<'_>, html: &str) -> PyResult<Vec<String>> {
-    guard_panic("rendered_dj_model_fields", move || {
-        Ok(py.detach(|| djust_vdom::lazy_provenance::rendered_model_fields(html)))
-    })
-}
-
 /// Resolve parsed literal relative includes against a named template.
 #[pyfunction]
 fn resolve_relative_template_includes(source: &str, template_name: &str) -> PyResult<String> {
@@ -8194,7 +8298,6 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(active_number_format, m)?)?;
     m.add_function(wrap_pyfunction!(active_unlocalized_number_format, m)?)?;
     m.add_function(wrap_pyfunction!(dj_model_fields_from_template, m)?)?;
-    m.add_function(wrap_pyfunction!(rendered_dj_model_fields, m)?)?;
     m.add_function(wrap_pyfunction!(clear_dj_model_fields_cache, m)?)?;
 
     // Render environment (ADR-029)

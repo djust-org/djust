@@ -6,7 +6,7 @@ view instance when the client sends dj-model changes.
 """
 
 import logging
-from typing import Any, List, Optional
+from typing import Any, Iterable, List, Optional
 
 try:
     from ..decorators import event_handler
@@ -16,11 +16,11 @@ except (ImportError, SystemError):
         return fn if fn is not None else (lambda f: f)
 
 
-# Rust template walker that derives the dj-model allowlist from the TEMPLATE
-# SOURCE (immune to rendered-output poisoning; see _dj_model_fields below).
+# Rust template walker for the static dj-model bindings of a template SOURCE
+# (template text only; see _dj_model_fields below).
 # Absolute, not ``.._rust``: the unit tests load this file standalone, where the
 # parent package does not exist.
-from djust._rust import dj_model_fields_from_template, rendered_dj_model_fields
+from djust._rust import dj_model_fields_from_template
 
 
 logger = logging.getLogger(__name__)
@@ -41,26 +41,6 @@ FORBIDDEN_MODEL_FIELDS = frozenset(
         "_view_path",
     }
 )
-
-
-def _narrow_to_rendered(static_fields: Any, rendered_html: Any) -> "frozenset[str]":
-    """Keep the static template bindings that this render actually emitted.
-
-    ``static_fields`` is every ``dj-model`` the template source binds, across
-    all ``{% if %}`` branches; ``rendered_html`` is the output of the render
-    that just ran. The result is their intersection, so a binding that sits in
-    a branch not rendered for this view instance is not writable. Fails closed:
-    no output, or an error reading it, allows nothing.
-    """
-    static = frozenset(static_fields)
-    if not static or not rendered_html:
-        return frozenset()
-    try:
-        rendered = rendered_dj_model_fields(str(rendered_html))
-    except Exception:  # noqa: BLE001 — never let allowlist collection break a render
-        logger.warning("[dj-model] rendered-binding collection failed; failing closed")
-        return frozenset()
-    return static.intersection(rendered)
 
 
 class ModelBindingMixin:
@@ -84,32 +64,30 @@ class ModelBindingMixin:
     # ``dj-model`` binding (e.g. a value written purely programmatically).
     allowed_model_fields: Optional[List[str]] = None
 
-    # Auto-allowlist (CWE-915 mass-assignment fix): the static
-    # ``dj-model="<field>"`` bindings of the TEMPLATE SOURCE, narrowed to the
-    # ones present in THIS view instance's last rendered output. A binding in an
-    # ``{% if %}`` branch that was not rendered for this instance is not
-    # writable; it becomes writable once a re-render emits it, and stops being
-    # writable once a re-render drops it. Populated each render by
+    # Auto-allowlist (CWE-915 mass-assignment fix): the ``dj-model="<field>"``
+    # bindings of the template's own text that THIS view instance's current
+    # state renders. Populated each render by
     # ``_record_dj_model_fields_from_rust()`` (LiveView paths) /
-    # ``_record_dj_model_fields_from_source()`` (embedded children), which read
-    # the binding set from the Rust template engine.
+    # ``_record_dj_model_fields_from_source()`` (embedded children).
     #
-    # SECURITY (finding #3): the set is derived from the parsed template AST's
-    # ``Node::Text`` literals — developer-authored template text. Attacker data
-    # can NEVER reach a ``Node::Text`` literal; it only ever flows through
-    # ``{{ }}`` ``Node::Variable`` substitution at render time. This is the
-    # reason the collection is done from the template SOURCE and not from the
-    # RENDERED HTML: rendered output is attacker-influenceable (text nodes,
-    # unquoted-interpolated attrs ``<div x={{ v }}>``, ``|safe`` content) and
-    # parsing it re-opened the mass-assignment hole twice in review. A dynamic
-    # ``dj-model="{{ var }}"`` binding straddles Text/Variable nodes so its
-    # value is NOT captured — that field must be opted in via
-    # ``allowed_model_fields`` (fail-closed).
+    # SECURITY: a binding counts only when it comes from template text
+    # (``Node::Text`` in the Rust engine, ``TextNode`` in Django's) — data only
+    # reaches output through ``{{ }}`` substitution, filters and tags, never
+    # through template text, so rendered data (text nodes, unquoted
+    # interpolated attrs ``<div x={{ v }}>``, ``|safe`` content, a dynamic
+    # ``dj-model="{{ var }}"``) can never add a field; such a field must be
+    # opted in via ``allowed_model_fields`` (fail-closed). The rendered HTML is
+    # never parsed for bindings.
     #
-    # The rendered output only ever NARROWS that set (intersection, never
-    # union): it is parsed as an HTML5 tree and only ``dj-model`` element
-    # attributes outside embedded child views count, so output that is not a
-    # template-authored binding cannot add a field the template never binds.
+    # And a binding counts only when its text RENDERED for the current state:
+    # one inside an ``{% if %}`` branch that was not taken is not writable; it
+    # becomes writable once a re-render takes the branch and stops being
+    # writable once a re-render drops it. On the LiveView paths the Rust view
+    # grants bindings on always-rendered paths outright and checks the others
+    # with a bindings-only render of the current state
+    # (``RustLiveView.writable_dj_model_fields``); embedded children record
+    # the ``TextNode`` runs their Django render executed
+    # (``djust._dj_model_bindings.record_bindings``).
     #
     # Defaults to an empty frozenset as a CLASS attribute so the attribute
     # always exists even before the first render and for non-LiveView users of
@@ -119,9 +97,8 @@ class ModelBindingMixin:
     # passes the ``_``-prefix / FORBIDDEN_MODEL_FIELDS / ``hasattr`` checks.
     _dj_model_fields: "frozenset[str]" = frozenset()
 
-    def _record_dj_model_fields_from_rust(self, rust_view: Any, rendered_html: Any) -> None:
-        """Populate ``_dj_model_fields`` from a live ``RustLiveView``'s template
-        and the HTML that render produced (``rendered_html``).
+    def _record_dj_model_fields_from_rust(self, rust_view: Any) -> None:
+        """Populate ``_dj_model_fields`` from a live ``RustLiveView``'s template.
 
         Called from every LiveView render site (``render``,
         ``render_full_template``/``_render_full_template_inner``, and
@@ -132,12 +109,12 @@ class ModelBindingMixin:
         helper avoids parallel-path drift (the same invariant must hold on all
         render paths; see CLAUDE.md #1646).
 
-        ``rust_view.dj_model_fields()`` walks the parsed template AST in Rust
-        (Text-node literals only; ``{% extends %}``/``{% include %}`` covered),
-        so the result is immune to rendered-output poisoning. That set spans
-        every ``{% if %}`` branch, so it is then narrowed to the bindings
-        present in ``rendered_html`` (see :func:`_narrow_to_rendered`): only
-        the branches rendered for this instance grant writes.
+        ``rust_view.writable_dj_model_fields()`` walks the parsed template AST
+        in Rust (Text-node literals only; ``{% extends %}``/``{% include %}``
+        covered) and keeps the bindings the current state renders: those on
+        always-rendered paths, plus the conditional ones a bindings-only render
+        of the current state emits from template text. Rendered data never
+        adds a field, and an untaken ``{% if %}`` branch grants nothing.
 
         The result is stored as an instance ``frozenset``, shadowing the class
         default. It is a framework slot (recomputed each render, never
@@ -145,7 +122,7 @@ class ModelBindingMixin:
         see the ``_dj_model_fields`` placeholder assigned before the
         ``_framework_attrs`` snapshot in ``LiveView.__init__``.
         """
-        if rust_view is None or not rendered_html:
+        if rust_view is None:
             self._dj_model_fields = frozenset()
             return
         from .._render_caches import render_caches_enabled
@@ -153,21 +130,21 @@ class ModelBindingMixin:
         try:
             # Kept per template source while templates are cached (N-39): the
             # walk covers every include and was a third of a page's CPU.
-            fields = rust_view.dj_model_fields(cache=render_caches_enabled())
+            fields = rust_view.writable_dj_model_fields(cache=render_caches_enabled())
         except Exception:  # noqa: BLE001 — never let allowlist collection break a render
             # Fail closed: leave no auto-allowed fields (explicit
             # allowed_model_fields still applies).
             logger.warning("[dj-model] auto-allowlist collection failed; failing closed")
             self._dj_model_fields = frozenset()
             return
-        self._dj_model_fields = _narrow_to_rendered(fields, rendered_html)
+        self._dj_model_fields = frozenset(fields)
 
     def _record_dj_model_fields_from_source(
         self,
         template_source: Optional[str],
         template_dirs: Optional[List[str]] = None,
         *,
-        rendered_html: Any,
+        rendered_bindings: Optional[Iterable[str]],
     ) -> None:
         """Populate ``_dj_model_fields`` from a raw template source string.
 
@@ -177,10 +154,12 @@ class ModelBindingMixin:
         CHILD's own template source via the Rust template walker
         (``dj_model_fields_from_template``). Same security property as
         :meth:`_record_dj_model_fields_from_rust` (Text-node literals only),
-        narrowed the same way to the bindings present in ``rendered_html``, the
-        child's own output from this render.
+        narrowed to ``rendered_bindings``: the template-text bindings the
+        child's Django render executed
+        (:func:`djust._dj_model_bindings.record_bindings`). ``None`` (nothing
+        recorded) allows nothing.
         """
-        if not template_source or not rendered_html:
+        if not template_source or not rendered_bindings:
             self._dj_model_fields = frozenset()
             return
         try:
@@ -189,7 +168,7 @@ class ModelBindingMixin:
             logger.warning("[dj-model] auto-allowlist collection failed; failing closed")
             self._dj_model_fields = frozenset()
             return
-        self._dj_model_fields = _narrow_to_rendered(fields, rendered_html)
+        self._dj_model_fields = frozenset(fields).intersection(rendered_bindings)
 
     @event_handler
     def update_model(self, field: str = "", value: Any = None, **kwargs: Any) -> None:

@@ -5512,6 +5512,11 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             // registries. A standalone render has no sibling to hand
             // bindings to, so they are dropped here, as the AssignTag arm
             // below drops its updates.
+            if R::BINDINGS_ONLY {
+                // A bindings-only render contributes the body's own bindings
+                // and never runs the handler (no application code twice).
+                return render_nodes_output::<L, R>(children, context, loader);
+            }
             let (html, _bindings) = call_block_custom_tag(name, args, children, context, loader)?;
             Ok((html).into())
         }
@@ -5570,6 +5575,12 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             // (#2547). A standalone render has no sibling to hand bindings
             // to, so they are dropped here, as the AssignTag arm above drops
             // its updates.
+            if R::BINDINGS_ONLY {
+                // Tag output never carries a template-authored binding, and a
+                // bindings-only render must not run application code twice
+                // (e.g. a `{% live_render %}` mounting a child).
+                return Ok(R::default());
+            }
             let (html, _bindings) = call_custom_tag(name, args, context)?;
             Ok((html).into())
         }
