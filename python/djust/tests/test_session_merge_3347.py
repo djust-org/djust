@@ -705,9 +705,11 @@ def test_non_string_keys_are_tolerated():
 
 
 def test_cached_dbs_cache_write_runs_after_the_transaction(monkeypatch):
-    """A hung cache write must not hold the row lock: the cache is written once
-    the transaction that holds it is over."""
+    """A hung cache step must not hold the row lock: the cache is touched once
+    the transaction that holds it is over. The step clears the entry (#4324),
+    so the next load reads the merged row from the database."""
     from django.conf import settings
+    from django.contrib.sessions.backends.cached_db import SessionStore as CachedStore
     from django.core.cache import caches
 
     from djust import _session_merge
@@ -715,24 +717,57 @@ def test_cached_dbs_cache_write_runs_after_the_transaction(monkeypatch):
     monkeypatch.setattr(_session_merge, "_supports_row_lock", lambda backend: True)
     cache = caches[settings.SESSION_CACHE_ALIAS]
     seen = []
-    original = cache.set
+    original_delete = cache.delete
 
-    def spy(key, value, *args, **kwargs):
-        seen.append((connection.in_atomic_block, type(value)))
-        return original(key, value, *args, **kwargs)
+    def spy(key, *args, **kwargs):
+        seen.append(connection.in_atomic_block)
+        return original_delete(key, *args, **kwargs)
 
     save = _tracked(CACHED_DB)
     key = save.session_key
-    monkeypatch.setattr(cache, "set", spy)
+    monkeypatch.setattr(cache, "delete", spy)
     _elsewhere(CACHED_DB, key, idle_ts="NEW")
     seen.clear()
     save["liveview_/x/"] = {"count": 1}
     save_merged(save, key)
 
-    assert seen and all(in_atomic is False for in_atomic, _ in seen), seen
-    assert all(kind is dict for _, kind in seen), "a tracker reached the cache"
-    cached = original(save.cache_key) if False else cache.get(save.cache_key_prefix + key)
-    assert cached["idle_ts"] == "NEW" and cached["liveview_/x/"] == {"count": 1}
+    assert seen and all(in_atomic is False for in_atomic in seen), seen
+    assert cache.get(save.cache_key_prefix + key) is None
+    loaded = CachedStore(key).load()
+    assert loaded["idle_ts"] == "NEW" and loaded["liveview_/x/"] == {"count": 1}
+    assert type(cache.get(save.cache_key_prefix + key)) is dict, "a tracker reached the cache"
+
+
+def test_a_late_cached_db_cache_step_cannot_leave_an_older_copy(monkeypatch):
+    """#4324: two merging saves whose after-commit cache steps land in the
+    reverse order. A write there left the late writer's older copy in the
+    cache; a delete leaves nothing, and the next load reads the newer row."""
+    from django.conf import settings
+    from django.contrib.sessions.backends.cached_db import SessionStore as CachedStore
+    from django.core.cache import caches
+
+    from djust import _session_merge
+
+    cache = caches[settings.SESSION_CACHE_ALIAS]
+    cache_step = _session_merge._cache_write
+    held = []
+    monkeypatch.setattr(_session_merge, "_cache_write", held.append)
+
+    late = _tracked(CACHED_DB)
+    key = late.session_key
+    late["liveview_/x/"] = {"count": "old"}
+    save_merged(late, key)  # commits first; its cache step is held back
+    newer = _store(CACHED_DB)(key)
+    assert track_session(newer)
+    newer["liveview_/x/"] = {"count": "new"}
+    save_merged(newer, key)
+    assert len(held) == 2  # the stores each merge wrote through, in commit order
+
+    cache_step(held[1])
+    cache_step(held[0])  # the late writer's step lands last
+
+    assert cache.get(late.cache_key_prefix + key) is None
+    assert CachedStore(key).load()["liveview_/x/"] == {"count": "new"}
 
 
 # --------------------------------------------------------------------------- #

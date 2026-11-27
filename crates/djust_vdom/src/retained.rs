@@ -2,10 +2,10 @@
 //!
 //! Computed from capacities and `size_of`, never read from the allocator, so
 //! the same tree reports the same bytes on every machine. See
-//! `djust_core::retained` for what that does and does not include.
+//! `djust_base::retained` for what that does and does not include.
 
 use crate::VNode;
-use djust_core::retained::table_bytes;
+use djust_base::retained::table_bytes;
 use std::mem::size_of;
 
 /// What a tree holds, split by what holds it.

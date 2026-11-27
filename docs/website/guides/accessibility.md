@@ -421,6 +421,23 @@ report. Two flags compose with it:
 `--live` (runtime probe) audit modes, bringing accessibility into the same
 `djust_audit` workflow.
 
+The template scan cannot see what only exists after render: text and
+non-text contrast (WCAG 1.4.3, 1.4.11), landmarks, heading order, or a name
+a component computes. For those, `--a11y --url` runs
+[axe-core](https://github.com/dequelabs/axe-core) over rendered pages in
+headless Chromium (`pip install 'djust[a11y]'`):
+
+```bash
+python manage.py djust_audit --a11y --url http://localhost:8000/dashboard/
+# or a route of every view in permissions.yaml, failing on serious/critical
+python manage.py djust_audit --a11y --base-url http://localhost:8000 --strict
+```
+
+`--strict` exits `1` on a `serious` or `critical` violation; `minor` and
+`moderate` ones stay warnings. The `--a11y --url` section of the
+[`djust_audit` guide](djust-audit.md) covers page selection, output and exit
+codes.
+
 ## Theming color-contrast WCAG validation
 
 Color contrast is the other half of accessibility djust validates — and it

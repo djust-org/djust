@@ -119,6 +119,14 @@ gcs = [
 azure = [
     "azure-storage-blob>=12.19,<13",
 ]
+# The rendered-page accessibility pass, `djust_audit --a11y --url` (#3700):
+# Playwright drives headless Chromium (run `playwright install chromium` once)
+# and axe-playwright-python ships axe-core's axe.min.js, which djust reads from
+# the installed package and injects itself. Not in `all`: it is audit tooling.
+a11y = [
+    "playwright>=1.40,<2",
+    "axe-playwright-python>=0.1.9,<0.2",
+]
 all = [
     "djust[daphne,redis,compression,performance,admin,deploy,theming,components,s3,gcs,azure]",
 ]

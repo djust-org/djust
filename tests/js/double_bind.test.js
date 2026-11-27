@@ -43,6 +43,7 @@ describe('Double bind prevention on VDOM-inserted elements', () => {
             'utf-8',
         );
         window.eval(clientCode);
+        window.document.dispatchEvent(new window.Event('DOMContentLoaded'));
 
         extraElements = [];
     });

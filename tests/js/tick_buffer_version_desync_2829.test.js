@@ -62,6 +62,7 @@ function createDom() {
     dom.window.WebSocket = MockWebSocket;
 
     dom.window.eval(clientCode);
+    dom.window.document.dispatchEvent(new dom.window.Event('DOMContentLoaded'));
 
     function getSeqState() {
         return dom.window.djust._getEventSeqState();

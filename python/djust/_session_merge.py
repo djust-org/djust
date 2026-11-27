@@ -44,8 +44,11 @@ djust saves. It cannot reach a writer that does not merge and read earlier
 (Django's own ``SessionMiddleware`` saves its whole dict at the end of its
 request). ``cache``, ``file`` and SQLite have no row lock, so there the window
 shrinks to the read-to-write interval and the read and the write are two
-statements outside any transaction of ours. ``cached_db``'s cache write runs
-after the transaction ends, so a slow cache never holds the row lock.
+statements outside any transaction of ours. ``cached_db``'s cache is touched
+after the transaction ends, so a slow cache never holds the row lock, and it is
+cleared rather than written (#4324): a late writer's cache write landing after
+a newer one's would leave the older copy in the cache, while a late delete only
+makes the next read refill from the database, which is right.
 
 Left as they were, with a plain whole-session ``save()``:
 
@@ -644,7 +647,7 @@ def _merge_and_save(
 
 
 def _write(writer: Any) -> Optional[Callable[[], None]]:
-    """``writer.save()``; for ``cached_db`` the cache write is returned to run
+    """``writer.save()``; for ``cached_db`` the cache step is returned to run
     after the transaction, so a slow cache never holds the row lock."""
     from django.contrib.sessions.backends import cached_db
     from django.contrib.sessions.backends import db as db_backend
@@ -662,8 +665,15 @@ def _write(writer: Any) -> Optional[Callable[[], None]]:
 
 
 def _cache_write(writer: Any) -> None:
+    """``cached_db``'s cache step after the commit: drop the entry (#4324).
+
+    It runs outside the row lock, so two writers' cache steps can land in either
+    order. Writing the merged dict here let a late writer leave its older copy in
+    the cache after the newer one's write; deleting is order-free, and the next
+    load reads the database row (which the lock kept right) and refills the cache.
+    """
     try:
-        writer._cache.set(writer.cache_key, writer._session, writer.get_expiry_age())
+        writer._cache.delete(writer.cache_key)
     except Exception as exc:  # noqa: BLE001 — as ``cached_db.save`` itself: the database has it
         from ._exposure_diagnostics import log_failure
 
@@ -671,7 +681,7 @@ def _cache_write(writer: Any) -> None:
         log_failure(
             logger,
             exc,
-            "State save: the session cache could not be written; the database has it",
+            "State save: the session cache entry could not be cleared; the database has it",
             level="error",
             traceback=True,
         )
