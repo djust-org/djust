@@ -610,8 +610,15 @@ def websocket_run(browser, base, failures):
 
     err = run.outcome("ed-a", "boom", {})
     run.check(err["status"] == "error", f"pushEvent outcome error: the handler raised ({err})")
-    other = run.outcome("ed-a", "bump", {})
-    run.check(other["status"] == "ok", "an error outcome settles only its own event")
+    # A raising handler's error (DEBUG detail included) names its ref: an event
+    # still pending behind it is not settled by it.
+    both = run.js(
+        "() => { const h = window.djust.getHook('#ed-a');"
+        " const a = h.pushEvent('boom', {}, {outcome: true});"
+        " const b = h.pushEvent('slow_ack', {}, {outcome: true});"
+        " return Promise.all([a, b]).then(os => os.map(o => o.status)); }"
+    )
+    run.check(both == ["error", "ok"], f"an error outcome settles only its own event ({both})")
 
     # IME composition and caret across a patch to the widget's own element.
     run.page.click("#ed-a-host .ql-editor")

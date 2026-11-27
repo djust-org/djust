@@ -61,6 +61,10 @@ class _Page(LiveView):
         pass
 
     @event_handler()
+    def boom(self):
+        raise ValueError("boom")
+
+    @event_handler()
     @rate_limit(rate=0.001, burst=1, on_exceed="drop")
     def once(self):
         pass
@@ -111,6 +115,32 @@ async def test_per_handler_rate_limit_is_coded_and_echoes_the_ref():
     (frame,) = _errors(transport)
     assert frame["code"] == "rate_limited"
     assert frame["ref"] == 2
+
+
+@pytest.mark.parametrize("debug", [True, False])
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+async def test_raising_handler_error_echoes_the_ref(debug, settings):
+    """With or without DEBUG detail, a handler that raises answers its own event."""
+    settings.DEBUG = debug
+    runtime, transport = await _runtime()
+    await runtime.dispatch_event({"type": "event", "event": "boom", "params": {}, "ref": 23})
+    (frame,) = _errors(transport)
+    assert frame["ref"] == 23
+    if debug:
+        assert "boom" in str(frame)
+
+
+def test_handle_exception_echoes_the_ref_only_inside_an_event():
+    from djust.security.error_handling import handle_exception
+
+    try:
+        raise ValueError("x")
+    except ValueError as exc:
+        assert "ref" not in handle_exception(exc, error_type="event")
+        with event_error_ref(4):
+            assert handle_exception(exc, error_type="event")["ref"] == 4
+            assert handle_exception(exc, error_type="event", expose_details=False)["ref"] == 4
 
 
 def test_error_frame_outside_an_event_has_no_ref():
