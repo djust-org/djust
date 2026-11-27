@@ -191,14 +191,15 @@ The ModelBindingMixin enforces these rules:
   `|safe` HTML, `dj-model="{{ field }}"`) never adds one
 - A binding inside the body of a **custom block tag** is never
   template-derived (`{% ifperm %}<input dj-model="note">{% endifperm %}`, a
-  library block tag, `{% ifchanged %}`, an inclusion tag's template): the tag
+  library block tag, `{% ifchanged %}`, `{% filter %}`, an inclusion tag's template): the tag
   decides what of its body reaches the page, so list such fields in
   `allowed_model_fields`. System check `djust.T030` warns about them. A
   block-tag handler that always emits its body unchanged declares
   `EMITS_BODY = True`; the built-in component tags that do (`card`,
   `accordion`, `tabs`, `dropdown`, `form_group`, `fieldset`, `app_shell`, ...
   — the list is `djust.components.rust_handlers.EMITS_BODY_TAGS`) keep working
-  as before. Tags that can hide their body (`modal`, `dropdown_menu`, `await`,
+  as before (`dropdown` and `page_header_actions` count their body while it is
+  drawn). Tags that can hide their body (`modal`, `dropdown_menu`, `await`,
   `nav_item`, `form_array`, `{% call %}` / `{% slot %}`) do not
 - The blocked set is explicit, not a heuristic: `template_name`, `request`,
   `session`, `kwargs`, `args`, `use_actors` and `temporary_assigns`

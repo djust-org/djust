@@ -106,9 +106,9 @@ def test_the_django_node_of_each_emits_body_tag_declares_it(tag):
     engine = Engine(libraries={"c": "djust.components.templatetags.djust_components"})
     tpl = engine.from_string("{%% load c %%}{%% %s %%}%s{%% end%s %%}" % (tag, _body(tag), tag))
     node = [n for n in tpl.nodelist if type(n).__name__ != "LoadNode"][0]
-    # Django's DropdownNode renders its body and drops it while closed.
-    expected = tag != "dropdown"
-    assert getattr(type(node), "EMITS_BODY", False) is expected, type(node)
+    # DropdownNode and PageHeaderActionsNode count their body only when it is drawn
+    # (test_dj_model_drawn_body_bindings).
+    assert getattr(type(node), "EMITS_BODY", False) is True, type(node)
 
 
 def _view(src: str, **attrs):

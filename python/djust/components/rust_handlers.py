@@ -2567,6 +2567,14 @@ EMITS_BODY_TAGS = frozenset(
 )
 
 
+def _declare_emits_body(handler: object) -> None:
+    """Mark a block-tag handler as one that always emits its body (``EMITS_BODY``, read by the
+    Rust registry when the handler is registered). Handlers are plain objects of many classes, so
+    the attribute is set through an ``Any`` view of the handler."""
+    declared: Any = handler
+    declared.EMITS_BODY = True
+
+
 def register_with_rust_engine() -> None:
     """Register all component tag handlers with the Rust template engine.
 
@@ -2601,7 +2609,7 @@ def register_with_rust_engine() -> None:
 
     for tag_name, end_tag, handler in BLOCK_HANDLERS:
         if tag_name in EMITS_BODY_TAGS:
-            handler.EMITS_BODY = True
+            _declare_emits_body(handler)
         register_block_tag_handler(
             tag_name,
             end_tag,
@@ -2669,7 +2677,7 @@ def register_with_rust_engine() -> None:
     split_pane = LibraryRawBlockTagHandler(
         "djust_components", "split_pane", _components_lib.do_split_pane
     )
-    split_pane.EMITS_BODY = True  # type: ignore[attr-defined]
+    split_pane.EMITS_BODY = True
     register_raw_block_tag_handler("split_pane", "endsplit_pane", split_pane)
 
     # {% tabs %}…{% tab %}…{% endtab %}…{% endtabs %} — the same reason. The
@@ -2687,7 +2695,7 @@ def register_with_rust_engine() -> None:
         # tags without `{% load djust_components %}`.
         libraries=(_components_lib.register,),
     )
-    tabs.EMITS_BODY = True  # type: ignore[attr-defined]
+    tabs.EMITS_BODY = True
     register_raw_block_tag_handler("tabs", "endtabs", tabs)
 
 

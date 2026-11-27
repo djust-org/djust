@@ -972,8 +972,9 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **Method**: Template scan (each template file's tags, in order).
 - **What it detects**: a `dj-model="<field>"` binding in the body of a block tag
   other than Django's control-flow and structural tags (`if`, `for`, `with`,
-  `block`, `autoescape`, `spaceless`, `filter` and the locale/time-zone scope
-  tags). The view's dj-model write allowlist holds only the bindings the last
+  `block`, `autoescape`, `spaceless` and the locale/time-zone scope tags; a
+  `{% filter %}` body counts as custom, its filters rewrite it), and in a
+  template a literal `{% include %}` in such a body pulls in. The view's dj-model write allowlist holds only the bindings the last
   render emitted from template text, and the body of a custom block tag
   (`{% ifperm %}…{% endifperm %}`, `{% ifchanged %}`, a library block tag) never
   counts, because the tag decides what of its body reaches the page. A

@@ -14,9 +14,11 @@ does not render, so it grants nothing. Only Django's control-flow and
 structural nodes (``{% if %}``, ``{% for %}``, ``{% with %}``,
 ``{% include %}``, ``{% block %}``/``{% extends %}`` and the scope tags) pass
 the recording on to their bodies: the body of any other node (a custom block
-tag, an inclusion tag's template, ``{% ifchanged %}``) is rendered with the
-recording paused, because that node decides what of it reaches the page. A
-node class may declare ``EMITS_BODY = True`` when it always emits its body.
+tag, an inclusion tag's template, ``{% ifchanged %}``, ``{% filter %}``, whose
+filters rewrite the text) is rendered with the recording paused, because that
+node decides what of it reaches the page. A node class may declare
+``EMITS_BODY = True`` when it always emits its body, or when it renders a body it
+may drop under :func:`held_bindings` and commits them only when it emits it.
 The scan matches the Rust template
 walker (``scan_dj_model_in_text``): a standalone ``dj-model`` attribute name,
 ``=``, then a quoted, non-empty value inside one text run. With djust's own
@@ -28,7 +30,7 @@ from __future__ import annotations
 import threading
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Iterator, List, Optional, Set
+from typing import Iterable, Iterator, List, Optional, Set
 
 _ATTR = "dj-model"
 _active: ContextVar[Optional[Set[str]]] = ContextVar("djust_dj_model_bindings", default=None)
@@ -115,7 +117,6 @@ def _transparent_node_types() -> frozenset:
             defaulttags.WithNode,
             defaulttags.AutoEscapeControlNode,
             defaulttags.SpacelessNode,
-            defaulttags.FilterNode,
             defaulttags.CommentNode,
             defaulttags.LoadNode,
             loader_tags.IncludeNode,
@@ -148,6 +149,33 @@ def suspend_recording() -> Iterator[Optional[Set[str]]]:
         yield fields
     finally:
         _active.reset(token)
+
+
+@contextmanager
+def held_bindings() -> Iterator[Set[str]]:
+    """Collect the bindings rendered inside the block apart from the active recording.
+
+    For a node declaring ``EMITS_BODY`` that renders a body it may then drop:
+    it passes the yielded set to :func:`commit_bindings` only when its output
+    carries that body. Yields an empty set that stays empty when nothing is
+    recording.
+    """
+    held: Set[str] = set()
+    if _active.get() is None:
+        yield held
+        return
+    token = _active.set(held)
+    try:
+        yield held
+    finally:
+        _active.reset(token)
+
+
+def commit_bindings(fields: Iterable[str]) -> None:
+    """Add bindings collected by :func:`held_bindings` to the active recording."""
+    active = _active.get()
+    if active is not None:
+        active.update(fields)
 
 
 @contextmanager
