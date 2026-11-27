@@ -304,3 +304,209 @@ class TestCommand:
                 stderr=StringIO(),
             )
         assert exc.value.code == 2
+
+
+# ---------------------------------------------------------------------------
+# Review follow-ups: URL schemes, header scoping, browser error path
+# ---------------------------------------------------------------------------
+
+
+class TestUrlSchemes:
+    @pytest.mark.parametrize(
+        "url",
+        ["file:///etc/passwd", "javascript:alert(1)", "//evil.example/x", "ftp://h/x"],
+    )
+    def test_non_http_url_refused_even_with_base(self, url):
+        with pytest.raises(A11yRouteError):
+            resolve_urls([url], "http://localhost:8000")
+
+    @pytest.mark.parametrize("base", ["localhost:8000", "file:///tmp", "http://", "/x"])
+    def test_bad_base_url_refused(self, base):
+        with pytest.raises(A11yRouteError, match="--base-url"):
+            resolve_urls(["/a/"], base)
+        with pytest.raises(A11yRouteError, match="--base-url"):
+            audit_a11y.urls_from_permissions_file("permissions.yaml", base)
+
+    def test_command_bad_base_url_exits_2(self):
+        err = StringIO()
+        with pytest.raises(SystemExit) as exc:
+            call_command(
+                "djust_audit",
+                "--a11y",
+                "--base-url",
+                "localhost:8000",
+                "--url",
+                "/a/",
+                stdout=StringIO(),
+                stderr=err,
+            )
+        assert exc.value.code == 2
+        assert "--base-url" in err.getvalue()
+
+    def test_live_with_a11y_url_exits_2(self):
+        err = StringIO()
+        with pytest.raises(SystemExit) as exc:
+            call_command(
+                "djust_audit",
+                "--live",
+                "http://x/",
+                "--a11y",
+                "--url",
+                "http://y/",
+                stdout=StringIO(),
+                stderr=err,
+            )
+        assert exc.value.code == 2
+        assert "--live cannot be combined" in err.getvalue()
+
+
+class _Route:
+    def __init__(self):
+        self.calls = []
+
+    def continue_(self, **kwargs):
+        self.calls.append(kwargs)
+
+
+class _Request:
+    def __init__(self, url):
+        self.url = url
+        self.headers = {"accept": "*/*"}
+
+
+class TestHeaderScoping:
+    @pytest.mark.parametrize(
+        "request_url",
+        ["http://app.local:8000/static/x.css", "http://APP.local:8000/api/"],
+    )
+    def test_same_origin_gets_headers(self, request_url):
+        handler = audit_a11y.make_header_router(
+            "http://app.local:8000/page/", {"Authorization": "Bearer s3cret"}
+        )
+        route = _Route()
+        handler(route, _Request(request_url))
+        assert route.calls == [{"headers": {"accept": "*/*", "Authorization": "Bearer s3cret"}}]
+
+    @pytest.mark.parametrize(
+        "request_url",
+        [
+            "https://cdn.example/lib.js",
+            "http://app.local:9000/x",  # other port
+            "https://app.local:8000/x",  # other scheme
+            "http://fonts.app.local:8000/f.woff",  # subdomain
+        ],
+    )
+    def test_other_origins_untouched(self, request_url):
+        handler = audit_a11y.make_header_router(
+            "http://app.local:8000/page/", {"Authorization": "Bearer s3cret"}
+        )
+        route = _Route()
+        handler(route, _Request(request_url))
+        assert route.calls == [{}]
+
+    def test_default_port_is_same_origin(self):
+        handler = audit_a11y.make_header_router("https://app.local/", {"X-T": "1"})
+        route = _Route()
+        handler(route, _Request("https://app.local:443/x"))
+        assert route.calls[0]["headers"]["X-T"] == "1"
+
+    @pytest.mark.parametrize("extra", [[], ["--json"]])
+    def test_header_values_never_in_output(self, monkeypatch, extra):
+        monkeypatch.setattr(
+            audit_a11y,
+            "run_rendered_audit",
+            lambda urls, extra_headers=None, timeout=30.0: _report("serious", error=""),
+        )
+        out = StringIO()
+        call_command(
+            "djust_audit",
+            "--a11y",
+            "--url",
+            "http://x/",
+            "--header",
+            "Authorization: Bearer s3cret-token",
+            *extra,
+            stdout=out,
+        )
+        assert "s3cret-token" not in out.getvalue()
+        assert "Authorization" not in out.getvalue()
+
+
+class _FakeError(Exception):
+    pass
+
+
+class _FakePage:
+    def __init__(self, browser):
+        self.browser = browser
+        self.closed = False
+        self.routes = []
+        browser.pages.append(self)
+
+    def route(self, pattern, handler):
+        self.routes.append(pattern)
+
+    def goto(self, url, **kwargs):
+        raise _FakeError("net::ERR_CONNECTION_REFUSED at %s\ncall log..." % url)
+
+    def close(self):
+        self.closed = True
+
+
+class _FakeBrowser:
+    def __init__(self):
+        self.pages = []
+        self.closed = False
+        self.context_closed = False
+
+    def new_context(self, **kwargs):
+        assert "extra_http_headers" not in kwargs
+        return self
+
+    def new_page(self):
+        return _FakePage(self)
+
+    def close(self):
+        if self.context_closed:
+            self.closed = True
+        self.context_closed = True
+
+
+class _FakePlaywright:
+    def __init__(self, browser):
+        self.chromium = types.SimpleNamespace(launch=lambda: browser)
+        self.stopped = False
+
+    def stop(self):
+        self.stopped = True
+
+
+class TestBrowserErrorPath:
+    def test_goto_error_is_recorded_page_closed_exit_1(self, monkeypatch):
+        browser = _FakeBrowser()
+        pw = _FakePlaywright(browser)
+        manager = types.SimpleNamespace(start=lambda: pw)
+        monkeypatch.setattr(
+            audit_a11y, "load_tooling", lambda: (lambda: manager, _FakeError, "/* axe */")
+        )
+        report = audit_a11y.run_rendered_audit(["http://127.0.0.1:1/"], extra_headers={"X-T": "1"})
+        (page,) = report.pages
+        assert page.error == "net::ERR_CONNECTION_REFUSED at http://127.0.0.1:1/"
+        assert browser.pages[0].closed
+        assert browser.pages[0].routes == ["**/*"]
+        assert browser.closed and pw.stopped  # context then browser closed, driver stopped
+        assert exit_code(report, strict=False) == 1
+
+    def test_driver_start_failure_is_a_run_error(self, monkeypatch):
+        def start():
+            raise _FakeError(
+                "It looks like you are using Playwright Sync API inside the asyncio loop."
+            )
+
+        monkeypatch.setattr(
+            audit_a11y,
+            "load_tooling",
+            lambda: (lambda: types.SimpleNamespace(start=start), _FakeError, ""),
+        )
+        with pytest.raises(audit_a11y.A11yRunError, match="asyncio"):
+            audit_a11y.run_rendered_audit(["http://x/"])

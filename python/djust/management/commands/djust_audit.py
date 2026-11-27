@@ -571,6 +571,11 @@ class Command(BaseCommand):
         # --live: runtime probe (#661). Mutually informative with other modes
         # but runs independently — no LiveView collection needed.
         if live_url:
+            if options.get("a11y_urls") or options.get("a11y_base_url"):
+                self.stderr.write(
+                    self.style.ERROR("--live cannot be combined with --a11y --url / --base-url")
+                )
+                raise SystemExit(2)
             self._run_live_audit(options)
             return None
 
@@ -816,7 +821,7 @@ class Command(BaseCommand):
                         + "".join("\n  " + n for n in notes)
                     )
             report = audit_a11y.run_rendered_audit(urls, extra_headers=headers or None)
-        except (audit_a11y.A11yExtraMissing, audit_a11y.A11yRouteError) as exc:
+        except (audit_a11y.A11yRunError, audit_a11y.A11yRouteError) as exc:
             self.stderr.write(self.style.ERROR(str(exc)))
             raise SystemExit(2) from exc
 

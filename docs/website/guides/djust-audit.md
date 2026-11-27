@@ -458,7 +458,13 @@ each declared view that needs no URL argument, and joins it to
 pass its URL with `--url` instead. A login-gated page is audited as the
 browser sees it: pass a session cookie with
 `--header 'Cookie: sessionid=...'`, or the redirect target is what gets
-audited (the report shows the redirect).
+audited (the report shows the redirect). `--header` values are added only
+to requests for the audited URL's own origin (scheme, host and port), never
+to a CDN, font or analytics request the page makes, and never appear in the
+report. `--base-url` must be an http(s) URL with a host, and a relative
+`--url` must stay on its origin; anything else (`file:`, `javascript:`,
+`//other-host/`) exits 2. `--a11y --url` cannot be combined with `--live`.
+Each page has a 30 s budget for loading and another for the axe run itself.
 
 **Output.** The terminal report lists each page's violations, most severe
 first, with axe's rule id, the impact, up to five offending nodes and a
@@ -476,7 +482,7 @@ link to the rule. `--json` emits
 | Only `minor` / `moderate` violations | 0 | 0 |
 | A `serious` or `critical` violation | 0 | 1 |
 | A page not audited (unreachable, HTTP 4xx/5xx, timeout) | 1 | 1 |
-| `djust[a11y]` not installed, Chromium missing, no `--url` and no permissions document | 2 | 2 |
+| `djust[a11y]` not installed, Chromium missing, a bad `--url` / `--base-url`, no `--url` and no permissions document | 2 | 2 |
 
 A page that could not be audited fails in both modes, as an unreachable
 target does for `--live`: a gate must not pass on a page it never saw.

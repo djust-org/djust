@@ -65,7 +65,11 @@ AXE_FILE = "axe.min.js"
 MAX_NODES_SHOWN = 5
 
 
-class A11yExtraMissing(RuntimeError):
+class A11yRunError(RuntimeError):
+    """The browser could not be started, so nothing was audited (exit 2)."""
+
+
+class A11yExtraMissing(A11yRunError):
     """The ``djust[a11y]`` extra (Playwright / axe-core) is not installed."""
 
 
@@ -219,19 +223,46 @@ def exit_code(report: RenderedA11yReport, strict: bool) -> int:
 # ---------------------------------------------------------------------------
 
 
+def _is_http_url(url: str) -> bool:
+    parsed = urlparse(url)
+    return parsed.scheme in ("http", "https") and bool(parsed.hostname)
+
+
+def check_base_url(base_url: str) -> str:
+    """``base_url`` when it is an http(s) URL with a host, else :class:`A11yRouteError`."""
+    if not _is_http_url(base_url):
+        raise A11yRouteError(
+            "--base-url %r is not an http(s) URL with a host (e.g. http://localhost:8000)"
+            % base_url
+        )
+    return base_url
+
+
 def resolve_urls(urls: Iterable[str], base_url: Optional[str]) -> List[str]:
-    """Absolute URLs for ``--url`` values; a relative one joins ``base_url``."""
+    """Absolute URLs for ``--url`` values; a relative one joins ``base_url``.
+
+    Every final URL must be http(s) with a host, and a joined one must stay
+    on ``base_url``'s origin: ``urljoin`` keeps an absolute
+    ``file:``/``javascript:`` value or a ``//other-host`` one, so the check
+    runs after the join, not before.
+    """
+    if base_url:
+        check_base_url(base_url)
     out: List[str] = []
     for raw in urls:
         url = raw.strip()
-        if urlparse(url).scheme in ("http", "https"):
-            out.append(url)
-        elif base_url:
-            out.append(urljoin(base_url, url))
-        else:
-            raise A11yRouteError(
-                "--url %r is not an absolute http(s) URL; pass a full URL or --base-url" % raw
-            )
+        if not _is_http_url(url):
+            if not base_url:
+                raise A11yRouteError(
+                    "--url %r is not an absolute http(s) URL; pass a full URL or --base-url" % raw
+                )
+            url = urljoin(base_url, url)
+            if not _is_http_url(url) or _origin(url) != _origin(base_url):
+                raise A11yRouteError(
+                    "--url %r does not resolve to an http(s) URL on --base-url's origin; "
+                    "pass another host as a full http(s) URL" % raw
+                )
+        out.append(url)
     return list(dict.fromkeys(out))
 
 
@@ -270,6 +301,7 @@ def urls_from_permissions_file(
     permissions_path: str, base_url: str, urlconf: Any = None
 ) -> Tuple[List[str], List[str]]:
     """Absolute URLs for the routes of the views ``permissions_path`` declares."""
+    check_base_url(base_url)
     from djust.permissions import PermissionsDocument, PermissionsDocumentError
     from djust.routing import build_route_map_from_urlconf
 
@@ -283,7 +315,7 @@ def urls_from_permissions_file(
     except PermissionsDocumentError as exc:
         raise A11yRouteError("permissions document error: %s" % exc) from exc
     paths, notes = routes_from_permissions(doc.views, build_route_map_from_urlconf(urlconf))
-    return [urljoin(base_url, p) for p in paths], notes
+    return resolve_urls(paths, base_url), notes
 
 
 # ---------------------------------------------------------------------------
@@ -291,12 +323,13 @@ def urls_from_permissions_file(
 # ---------------------------------------------------------------------------
 
 
-def load_tooling() -> Tuple[Any, str]:
-    """``(sync_playwright, axe_source)``, or :class:`A11yExtraMissing`.
+def load_tooling() -> Tuple[Any, Any, str]:
+    """``(sync_playwright, PlaywrightError, axe_source)``, or :class:`A11yExtraMissing`.
 
     Imported lazily so nothing outside the rendered pass needs the extra.
     """
     try:
+        from playwright.sync_api import Error as PlaywrightError
         from playwright.sync_api import sync_playwright
     except ImportError as exc:
         raise A11yExtraMissing("Playwright is not installed. " + INSTALL_HINT) from exc
@@ -306,14 +339,45 @@ def load_tooling() -> Tuple[Any, str]:
         axe_source = files(AXE_PACKAGE).joinpath(AXE_FILE).read_text(encoding="utf-8")
     except (ImportError, FileNotFoundError, OSError) as exc:
         raise A11yExtraMissing("axe-core is not installed. " + INSTALL_HINT) from exc
-    return sync_playwright, axe_source
+    return sync_playwright, PlaywrightError, axe_source
 
 
-_RUN_AXE = """async (options) => {
-  const results = await window.axe.run(document, options);
+# axe.run raced against a timer, so a page that never lets axe finish fails
+# that page instead of hanging the audit (and CI).
+_RUN_AXE = """async ([options, timeoutMs]) => {
+  const timer = new Promise((_, reject) => setTimeout(
+    () => reject(new Error("axe-core did not finish within " + timeoutMs + " ms")), timeoutMs));
+  const results = await Promise.race([window.axe.run(document, options), timer]);
   return {version: results.testEngine && results.testEngine.version,
           violations: results.violations};
 }"""
+
+
+def _origin(url: str) -> Tuple[str, str, Optional[int]]:
+    parsed = urlparse(url)
+    default = {"http": 80, "https": 443}.get(parsed.scheme)
+    return (parsed.scheme, (parsed.hostname or "").lower(), parsed.port or default)
+
+
+def make_header_router(target_url: str, headers: Mapping[str, str]) -> Any:
+    """A Playwright route handler adding ``headers`` to same-origin requests only.
+
+    ``--header`` carries credentials (basic auth, a bearer token, a session
+    cookie). Set on the browser context they would go out with every request
+    the page makes: CDNs, web fonts, analytics. This handler adds them only
+    when the request's origin (scheme, host, port) is the audited URL's, and
+    lets every other request through unchanged.
+    """
+    target = _origin(target_url)
+    extra = dict(headers)
+
+    def handle(route: Any, request: Any) -> None:
+        if _origin(request.url) == target:
+            route.continue_(headers={**request.headers, **extra})
+        else:
+            route.continue_()
+
+    return handle
 
 
 def run_rendered_audit(
@@ -323,41 +387,73 @@ def run_rendered_audit(
 ) -> RenderedA11yReport:
     """Load each URL in headless Chromium and run axe-core over it.
 
-    Raises :class:`A11yExtraMissing` when the ``a11y`` extra is not installed,
-    or when Chromium cannot be launched (no browser installed).
+    Raises :class:`A11yExtraMissing` when the ``a11y`` extra is not installed
+    or Chromium cannot be launched, and :class:`A11yRunError` when Playwright
+    cannot start (for example inside a running asyncio loop).
     """
-    sync_playwright, axe_source = load_tooling()
-    from playwright.sync_api import Error as PlaywrightError
+    sync_playwright, playwright_error, axe_source = load_tooling()
 
     report = RenderedA11yReport()
     timeout_ms = timeout * 1000
-    with sync_playwright() as pw:
+    try:
+        pw = sync_playwright().start()
+    except playwright_error as exc:
+        raise A11yRunError(
+            "Playwright could not start (%s). Run djust_audit from a plain shell, "
+            "not inside a running asyncio event loop." % _first_line(exc)
+        ) from exc
+    try:
         try:
             browser = pw.chromium.launch()
-        except PlaywrightError as exc:
+        except playwright_error as exc:
             raise A11yExtraMissing(
-                "Chromium could not be launched (%s). %s" % (str(exc).splitlines()[0], INSTALL_HINT)
+                "Chromium could not be launched (%s). %s" % (_first_line(exc), INSTALL_HINT)
             ) from exc
+        context = None
         try:
             # bypass_csp: a strict Content-Security-Policy must not stop the
             # injected axe script; the page itself is unchanged.
-            context = browser.new_context(extra_http_headers=extra_headers or None, bypass_csp=True)
+            context = browser.new_context(bypass_csp=True)
             for url in urls:
-                report.pages.append(_audit_page(context, url, axe_source, timeout_ms, report))
-            context.close()
+                report.pages.append(
+                    _audit_page(
+                        context,
+                        url,
+                        axe_source,
+                        timeout_ms,
+                        report,
+                        playwright_error,
+                        extra_headers or {},
+                    )
+                )
         finally:
+            if context is not None:
+                context.close()
             browser.close()
+    finally:
+        pw.stop()
     return report
 
 
-def _audit_page(
-    context: Any, url: str, axe_source: str, timeout_ms: float, report: RenderedA11yReport
-) -> PageResult:
-    from playwright.sync_api import Error as PlaywrightError
+def _first_line(exc: BaseException) -> str:
+    text = str(exc)
+    return text.splitlines()[0] if text else type(exc).__name__
 
+
+def _audit_page(
+    context: Any,
+    url: str,
+    axe_source: str,
+    timeout_ms: float,
+    report: RenderedA11yReport,
+    playwright_error: Any,
+    headers: Mapping[str, str],
+) -> PageResult:
     result = PageResult(url=url)
     page = context.new_page()
     try:
+        if headers:
+            page.route("**/*", make_header_router(url, headers))
         response = page.goto(url, wait_until="load", timeout=timeout_ms)
         result.final_url = page.url
         result.status = response.status if response is not None else None
@@ -368,15 +464,15 @@ def _audit_page(
             # Let a LiveView finish mounting; a page that never goes quiet
             # (polling, long-lived requests) is audited as it stands.
             page.wait_for_load_state("networkidle", timeout=min(timeout_ms, 5000))
-        except PlaywrightError:
+        except playwright_error:
             logger.debug("%s did not reach networkidle; auditing as loaded", url)
         page.evaluate(axe_source)
-        raw = page.evaluate(_RUN_AXE, {"resultTypes": ["violations"]})
+        raw = page.evaluate(_RUN_AXE, [{"resultTypes": ["violations"]}, timeout_ms])
         report.axe_version = report.axe_version or str(raw.get("version") or "")
         result.violations = [RenderedViolation.from_axe(url, v) for v in raw["violations"]]
         result.violations.sort(key=lambda v: (-impact_rank(v.impact), v.rule_id))
-    except PlaywrightError as exc:
-        result.error = str(exc).splitlines()[0] if str(exc) else type(exc).__name__
+    except playwright_error as exc:
+        result.error = _first_line(exc)
     finally:
         page.close()
     return result

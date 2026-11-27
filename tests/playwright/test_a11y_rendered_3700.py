@@ -46,6 +46,7 @@ CLEAN = """<!DOCTYPE html><html lang="en"><head><title>clean</title></head><body
 </body></html>"""
 
 FAILURES = []
+SEEN = []  # (port, path, X-Audit-Token header) for every request served
 
 
 def check(cond, what):
@@ -58,6 +59,12 @@ def serve(root):
     class Quiet(http.server.SimpleHTTPRequestHandler):
         def log_message(self, *args):
             pass
+
+        def do_GET(self):
+            SEEN.append(
+                (self.server.server_address[1], self.path, self.headers.get("X-Audit-Token"))
+            )
+            super().do_GET()
 
     handler = functools.partial(Quiet, directory=root)
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
@@ -107,6 +114,33 @@ def main():
             check("region" in rules, "bad page: missing landmark reported (region)")
             check(clean.violations == [] and not clean.error, "clean page: no violation")
             check(missing.error == "HTTP 404", "missing page: not audited (%r)" % missing.error)
+
+            # --header goes to the audited origin only, never to another one.
+            other = serve(root)
+            other_port = other.server_address[1]
+            try:
+                Path(root, "hdr.html").write_text(
+                    CLEAN.replace(
+                        "</head>",
+                        '<link rel="stylesheet" href="/same.css">'
+                        '<link rel="stylesheet" href="http://127.0.0.1:%d/other.css"></head>'
+                        % other_port,
+                    )
+                )
+                Path(root, "same.css").write_text("p{}")
+                Path(root, "other.css").write_text("p{}")
+                SEEN.clear()
+                run_rendered_audit([base + "/hdr.html"], extra_headers={"X-Audit-Token": "t0k"})
+                tokens = {path: token for _, path, token in SEEN}
+                check(tokens.get("/hdr.html") == "t0k", "header sent to the audited page")
+                check(tokens.get("/same.css") == "t0k", "header sent to same-origin subresource")
+                check(
+                    "/other.css" in tokens and tokens["/other.css"] is None,
+                    "header NOT sent to another origin (%r)"
+                    % tokens.get("/other.css", "not fetched"),
+                )
+            finally:
+                other.shutdown()
 
             only_bad = run_rendered_audit([bad_url])
             only_clean = run_rendered_audit([clean_url])
