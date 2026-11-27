@@ -812,6 +812,19 @@ describe('ResizablePanel', () => {
         expect(env.panel.style.width).toBe('300px');
     });
 
+    it('under csp_strict, double-click resets to the data-dj-style size even before dj-style applied it (#4361)', () => {
+        const strict = PANEL().replace(
+            'style="width:300px;min-width:100px;max-width:600px"',
+            'data-dj-style data-dj-style-width="300px" data-dj-style-min-width="100px"'
+        );
+        expect(strict).not.toContain('style="');
+        const env = setup({}, strict);
+        key(env.window, env.handle, 'ArrowRight', { shiftKey: true });
+        expect(env.panel.style.width).toBe('350px');
+        env.handle.dispatchEvent(new env.window.Event('dblclick', { bubbles: true }));
+        expect(env.panel.style.width).toBe('300px');
+    });
+
     it('a disabled panel takes no focus, no keys and no drag', () => {
         const env = setup({}, PANEL({ extra: ' data-disabled="true"' }));
         expect(env.handle.hasAttribute('tabindex')).toBe(false);

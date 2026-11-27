@@ -608,11 +608,16 @@ class BadgeHandler:
         pulse_cls = " dj-badge__dot--pulse" if kw.get("pulse", False) else ""
         # Colour alone does not say what a badge means: a status other than the default is
         # also written for a screen reader (the native markup dropped it, #4331).
-        sr = (
-            f'<span class="sr-only">Status: {conditional_escape(raw_status)}</span>'
-            if raw_status and raw_status != "default"
-            else ""
-        )
+        # ``sr_label`` names that text instead (``sr_label="Priority"``), and an empty one
+        # drops it, for a label that already says the state (#4359).
+        sr_label = kw.get("sr_label")
+        if sr_label is not None:
+            sr_text = conditional_escape(sr_label)
+            sr = f'<span class="sr-only">{sr_text}</span>' if sr_label not in ("", False) else ""
+        elif raw_status and raw_status != "default":
+            sr = f'<span class="sr-only">Status: {conditional_escape(raw_status)}</span>'
+        else:
+            sr = ""
         return _safe(
             f'<span class="dj-badge dj-badge--{status}">'
             f'<span class="dj-badge__dot{pulse_cls}" aria-hidden="true"></span>{sr}'

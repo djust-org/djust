@@ -10,6 +10,11 @@ from djust.components.utils import safe_css_length
 from djust.components.utils import style_attrs
 
 
+def _blank(value: Any) -> bool:
+    """Whether a size was given as empty, which leaves it to the stylesheet (#4361)."""
+    return isinstance(value, str) and value.strip() == ""
+
+
 class ResizablePanel(Component):
     """Container with a drag-to-resize handle.
 
@@ -62,9 +67,11 @@ class ResizablePanel(Component):
     Args:
         content: HTML content inside the panel
         direction: "horizontal" or "vertical" (default "horizontal")
-        min_size: minimum size CSS value (default "100px")
+        min_size: minimum size CSS value (default "100px"; ``""`` leaves it to the
+            stylesheet)
         max_size: maximum size CSS value (default "none")
-        initial_size: starting size CSS value (default "50%")
+        initial_size: starting size CSS value (default "50%"; ``""`` leaves it to the
+            stylesheet, #4361)
         disabled: disable resize (default False)
         custom_class: additional CSS classes
         resize_event: djust event sent with ``{"size": px}`` when a resize ends (optional)
@@ -112,12 +119,18 @@ class ResizablePanel(Component):
             classes.append(html.escape(self.custom_class))
         class_str = " ".join(classes)
 
-        e_min = html.escape(safe_css_length(self.min_size, "100px"))
+        # An empty ``initial_size`` / ``min_size`` leaves that size to the page's
+        # stylesheet: nothing is written for it (#4361).
+        no_min = _blank(self.min_size)
+        e_min = "none" if no_min else html.escape(safe_css_length(self.min_size, "100px"))
         e_max = html.escape(safe_css_length(self.max_size, "none"))
-        e_initial = html.escape(safe_css_length(self.initial_size, "50%"))
 
         size_prop = "width" if direction == "horizontal" else "height"
-        sizes = {size_prop: e_initial, f"min-{size_prop}": e_min}
+        sizes: dict[str, str] = {}
+        if not _blank(self.initial_size):
+            sizes[size_prop] = html.escape(safe_css_length(self.initial_size, "50%"))
+        if not no_min:
+            sizes[f"min-{size_prop}"] = e_min
         if e_max != "none":
             sizes[f"max-{size_prop}"] = e_max
         style = style_attrs(sizes)

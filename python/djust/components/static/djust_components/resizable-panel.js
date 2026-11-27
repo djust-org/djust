@@ -120,8 +120,14 @@
       return this._horizontal() ? "width" : "height";
     },
 
+    // The size the server rendered: the inline style, or under a strict CSP
+    // (csp_strict) the data-dj-style-<prop> value that dj-style applies through
+    // the CSSOM, possibly after this hook mounted (#4361). "" when the size is
+    // left to the page's stylesheet.
     _styleSize: function () {
-      return this.el.style[this._prop()];
+      var inline = this.el.style[this._prop()];
+      if (inline) return inline;
+      return this.el.getAttribute("data-dj-style-" + this._prop()) || "";
     },
 
     _handle: function () {

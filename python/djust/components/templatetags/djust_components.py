@@ -714,7 +714,9 @@ def progress(
 
 
 @register.simple_tag
-def badge(label: Any = "", status: Any = "default", pulse: Any = False) -> str:
+def badge(
+    label: Any = "", status: Any = "default", pulse: Any = False, sr_label: Any = None
+) -> str:
     """Render a status badge.
 
     Styled by ``djust_components/components.css``, which ``{% theme_head %}``
@@ -727,10 +729,15 @@ def badge(label: Any = "", status: Any = "default", pulse: Any = False) -> str:
         label: display text
         status: online, offline, warning, error, default
         pulse: whether the dot should animate
+        sr_label: the screen-reader text written before the label, in place of
+            ``Status: <status>``; ``""`` writes none (#4359)
     """
     from djust.components.rust_handlers import render_badge
 
-    return render_badge(label=label, status=status, pulse=pulse)
+    params: dict[str, Any] = {"label": label, "status": status, "pulse": pulse}
+    if sr_label is not None:
+        params["sr_label"] = sr_label
+    return render_badge(**params)
 
 
 # ---------------------------------------------------------------------------
@@ -10129,6 +10136,11 @@ def do_signature_pad(parser: Any, token: Any) -> template.Node:
 # ---------------------------------------------------------------------------
 
 
+def _blank_size(value: Any) -> bool:
+    """Whether a resizable panel size was given as empty: left to the stylesheet (#4361)."""
+    return isinstance(value, str) and value.strip() == ""
+
+
 class ResizablePanelNode(template.Node):
     def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
@@ -10156,16 +10168,20 @@ class ResizablePanelNode(template.Node):
             classes.append(e_class)
         class_str = " ".join(classes)
 
-        e_min = escape(safe_css_length(min_size, "100px"))
+        # An explicit empty ``initial_size`` / ``min_size`` leaves that size to the
+        # page's stylesheet: no value is written for it (#4361).
+        no_min = _blank_size(min_size)
+        e_min = "none" if no_min else escape(safe_css_length(min_size, "100px"))
         e_max = escape(safe_css_length(max_size, "none"))
 
         content = self.nodelist.render(context)
 
         size_prop = "width" if direction == "horizontal" else "height"
-        extent = {
-            size_prop: style_value(size_prop, initial_size) or "50%",
-            f"min-{size_prop}": style_value(f"min-{size_prop}", min_size) or "100px",
-        }
+        extent = {}
+        if not _blank_size(initial_size):
+            extent[size_prop] = style_value(size_prop, initial_size) or "50%"
+        if not no_min:
+            extent[f"min-{size_prop}"] = style_value(f"min-{size_prop}", min_size) or "100px"
         if e_max != "none":
             extent[f"max-{size_prop}"] = style_value(f"max-{size_prop}", max_size)
         style = style_attrs(extent)

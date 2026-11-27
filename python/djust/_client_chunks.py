@@ -145,9 +145,10 @@ _PREFETCH = _attr("dj-prefetch")
 _TRACK_STATIC = _attr("dj-track-static")
 _DIALOG = _attr("dj-dialog")
 
-# name -> (pre-check regex source: the marker as a whole word anywhere in the
-# page, test on (lower-cased tag name, attrs)). The pre-checks are joined into
-# one compiled alternation; only the chunks it names get the tag scan.
+# name -> (the marker as a whole word anywhere in the page, as a regex source,
+# test on (lower-cased tag name, attrs)). The regex documents the marker; the
+# page pre-check is the literal words of _NEEDLES (#4363), and only the chunks
+# it names get the tag scan.
 _Matcher = Callable[[str, str], bool]
 _MARKERS: Dict[str, Tuple[str, _Matcher]] = {
     "uploads": (
@@ -188,12 +189,49 @@ _MARKERS: Dict[str, Tuple[str, _Matcher]] = {
     ),
 }
 
-_GROUP = {name: "c%d" % i for i, name in enumerate(_MARKERS)}
-_NAME_BY_GROUP = {group: name for name, group in _GROUP.items()}
-_PRECHECK_RE = re.compile(
-    "|".join("(?P<%s>%s)" % (_GROUP[name], src) for name, (src, _) in _MARKERS.items()),
-    re.IGNORECASE,
-)
+# The pre-check (#4363): per chunk, literal words, any of which the page must
+# contain (lower-cased) for the chunk to be a candidate. A substring test per
+# word replaced one alternation regex over the page, which cost ~0.25 us per
+# character (20 ms on an 82 KB page). Each word must stand alone (no ``[\w-]``
+# beside it), as in the regex; the pre-check may still let through a page the
+# regex would not (``dialog`` outside a ``role=``), and the tag scan below stays
+# the final check, so the result is the same.
+_NEEDLES: Dict[str, Tuple[str, ...]] = {
+    "uploads": ("dj-upload", "dj-upload-drop"),
+    "virtual-list": ("dj-virtual",),
+    "cursor-overlay": ("cursoroverlay",),
+    "tutorial": ("dj-tutorial-bubble",),
+    "component-behaviors": tuple(sorted(_COMPONENT_CLASSES)),
+    "keyboard-nav": ("dialog", "tablist", *sorted(_KEYBOARD_CLASSES)),
+    "flip": ("dj-flip",),
+    "transitions": ("dj-transition", "dj-remove", "dj-transition-group"),
+    "infinite-scroll": ("dj-viewport-top", "dj-viewport-bottom"),
+    "prefetch": ("dj-prefetch",),
+    "track-static": ("dj-track-static",),
+    "dialog": ("dj-dialog",),
+}
+
+
+def _word_char(ch: str) -> bool:
+    return ch.isalnum() or ch in "_-"
+
+
+def _has_word(text: str, word: str) -> bool:
+    """Whether ``word`` occurs in ``text`` as a whole word (no ``[\\w-]`` on either side).
+
+    ``str.find`` per occurrence: the word is rare on most pages, so this is a
+    few C-speed scans, not a regex step per character (#4363).
+    """
+    start = text.find(word)
+    end_offset = len(word)
+    while start != -1:
+        end = start + end_offset
+        if (start == 0 or not _word_char(text[start - 1])) and (
+            end == len(text) or not _word_char(text[end])
+        ):
+            return True
+        start = text.find(word, start + 1)
+    return False
 
 
 def chunks_in_markup(masked: str) -> FrozenSet[str]:
@@ -203,15 +241,14 @@ def chunks_in_markup(masked: str) -> FrozenSet[str]:
     title, textarea) masked, as post_processing's ``_mask_document_text``
     returns it, so a marker quoted in a script or a code sample is not a hit;
     ``<template>`` and ``<noscript>`` content is skipped here too. One compiled
-    pre-check over the page (each marker as a whole word, attribute names
-    case-insensitive) picks the candidate chunks; a page that names none of the
-    markers costs that one regex search and no tag scan.
+    pre-check over the page (each chunk's marker words as whole words of the
+    lower-cased page, found with ``str.find``, #4363) picks the candidate chunks; a page that names
+    none of the markers costs that and no tag scan.
     """
-    candidates = set()
-    for m in _PRECHECK_RE.finditer(masked):
-        candidates.add(_NAME_BY_GROUP[m.lastgroup or ""])
-        if len(candidates) == len(_MARKERS):
-            break
+    lowered = masked.lower()
+    candidates = {
+        name for name, words in _NEEDLES.items() if any(_has_word(lowered, w) for w in words)
+    }
     if not candidates:
         return frozenset()
     markup = _INERT_RE.sub(" ", masked)
