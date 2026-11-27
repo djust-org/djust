@@ -5001,6 +5001,9 @@ class AppShellHandler:
     outside the three slots, Rust keeps template order. Scaffolds put header first.
     """
 
+    #: The whole body is placed in the output, so its dj-model bindings count.
+    EMITS_BODY = True
+
     def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         kw = _parse_args(args, context)
         shell_id = conditional_escape(kw.get("id", "app-shell"))
@@ -5024,6 +5027,9 @@ class AppShellHandler:
 class AppSidebarHandler:
     """Block handler for {% app_sidebar %}...{% endapp_sidebar %}"""
 
+    #: The whole body is placed in the output, so its dj-model bindings count.
+    EMITS_BODY = True
+
     def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         return _safe(f'<aside class="dj-app-shell__sidebar">{content}</aside>')
 
@@ -5031,12 +5037,18 @@ class AppSidebarHandler:
 class AppHeaderHandler:
     """Block handler for {% app_header %}...{% endapp_header %}"""
 
+    #: The whole body is placed in the output, so its dj-model bindings count.
+    EMITS_BODY = True
+
     def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         return _safe(f'<header class="dj-app-shell__header">{content}</header>')
 
 
 class AppContentHandler:
     """Block handler for {% app_content %}...{% endapp_content %}"""
+
+    #: The whole body is placed in the output, so its dj-model bindings count.
+    EMITS_BODY = True
 
     def render(self, args: list[str], content: str, context: dict[str, object]) -> str:
         return _safe(f'<main class="dj-app-shell__content">{content}</main>')
