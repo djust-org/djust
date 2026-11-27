@@ -17,7 +17,7 @@
     "@vitest/istanbul-lib-instrument": "^2.0.0",
     "@vitest/istanbul-lib-source-maps": "^2.0.0",
     "@vitest/ui": "^5.0.5",
-    "chart.js": "4.5.1",
+    "chart.js": "4.6.2",
     "eslint": "^10.15.0",
     "eslint-plugin-security": "^4.2.1",
     "happy-dom": "^21.0.4",
