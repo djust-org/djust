@@ -20,7 +20,7 @@ from djust._include_guard import include_guard_scope
 from djust._template_guards import TemplateMutatorGuard, alters_data
 from djust.decorators import is_event_handler
 
-from ._hybrid_attrs import harden_context
+from ._hybrid_attrs import harden_context, warn_unscanned_file
 from .assigns import (
     Assign,
     AssignValidationError,
@@ -104,11 +104,19 @@ def _render_inline_template(template_str: str, context: Dict[str, Any], owner: s
     end the element. Every other text slot keeps a marked-safe value's markup.
 
     ``owner`` is the component's class name, for the warning about what could not be made safe.
-    Not applied: a ``template_name`` file (loaded by the project's loaders, with ``{% include %}``
-    and ``{% extends %}``) and a LiveView's own template.
+    Not applied here: a ``template_name`` file (``_render_template_file`` applies the same rule to
+    the file's own source, #3933) and a LiveView's own template.
     """
     template_str, context = harden_context(template_str, context, owner)
     return _render_template_with_fallback(template_str, context)
+
+
+def _template_source(loaded: Any) -> Optional[str]:
+    """The source of a template the backend loaded, or ``None`` when it does not expose one."""
+    source = getattr(loaded, "source", None)
+    if source is None:
+        source = getattr(getattr(loaded, "template", None), "source", None)
+    return source if isinstance(source, str) else None
 
 
 def _load_template_source(template_name: str) -> Optional[str]:
@@ -116,11 +124,28 @@ def _load_template_source(template_name: str) -> Optional[str]:
     ``None`` when the configured backend does not expose one (#2530)."""
     from django.template.loader import get_template
 
-    loaded = get_template(template_name)
-    source = getattr(loaded, "source", None)
-    if source is None:
-        source = getattr(getattr(loaded, "template", None), "source", None)
-    return source if isinstance(source, str) else None
+    return _template_source(get_template(template_name))
+
+
+def _recompile_like(loaded: Any, source: str) -> Any:
+    """A template for ``source`` compiled the way ``loaded`` was: same backend, engine and ORIGIN.
+
+    ``backend.from_string(source)`` has no origin, and Django resolves a relative
+    ``{% extends "./base.html" %}`` / ``{% include "../x.html" %}`` against the origin's template
+    name (a template without one raises ``AttributeError``). The hardened source takes the loaded
+    template's origin, so the names it holds resolve as they do for the file on disk (#3933).
+    """
+    backend = loaded.backend
+    inner = getattr(loaded, "template", None)
+    from django.template.base import Template as DjangoTemplate
+
+    if isinstance(inner, DjangoTemplate):
+        compiled = DjangoTemplate(source, origin=inner.origin, name=inner.name, engine=inner.engine)
+        return type(loaded)(compiled, backend)
+    origin = getattr(loaded, "origin", None)
+    if origin is not None and hasattr(loaded, "template_string"):  # DjustTemplate
+        return type(loaded)(source, backend=backend, origin=origin)
+    return backend.from_string(source)
 
 
 _ID_NAMESPACE_ALLOWED = re.compile(r"[^A-Za-z0-9_]")
@@ -146,16 +171,15 @@ def _dj_if_id_namespace(component_id: Optional[str]) -> str:
     return _ID_NAMESPACE_ALLOWED.sub("_", component_id)
 
 
-def _render_template_name_with_markers(
-    template_name: str, context: Dict[str, Any]
-) -> Optional[str]:
-    """Render a ``template_name`` component through the LiveView engine entry
+def _render_source_with_markers(source: str, context: Dict[str, Any]) -> Optional[str]:
+    """Render the ``source`` of a ``template_name`` component through the LiveView engine entry
     (``RustLiveView`` — ``<!--dj-if id=…-->`` boundary markers ON) so its
     ``{% if %}`` blocks keep VDOM identity inside the parent (#2530).
 
-    Returns ``None`` when the source is unavailable or the template uses
-    ``{% extends %}`` (inheritance is resolved by the loader chain, not this
-    entry); the caller then falls back to ``render_to_string``. Context and
+    ``source`` is the file's source after ``harden_context`` (#3933): the caller reads it,
+    rewrites its attribute and raw-text slots and hands both here. It has no ``{% extends %}``
+    (inheritance is resolved by the loader chain, not this entry). Returns ``None`` when the
+    Rust engine is unavailable; the caller then renders through the backend. Context and
     sidecar handling mirror the LiveView path: JSON-normalized values into
     state, ``SafeString`` paths marked safe, raw objects (models behind the
     serialization floor) on the ``set_raw_py_values`` sidecar.
@@ -163,12 +187,6 @@ def _render_template_name_with_markers(
     try:
         from djust._rust import RustLiveView
     except ImportError:
-        return None
-    try:
-        source = _load_template_source(template_name)
-    except Exception:
-        return None
-    if source is None or "{% extends" in source:
         return None
     from ..config import template_auto_call_enabled
     from ..mixins.rust_bridge import _collect_safe_keys
@@ -204,6 +222,44 @@ def _render_template_name_with_markers(
 
     with library_render_scope():
         return cast(str, rust_view.render())
+
+
+def _render_template_file(template_name: str, context: Dict[str, Any], owner: str = "") -> str:
+    """Render a component's ``template_name`` FILE: the one place it is done (#3933).
+
+    The file's OWN source follows the rule an inline ``template`` follows (``harden_context``): its
+    attribute slots are escaped whatever the value is marked as, a URL is checked against the
+    scheme allowlist, and the text of a raw-text element is escaped. A text slot keeps a
+    marked-safe value's markup (``LiveComponent`` and ``BoundComponent`` write children and
+    nested components there). What the file gets from ``{% extends %}`` (the parent's slots) or
+    ``{% include %}`` is NOT scanned and is named by the warning, as for an inline template.
+
+    A file without ``{% extends %}`` is drawn through the LiveView engine entry so its
+    ``{% if %}`` blocks keep dj-if markers (#2530); one with it (or when the Rust engine is
+    unavailable) is compiled by the backend that found it, with the loaded template's origin
+    (``_recompile_like``), so ``{% extends %}`` / ``{% include %}`` resolve through the same
+    loaders and a relative ``./`` name resolves against the file. A file whose source the
+    backend does not expose cannot be scanned: it is drawn as before and named once per class.
+
+    ``owner`` is the component's class name, for the warning.
+    """
+    from django.template.loader import get_template, render_to_string
+
+    # One lookup: the loaded template gives the source, and the backend and origin the hardened
+    # source is compiled with. A missing template raises here, as for ``render_to_string``.
+    loaded = get_template(template_name)
+    source = _template_source(loaded)
+    if source is None:
+        warn_unscanned_file(owner, template_name)
+        with include_guard_scope():
+            return cast(str, render_to_string(template_name, context))
+    rewritten, hardened = harden_context(source, context, owner, file=True)
+    if "{% extends" not in source:
+        html = _render_source_with_markers(rewritten, hardened)
+        if html is not None:
+            return html
+    with include_guard_scope():
+        return cast(str, _recompile_like(loaded, rewritten).render(hardened))
 
 
 _DECLARES_NAME: Dict[type, bool] = {}
@@ -894,17 +950,10 @@ class BoundComponent:
         context = dict(state)
         context["component_id"] = self.component_id
         if template:
-            html: Optional[str] = _render_inline_template(
-                template, context, type(self._descriptor).__name__
-            )
+            html: str = _render_inline_template(template, context, type(self._descriptor).__name__)
         else:
             assert template_name is not None
-            html = _render_template_name_with_markers(template_name, context)
-            if html is None:
-                from django.template.loader import render_to_string
-
-                with include_guard_scope():
-                    html = render_to_string(template_name, context)
+            html = _render_template_file(template_name, context, type(self._descriptor).__name__)
         wrapped = cast(
             str,
             format_html('<div data-component-id="{}">{}</div>', self.component_id, mark_safe(html)),
@@ -1377,13 +1426,10 @@ class LiveComponent(TemplateMutatorGuard, ContextProviderMixin):
             # boundary markers ON), not the project's TEMPLATES backend —
             # which emits none (post-#2519, and never on DjangoTemplates), so
             # a component `{% if %}` toggle fell back to positional matching.
-            engine_html = _render_template_name_with_markers(self.template_name, context)
-            if engine_html is not None:
-                return cast(str, mark_safe(engine_html))
-            from django.template.loader import render_to_string
-
-            with include_guard_scope():
-                return cast(str, mark_safe(render_to_string(self.template_name, context)))
+            return cast(
+                str,
+                mark_safe(_render_template_file(self.template_name, context, type(self).__name__)),
+            )
 
         raise ValueError(
             f"{self.__class__.__name__} must define 'template' attribute or set 'template_name'"
