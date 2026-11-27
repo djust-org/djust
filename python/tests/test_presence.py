@@ -14,6 +14,7 @@ from djust.presence import (
     LiveCursorMixin,
     CursorTracker,
     PRESENCE_TIMEOUT,
+    anonymous_presence_id,
 )
 from djust.backends.registry import reset_presence_backend, set_presence_backend
 from djust.backends.memory import InMemoryPresenceBackend
@@ -292,7 +293,9 @@ class TestPresenceMixin:
         view.track_presence()
 
         assert view._presence_tracked is True
-        assert view._presence_user_id == "anon_test_session_123"
+        # An opaque per-session id, never the session key itself.
+        assert view._presence_user_id == anonymous_presence_id("test_session_123")
+        assert "test_session_123" not in view._presence_user_id
 
         # Check presence in manager
         presences = view.list_presences()
