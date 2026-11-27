@@ -978,6 +978,15 @@ def register_block_tag_handler(tag_name: str, end_tag: str, handler: Any) -> Non
     """
     ...
 
+def block_tag_handler_emits_body(tag_name: str) -> bool:
+    """Whether the block tag handler for ``tag_name`` declared ``EMITS_BODY``.
+
+    Such a handler always emits its rendered body, so ``dj-model`` bindings
+    in the body count toward the view's write allowlist. False for an
+    unknown tag.
+    """
+    ...
+
 def has_block_tag_handler(tag_name: str) -> bool:
     """
     Check if a block tag handler is registered for the given tag name.
@@ -1553,6 +1562,7 @@ __all__ = [
     # Block tag handlers
     "register_block_tag_handler",
     "has_block_tag_handler",
+    "block_tag_handler_emits_body",
     "unregister_block_tag_handler",
     "clear_block_tag_handlers",
     # Assign tag handlers (context-mutating)

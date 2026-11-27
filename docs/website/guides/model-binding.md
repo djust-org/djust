@@ -183,6 +183,21 @@ The ModelBindingMixin enforces these rules:
   The template-derived set is found by walking the template and its includes;
   with `DEBUG` off the walk runs once per template source and template
   directories, and with `DEBUG` on (hot reload) on every render
+- The template-derived set follows the render: a binding inside an
+  `{% if %}` / `{% for %}` branch, an include or a lazy site is writable only
+  while the last render emitted it from template text, so
+  `{% if user.is_staff %}<input dj-model="note">{% endif %}` makes `note`
+  writable for staff only, and the set changes as the condition flips. The
+  bindings are recorded during the render itself; rendered data (a variable,
+  `|safe` HTML, `dj-model="{{ field }}"`) never adds one
+- A binding inside the body of a **custom block tag** is never
+  template-derived (`{% ifperm %}<input dj-model="note">{% endifperm %}`, a
+  library block tag, `{% ifchanged %}`, an inclusion tag's template): the tag
+  decides what of its body reaches the page, so list such fields in
+  `allowed_model_fields`. System check `djust.T030` warns about them. A Rust
+  block-tag handler that always emits its body unchanged may declare
+  `EMITS_BODY = True` (djust's `app_shell`, `app_sidebar`, `app_header` and
+  `app_content` do)
 - The blocked set is explicit, not a heuristic: `template_name`, `request`,
   `session`, `kwargs`, `args` and `temporary_assigns`
 

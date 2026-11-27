@@ -2640,6 +2640,9 @@ def _root_layout_html(content: str, parts: _RootLayoutParts) -> str:
 class AppShellHandler:
     """Responsive layout, retaining template order and direct sidebar placement."""
 
+    #: The whole body is placed in the output, so its dj-model bindings count.
+    EMITS_BODY = True
+
     def _render_root_parts(
         self, args: list[str], content: str, context: dict[str, object]
     ) -> _RootLayoutParts:
@@ -2687,6 +2690,9 @@ class AppShellHandler:
 class AppSidebarHandler:
     """Block handler for the layout sidebar."""
 
+    #: The whole body is placed in the output, so its dj-model bindings count.
+    EMITS_BODY = True
+
     def _render_root_parts(
         self, args: list[str], content: str, context: dict[str, object]
     ) -> _RootLayoutParts:
@@ -2703,6 +2709,9 @@ class AppSidebarHandler:
 class AppHeaderHandler:
     """Block handler for the layout header."""
 
+    #: The whole body is placed in the output, so its dj-model bindings count.
+    EMITS_BODY = True
+
     def _render_root_parts(
         self, args: list[str], content: str, context: dict[str, object]
     ) -> _RootLayoutParts:
@@ -2718,6 +2727,9 @@ class AppHeaderHandler:
 
 class AppContentHandler:
     """Block handler for the layout content."""
+
+    #: The whole body is placed in the output, so its dj-model bindings count.
+    EMITS_BODY = True
 
     def _render_root_parts(
         self, args: list[str], content: str, context: dict[str, object]
