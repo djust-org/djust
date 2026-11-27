@@ -174,6 +174,24 @@
     let searchCounter = 0;
     let cacheHits = 0;
     let isAutomatedSearch = false; // Flag to prevent double-counting
+    const settledSearches = [];
+    let settledSeen = 0;
+
+    // Run `next` once the search for `value` has settled (or after 15 s).
+    function afterSettled(value, next) {
+        const started = Date.now();
+        (function poll() {
+            const idx = settledSearches.indexOf(value, settledSeen);
+            if (idx !== -1) {
+                settledSeen = idx + 1;
+                setTimeout(next, 100);
+            } else if (Date.now() - started > 15000) {
+                next();
+            } else {
+                setTimeout(poll, 50);
+            }
+        })();
+    }
 
     // Function to update cache efficiency display
     function updateCacheEfficiency() {
@@ -196,6 +214,11 @@
             cacheHits++;
             updateCacheEfficiency();
         }
+        // A search has settled once it is answered from the cache or its
+        // server answer is cached; the next step waits for that instead of a
+        // fixed delay, so a slow server cannot reorder the steps.
+        const settledMatch = message.match(/\[LiveView:cache\] (?:Cache hit|Cached patches): search:value="([^"]*)"/);
+        if (settledMatch) settledSearches.push(settledMatch[1]);
         originalConsoleLog.apply(console, args);
     };
 
@@ -261,23 +284,23 @@
         console.log('[Test 1] Searching for "laptop" (should call server)...');
         doSearch('laptop');
 
-        setTimeout(function() {
+        afterSettled('laptop', function() {
             console.log('[Test 2] Clearing search (should call server)...');
             doSearch('');
 
-            setTimeout(function() {
+            afterSettled('', function() {
                 console.log('[Test 3] Searching for "laptop" again (should be CACHED)...');
                 doSearch('laptop');
 
-                setTimeout(function() {
+                afterSettled('laptop', function() {
                     console.log('[Test 4] Searching for "mouse" (should call server)...');
                     doSearch('mouse');
 
-                    setTimeout(function() {
+                    afterSettled('mouse', function() {
                         console.log('[Test 5] Searching for "mouse" again (should be CACHED)...');
                         doSearch('mouse');
 
-                        setTimeout(function() {
+                        afterSettled('mouse', function() {
                             console.log('\n=== Tests Complete ===');
                             console.log('Expected: 3 server calls (laptop, empty, mouse)');
                             console.log('Expected: 2 cache hits (laptop repeat, mouse repeat)');
@@ -320,11 +343,11 @@
 
                                 console.log('✅ All tests passed! Status indicators updated.');
                             }
-                        }, 1000);
-                    }, 1000);
-                }, 1000);
-            }, 1000);
-        }, 1000);
+                        });
+                    });
+                });
+            });
+        });
     }
 })();
 </script>
