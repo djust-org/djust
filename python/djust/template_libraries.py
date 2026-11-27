@@ -759,13 +759,51 @@ def _library_identity(library: Any) -> str:
     return "|".join(sorted(_library_modules(library)))
 
 
+#: ``(label, module) -> (library, registry generation, owner map)`` of the last
+#: positive :func:`_still_bridged` answer (#4363). Every registration,
+#: unregistration and clear moves the Rust registry generation, so while it and
+#: the active engine's owner map are unchanged, the answer is unchanged: the
+#: probes (206 tags for ``djust_components``, ~0.2 ms) run once per change, not
+#: on every ``{% load %}`` of an already-loaded library.
+_bridged_at: Dict[Tuple[str, str, FrozenSet[str], FrozenSet[str]], Tuple[Any, int, Any]] = {}
+
+
 def _still_bridged(label: str, library: Any, module: str) -> bool:
     """Every tag and filter this library bridges is still registered.
 
     Cheap registry probes, one per name. This — not `_loaded` — is the truth
     about registration state: anything may `clear_*_handlers()` (test
-    isolation does) and `_loaded` would not know.
+    isolation does) and `_loaded` would not know. A positive answer is
+    remembered for the registry generation it was found at (#4363).
     """
+    from djust._rust import registry_generation
+
+    generation = registry_generation()
+    owners = _engine_state("_tag_owner", _tag_owner)
+    # ``{% load x from lib %}`` builds a new subset ``Library`` on every call:
+    # keyed by its names, and the same definitions (equal entry dicts) count.
+    key = (label, module, frozenset(library.tags), frozenset(library.filters))
+    seen = _bridged_at.get(key)
+    if (
+        seen is not None
+        and seen[1] == generation
+        and seen[2] is owners
+        and (
+            seen[0] is library
+            or (seen[0].tags == library.tags and seen[0].filters == library.filters)
+        )
+    ):
+        return True
+    if _probe_still_bridged(label, library, module):
+        if len(_bridged_at) >= 1024:
+            _bridged_at.clear()
+        _bridged_at[key] = (library, generation, owners)
+        return True
+    return False
+
+
+def _probe_still_bridged(label: str, library: Any, module: str) -> bool:
+    """:func:`_still_bridged` without the memo: one registry probe per name."""
     from djust._rust import registry_entry_is_local
 
     native = tuple(_NATIVE_SCOPE_TAGS.get(module, ())) + tuple(_NATIVE_TAG_SKIPS.get(module, ()))

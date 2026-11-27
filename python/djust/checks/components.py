@@ -1602,6 +1602,39 @@ _PUBLIC_VIEW_METHODS = (
 )
 
 
+def _framework_view_members() -> dict[str, str]:
+    """Methods and read-only properties djust's own ``LiveView`` classes define (#4360).
+
+    Maps each name to ``"method"`` or ``"read-only property"``. A plain value
+    stored under one of these names (``self._pending = []``) hides the member
+    from djust's own code, which calls it.
+    """
+    from djust.live_view import LiveView
+
+    members: dict[str, str] = {}
+    for klass in LiveView.__mro__:
+        if klass is object or not _is_framework_internal_class(klass):
+            continue
+        for name, member in vars(klass).items():
+            if name in members or (name.startswith("__") and name.endswith("__")):
+                continue
+            if isinstance(member, property):
+                if member.fset is None:
+                    members[name] = "read-only property"
+            elif isinstance(member, (staticmethod, classmethod)) or inspect.isfunction(member):
+                members[name] = "method"
+    return members
+
+
+def _assigns_plain_value(member: Any) -> bool:
+    """Whether a class-body ``member`` is a plain value rather than an override."""
+    if isinstance(member, (property, staticmethod, classmethod)):
+        return False
+    if callable(member) or hasattr(member, "__get__"):
+        return False
+    return True
+
+
 @register("djust")
 def check_shadowed_view_methods(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
     """V030 (Warning): view code defines or assigns a name of a djust view method.
@@ -1620,6 +1653,7 @@ def check_shadowed_view_methods(app_configs: Any, **kwargs: Any) -> list[CheckMe
     except Exception:  # noqa: BLE001 — djust not importable/configured: nothing to check
         return messages
 
+    framework_members = _framework_view_members()
     candidates = set(_routed_liveview_classes()) | set(_walk_subclasses(LiveView))
     seen: set[tuple[type, str]] = set()
     for cls in sorted(candidates, key=lambda c: (c.__module__, c.__qualname__)):
@@ -1647,11 +1681,20 @@ def check_shadowed_view_methods(app_configs: Any, **kwargs: Any) -> list[CheckMe
                             line = None
                     found.append((name, "defines %s" % name, function, line))
             for member_name, member in klass.__dict__.copy().items():
+                if (
+                    member_name in framework_members
+                    and member_name not in _PUBLIC_VIEW_METHODS
+                    and _assigns_plain_value(member)
+                ):
+                    found.append(
+                        (member_name, "sets %s in its class body" % member_name, None, None)
+                    )
+                    continue
                 function = getattr(member, "__func__", member)
                 if not inspect.isfunction(function):
                     continue
                 for attr, line in _self_assignments(function):
-                    if attr in _PUBLIC_VIEW_METHODS:
+                    if attr in _PUBLIC_VIEW_METHODS or attr in framework_members:
                         found.append(
                             (attr, "%s() assigns self.%s" % (member_name, attr), function, line)
                         )
@@ -1662,17 +1705,31 @@ def check_shadowed_view_methods(app_configs: Any, **kwargs: Any) -> list[CheckMe
                 file_path = ""
                 if inspect.isfunction(function):
                     file_path = inspect.getsourcefile(function) or ""
+                if name in _PUBLIC_VIEW_METHODS:
+                    replaced = "djust's %s() method" % name
+                    hint = (
+                        "djust's views call self.%s() as part of the public API; "
+                        "an attribute of that name replaces it, and an "
+                        "@event_handler of that name can be called by the client. "
+                        "Rename it." % name
+                    )
+                else:
+                    kind = framework_members[name]
+                    replaced = "djust's %s %s%s" % (
+                        kind,
+                        name,
+                        "()" if kind == "method" else "",
+                    )
+                    hint = (
+                        "djust's own code reads self.%s, so a value stored under that "
+                        "name hides it and the framework breaks with no error at the "
+                        "assignment (#4360). Rename the attribute, for example "
+                        "self.%s_items." % (name, name.rstrip("_") or name)
+                    )
                 messages.append(
                     DjustWarning(
-                        "%s%s %s, which replaces djust's %s() method on the view."
-                        % (label, where, what, name),
-                        hint=(
-                            "djust's views call self.%s() as part of the public API; "
-                            "an attribute of that name replaces it, and an "
-                            "@event_handler of that name can be called by the client. "
-                            "Rename it. Suppress with DJUST_CONFIG = "
-                            "{'suppress_checks': ['V030']}." % name
-                        ),
+                        "%s%s %s, which replaces %s on the view." % (label, where, what, replaced),
+                        hint=hint + " Suppress with DJUST_CONFIG = {'suppress_checks': ['V030']}.",
                         id="djust.V030",
                         fix_hint="Rename `%s` on `%s`." % (name, klass.__qualname__),
                         file_path=file_path,

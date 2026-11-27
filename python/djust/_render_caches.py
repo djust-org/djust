@@ -7,7 +7,9 @@ downstream by Point Guard, N-37 and N-39):
   the ``{% extends %}`` chain resolved in Rust and every ``{% include %}`` read
   from disk, then hashed;
 - the dj-model allowlist (``RustLiveView.dj_model_fields(cache=True)``): a walk
-  of the template and its includes, with the ``{% load %}`` hook for each.
+  of the template and its includes, with the ``{% load %}`` hook for each. The
+  dj-model gate of every new view (and of a GET's page shell) shares the same
+  walk while these caches are on (``set_dj_model_gate_shared``, #4363).
 
 Each is a function of the template's text and the template directories, so it
 is kept per template while templates are cached: with ``DEBUG`` off, when
@@ -29,11 +31,35 @@ logger = logging.getLogger(__name__)
 _INVALIDATING_SETTINGS = ("DEBUG", "TEMPLATES", "INSTALLED_APPS")
 
 
+#: The value last handed to the Rust dj-model gate (``None``: not yet), so the
+#: check on every render costs a comparison (#4363).
+_gate_shared: list[bool | None] = [None]
+
+
 def render_caches_enabled() -> bool:
-    """Whether per-template render caches may be used: ``DEBUG`` is off."""
+    """Whether per-template render caches may be used: ``DEBUG`` is off.
+
+    Also tells the Rust dj-model gate whether new views may share their
+    template walk (#4363), when that changed. A plain ``settings.DEBUG = ...``
+    sends no ``setting_changed``, so the gate learns it on the next call here
+    (every render calls it); until then a stale "shared" grants fewer dj-model
+    fields, never more.
+    """
     from django.conf import settings
 
-    return not settings.DEBUG
+    enabled = not settings.DEBUG
+    if _gate_shared[0] is not enabled:
+        _share_dj_model_gate(enabled)
+    return enabled
+
+
+def _share_dj_model_gate(enabled: bool) -> None:
+    try:
+        from ._rust import set_dj_model_gate_shared
+    except ImportError:  # the extension is optional at import time
+        return
+    set_dj_model_gate_shared(enabled)
+    _gate_shared[0] = enabled
 
 
 def clear_render_caches() -> None:
@@ -49,6 +75,9 @@ def clear_render_caches() -> None:
     except ImportError:  # the extension is optional at import time
         return
     clear_dj_model_fields_cache()
+    # ``DEBUG`` may have changed: hand the gate the current value before the next render.
+    _gate_shared[0] = None
+    render_caches_enabled()
 
 
 def _on_setting_changed(**kwargs: Any) -> None:
