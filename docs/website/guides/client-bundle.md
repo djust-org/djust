@@ -114,7 +114,7 @@ code has run (at once if it is already loaded, or under the full bundle).
 
 ## What stays in core
 
-The SSE transport (`03b-sse.js`, ~3 KB gzipped) is not a chunk, on purpose:
+The SSE transport (`03b-sse.js`, a few KB gzipped) is not a chunk, on purpose:
 
 - Its trigger is transport configuration (`use_websocket: False`) or a
   WebSocket that fails, not anything on the page, and the transport is chosen
