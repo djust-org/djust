@@ -7,6 +7,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.5] - 2026-11-27
+
+### Security
+
+- **`dj-model` accepts only fields bound in the branch the template rendered.** The `update_model` allowlist was every static `dj-model="<field>"` binding in the template source, across all `{% if %}` branches, so a field bound only inside a branch that was not rendered for a view instance (for example `{% if user.is_staff %}<input dj-model="note">{% endif %}`) was still writable by that instance's client. A binding now counts only when its template text rendered for the current state: bindings on always-rendered paths are granted as before, and a binding inside an `{% if %}`/`{% for %}` branch, an include or a lazy site counts while the last render emitted it. The bindings are recorded during the render itself (nothing renders twice; a node or loop served from a render cache contributes what it recorded when it rendered). A binding inside the body of a custom block tag (a Rust or library block tag, `{% ifchanged %}`, `{% filter %}`, an inclusion tag's template) never counts, because the tag decides what of its body reaches the page: list such fields in `allowed_model_fields`, which is unchanged. New system check `djust.T030` warns about them (following a literal `{% include %}` in such a body), and a block-tag handler that always emits its body may declare `EMITS_BODY = True`: the built-in component tags that do (`card`, `accordion`, `tabs`, `dropdown`, `form_group`, `fieldset`, the layout tags and the others in `djust.components.rust_handlers.EMITS_BODY_TAGS`) keep working unchanged (`dropdown` and `page_header_actions` count their body while it is drawn), while `modal`, `dropdown_menu`, `await`, `nav_item`, `form_array` and `{% call %}`/`{% slot %}` bodies need `allowed_model_fields`. Embedded `{% live_render %}` children record the template text their render executed, under Django's engine and djust's own backend alike. Rendered data — an unquoted `attr={{ value }}`, a `dj-model="{{ field }}"`, `|safe` HTML — can never add a field.
+- **Events routed to a LiveComponent or an embedded child view run the page view's per-event object-permission check on the WebSocket and SSE transports.** The page view's `get_object()` / `has_object_permission()` was re-run for the page's own events but not for an event carrying `component_id` (or a child's `view_id`), although such an event re-renders the page. Every view the event belongs to (the component's view, an embedded child's parents and the page view) is now checked before the handler runs; a refusal sends the same `permission_denied` error frame a page event gets, runs no handler and renders nothing. The HTTP POST event fallback already checked the page view first and is unchanged.
+- **Presence identifies an anonymous user by an opaque id instead of the session key.** `PresenceMixin.get_presence_user_id()` used to return `anon_<session_key>` for an anonymous user, and that id is shared with every participant in the room (`list_presences()`, join/leave records, the `LiveCursorMixin` `cursor_move` broadcast and `get_cursors()`). It now returns `anon_<hmac>`: 128 bits of an HMAC-SHA256 of the session key under `SECRET_KEY` (`django.utils.crypto.salted_hmac`, dedicated salt), via the new `djust.presence.anonymous_presence_id()`. The id is still stable for the session, so tabs of one browser session still count as one presence. With `presence_unique_per_connection = True` the `anon_conn_` id is likewise an HMAC of the transport session id (`anonymous_connection_presence_id()`). An override of `get_presence_user_id()` that returns a session key, or code that matched presence ids against `anon_<session_key>`, should use `anonymous_presence_id()`.
+- **A Component's hybrid template judges a URL whose character reference the slot completes, and more URL shapes (1.3 backport of #3923, #3924).**
+  `href="&#10{{ s }}"` with `6;avascript:...`, or `href="javascript&{{ s }}"` with `colon;...`,
+  printed a value the browser reads as `javascript:`; the value is now decoded as printed (the
+  literal and the slot's escaped text together) before the scheme check, and a literal ending in
+  an unfinished character reference no longer fixes the value. A URL value with more than 64
+  paths, or a `{% now %}` before the slot, was escaped but printed as given; identical paths now
+  count once, and a value still over the cap whose slots are plain names is judged slot by slot
+  and fails closed. Literal `{% cycle %}` values are branches, and `{% cycle ... as c %}` no
+  longer hides its text. Regression tests in `python/djust/tests/test_hybrid_attrs_charref_join_3923.py`
+  and `python/djust/tests/test_hybrid_attrs_unjudged_shapes_3924.py`.
+- **A Component's hybrid template no longer prints a URL its neutralisation could not make safe (1.3 backport of #3925).**
+  When a URL slot was refused, the value printed `#` in its place, and the `#` could itself
+  complete a character reference: `href="javascript&{{ s }}x3a;alert(1)"` with `s="#"` printed
+  `javascript&#x3a;...`. The neutralisation is now re-checked until no path is refused, and a value
+  it cannot make safe raises instead of printing. Tests in
+  `python/djust/tests/test_hybrid_attrs_plan_mutations_3925.py`.
+- **A `LiveComponent` / `BoundComponent` `template_name` file's own source follows the attribute and raw-text escaping rule (1.3 backport of #3933).**
+  Only an inline `template` was hardened; a file was rendered as written, so `<a href="{{ url }}">`
+  with `javascript:alert(1)`, or a marked-safe value in `title="{{ v }}"` / `<textarea>{{ v }}</textarea>`,
+  printed unescaped. Both classes now draw the file through `_render_template_file`: attribute
+  slots are escaped whatever the value is marked as, a URL is checked against the scheme
+  allowlist, and raw-text slots are escaped; a text slot keeps its markup. Content from
+  `{% extends %}` / `{% include %}` is not scanned and is named by the once-per-class warning; a
+  file whose source the backend does not expose is drawn as before and named once. The dj-if ids
+  of a file with attribute slots change once on upgrade. Tests in
+  `python/djust/tests/test_component_hybrid_rawtext_and_live_templates_3913_3914.py` (`TestTemplateNameFile`).
+- **Marked-safe values are escaped in the attributes of the admin, allauth / djust_auth, bug-capture replay and gallery templates (1.3 backport of #4157).**
+  Every attribute slot of those templates now uses `|force_escape`; a URL attribute goes through
+  the new `djust_url_attr` filter (`{% load djust_attrs %}`, which turns a `javascript:` /
+  `vbscript:` / `data:` URL into `#`), and a quoted `dj-click` / `dj-change` handler argument
+  through `djust_handler_arg`. Tests in `python/tests/test_page_template_attrs_4157.py`.
+- **Marked-safe values are escaped in the attributes of the djust_components inclusion-tag templates (1.3 only).**
+  `{% avatar %}`, `{% badge %}`, `{% pagination %}`, `{% progress %}`, the data table, toast,
+  markdown controls and ttyd terminal templates printed a value marked safe into an attribute as it
+  was: `{% avatar src="/a.png" alt=p %}` with `p=mark_safe('x" onerror="alert(1)')` wrote an
+  `onerror` attribute. Every attribute slot now uses `|force_escape`; URL slots keep their URL
+  checks. Tests in `python/tests/test_component_template_attrs_13.py`.
+- **The HTTP API and `@server_function` endpoints answer a `PermissionDenied` with the fixed message "Permission denied" (1.3 backport of #4170).**
+  The exception's text no longer reaches the caller, DEBUG included; it goes to the server log
+  only, as on WebSocket and SSE. Tests in `python/djust/tests/test_api_permission_detail_4170.py`.
+- **SSE events no longer lose the page's query string during authorization (1.3 backport of #4231).**
+  An explicit view resolving state from the query (a `TenantMixin` view reading `?tenant=`)
+  refused its first SSE event with "Event authorization failed". The event request now takes the
+  query from the trusted mount request, as the WebSocket and HTTP fallback do; the query on the
+  message POST itself is ignored and a changed tenant is still refused. Tests in
+  `python/djust/tests/test_sse_event_query_string_4231.py`.
+- **With `reauth_on_event`, the SSE per-event auth re-check sees the page's route (1.3 backport of #4255).**
+  On a legacy view with `login_required` / `permission_required` the re-check ran against the raw
+  `/djust/sse/<id>/message/` POST, so a `check_permissions` reading `request.path` or
+  `request.GET` could decide differently than on the other transports. It now keeps the live
+  POST's user and session and takes path, resolver match, slot and page query from the mount
+  request; an SSE navigation or slot mount turn uses the destination page's request. Tests in
+  `python/djust/tests/test_sse_reauth_mount_request_4255.py`.
+- **Password fields are kept out of form drafts and form-state recovery (1.3 backport of #4067).**
+  A `type="password"` field, or one marked `autocomplete="new-password"` / `"current-password"`,
+  is no longer saved to browser storage as part of a form draft (even when marked
+  `data-draft="true"`), sent back to the server by `dj-auto-recover`, included when djust reads a
+  form's values, or filled in from a stored draft. A password that 1.3.0-1.3.3 already saved in a
+  draft is removed from browser storage the next time that form's draft is saved. Tests in
+  `tests/js/secret_fields_not_kept_4067.test.js`.
+- **Reconnect form recovery no longer keeps or re-sends password values (1.3 backport of #4078).**
+  The capture taken before a reconnect mount held a password field's value, wrote it back into
+  the new markup and replayed it to the server; it now uses the same password check as drafts.
+  Tests in `tests/js/form_recovery_secret_4078.test.js`.
+- **The scripts djust loads carry the CSP nonce (1.3 backport of #3991).** The client, extension
+  and DEBUG `<script src>` tags were emitted without the request's nonce while the inline scripts
+  beside them had it, so a nonce-only or `'strict-dynamic'` `script-src` refused them and the
+  client never loaded unless the policy was loosened. All four now carry the nonce. Tests in
+  `python/djust/tests/test_client_script_nonce.py`.
+
 ## [1.3.4] - 2026-11-26
 
 ### Security

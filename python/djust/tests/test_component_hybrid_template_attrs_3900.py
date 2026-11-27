@@ -679,11 +679,15 @@ class TestBlocksInAValue:
         texts = sorted("".join(v if k == "lit" else "<s>" for k, v in p) for p in group.paths)
         assert texts == ["/<s>", "<s>"]
 
-    def test_a_value_with_too_many_paths_is_listed_not_judged_loosely(self) -> None:
+    def test_identical_paths_are_one_so_the_value_stays_under_the_cap(self) -> None:
+        """256 ways through, nine distinct outputs: judged path by path (#3924; before, more
+        than 64 paths left it listed and unjudged)."""
         many = "".join("{% if a" + str(i) + " %}/{% endif %}" for i in range(8)) + "{{ s }}"
         plan = hybrid.plan(f'<a href="{many}">')
-        assert plan.groups == ()
-        assert [t[:2] for t in plan.unchecked_urls] == [("a", "href")]
+        (group,) = plan.groups
+        assert not group.roles and len(group.paths) <= 9
+        assert plan.unchecked_urls == ()
+        assert 'href="#"' in _draw(f'<a href="{many}">', s="javascript:alert(1)")
 
 
 class TestLiteralsABrowserNormalises:
@@ -751,7 +755,6 @@ class TestWhatIsNotJudged:
         "filtered": '<a href="{{ u|default:"/x" }}">',
         "loop": '{% for l in links %}<a href="{{ l }}">{% endfor %}',
         "with": '{% with x=u %}<a href="{{ x }}">{% endwith %}',
-        "printing-tag": '<a href="{% now "Y" %}{{ u }}">',
         "printing-tag-in-block": '<a href="{% if a %}{% trans "x" %}{% endif %}{{ u.k }}">',
     }
 

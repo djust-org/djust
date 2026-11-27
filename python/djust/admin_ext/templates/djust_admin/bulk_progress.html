@@ -1,4 +1,4 @@
-{% extends "djust_admin/base.html" %}
+{% extends "djust_admin/base.html" %}{% load djust_attrs %}
 
 {% block breadcrumb_items %}
 <span class="mx-2 text-gray-400">/</span>
@@ -37,7 +37,7 @@
         </div>
         <div class="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
             <div class="h-3 bg-indigo-600 transition-all"
-                 style="width: {{ percent }}%"></div>
+                 style="width: {{ percent|force_escape }}%"></div>
         </div>
 
         {% if message %}
@@ -53,7 +53,7 @@
             </button>
             {% endif %}
             {% if done and redirect_url %}
-            <a href="{{ redirect_url }}"
+            <a href="{{ redirect_url|djust_url_attr }}"
                class="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700">
                 Back to list
             </a>

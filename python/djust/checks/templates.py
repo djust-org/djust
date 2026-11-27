@@ -10,7 +10,7 @@ import os
 import re
 import textwrap
 from functools import lru_cache
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 from django.core.checks import CheckMessage, register
 
@@ -968,6 +968,12 @@ def check_templates(app_configs: Any, **kwargs: Any) -> list[CheckMessage]:
         # T014 -- deprecated data-dj-id attribute (renamed to dj-id in v1.0)
         _check_deprecated_data_dj_id(content, relpath, filepath, errors)
 
+        # T030 -- dj-model inside a custom block tag's body (not writable)
+        if not _is_check_suppressed("djust.T030"):
+            _check_dj_model_in_custom_block_tag(
+                content, relpath, filepath, errors, template_dirs=tpl_dirs
+            )
+
         # T015 -- legacy data-djust-root / data-djust-view root attributes
         _check_legacy_root_attrs(content, relpath, filepath, errors)
 
@@ -1720,6 +1726,152 @@ def _check_rust_jsx_tags(
                 line_number=lineno,
             )
         )
+
+
+#: A ``{% tag ... %}``: the arguments may hold quoted strings with ``%`` (``title="50% off"``).
+_T030_TAG_RE = re.compile(r"""\{%-?\s*(\w+)(?:"[^"\n]*"|'[^'\n]*'|[^"'%]|%(?!\}))*?-?%\}""")
+_T030_INCLUDE_RE = re.compile(r"""\{%-?\s*include\s+(["'])([^"'\n]+)\1""")
+#: How deep T030 follows literal ``{% include %}`` names (the static walker's ``MAX_INCLUDE_DEPTH``).
+_T030_MAX_INCLUDE_DEPTH = 10
+_T030_DJ_MODEL_RE = re.compile(r"""(?:^|(?<=[\s]))dj-model=(["'])([^"']+)\1""")
+#: Block tags whose body renders into the page exactly when it is emitted, so
+#: a dj-model binding in it counts toward the view's write allowlist.
+_T030_TRANSPARENT_BLOCK_TAGS = frozenset(
+    {
+        "if",
+        "for",
+        "with",
+        "block",
+        "autoescape",
+        "spaceless",
+        "localize",
+        "localtime",
+        "timezone",
+        "language",
+    }
+)
+
+
+def _t030_block_tag_emits_body(name: str) -> bool:
+    try:
+        from djust._rust import block_tag_handler_emits_body
+    except ImportError:
+        return False
+    return bool(block_tag_handler_emits_body(name))
+
+
+def _t030_included_bindings(
+    name: str, template_dirs: Sequence[str], seen: set[str], depth: int = 0
+) -> list[str]:
+    """The ``dj-model`` fields of the template a literal ``{% include %}`` names, and of the
+    templates it includes the same way (each once, ``_T030_MAX_INCLUDE_DEPTH`` deep)."""
+    if depth >= _T030_MAX_INCLUDE_DEPTH:
+        return []
+    for directory in template_dirs:
+        base = os.path.realpath(directory)
+        path = os.path.realpath(os.path.join(base, name))
+        if path.startswith(base + os.sep) and os.path.isfile(path):
+            break
+    else:
+        return []
+    if path in seen:
+        return []
+    seen.add(path)
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            source = fh.read()
+    except OSError:
+        return []
+    fields = [m.group(2) for m in _T030_DJ_MODEL_RE.finditer(source)]
+    for include in _T030_INCLUDE_RE.finditer(source):
+        fields.extend(_t030_included_bindings(include.group(2), template_dirs, seen, depth + 1))
+    return fields
+
+
+def _check_dj_model_in_custom_block_tag(
+    content: str,
+    relpath: str,
+    filepath: str,
+    errors: list[CheckMessage],
+    template_dirs: Sequence[str] = (),
+) -> None:
+    """T030: a ``dj-model`` binding inside the body of a custom block tag.
+
+    The tag's handler decides what of its body reaches the page (a
+    permission-gate tag may drop it), so a binding there is never added to the
+    view's dj-model write allowlist from the render, unless the handler
+    declares ``EMITS_BODY = True``. The field must be listed in
+    ``allowed_model_fields`` to be writable. A literal ``{% include %}`` in such a
+    body is followed through ``template_dirs``: the included bindings are flagged
+    at the include.
+    """
+    if "dj-model" not in content and "include" not in content:
+        return
+    tags = list(_T030_TAG_RE.finditer(content))
+    names = [m.group(1) for m in tags]
+    closers = set(name for name in names if name.startswith("end"))
+    stack: list[tuple[str, bool]] = []  # (tag, its body counts)
+    cursor = 0
+    skip_until: Optional[str] = None
+    line_counter = LineCounter(content)
+
+    def warn(position: int, field: str, tag: str, included: Optional[str] = None) -> None:
+        if "{{" in field or "{%" in field:
+            return
+        lineno = line_counter.line_at(position)
+        where = ' (in included "%s")' % included if included else ""
+        errors.append(
+            DjustWarning(
+                '%s:%d -- dj-model="%s"%s is inside the body of {%% %s %%}; it is '
+                "not writable unless listed in allowed_model_fields."
+                % (relpath, lineno, field, where, tag),
+                hint=(
+                    "A custom block tag decides what of its body reaches the page, "
+                    "so its dj-model bindings are not added to the view's write "
+                    "allowlist. Add '%s' to the view's allowed_model_fields, move the "
+                    "input out of the tag, or declare EMITS_BODY = True on a Rust "
+                    "block-tag handler that always emits its body." % field
+                ),
+                id="djust.T030",
+                file_path=filepath,
+                line_number=lineno,
+            )
+        )
+
+    def scan_text(start: int, end: int) -> None:
+        opaque = [tag for tag, counts in stack if not counts]
+        if not opaque:
+            return
+        for match in _T030_DJ_MODEL_RE.finditer(content, start, end):
+            warn(match.start(), match.group(2), opaque[-1])
+
+    for match in tags:
+        name = match.group(1)
+        if skip_until is not None:
+            if name == skip_until:
+                skip_until = None
+                cursor = match.end()
+            continue
+        scan_text(cursor, match.start())
+        cursor = match.end()
+        if name == "include" and template_dirs:
+            opaque = [tag for tag, counts in stack if not counts]
+            include = _T030_INCLUDE_RE.match(match.group(0))
+            if opaque and include:
+                for field in _t030_included_bindings(include.group(2), template_dirs, set()):
+                    warn(match.start(), field, opaque[-1], include.group(2))
+        if name in ("verbatim", "comment"):
+            skip_until = "end" + name
+        elif name.startswith("end"):
+            opener = name[3:]
+            if any(tag == opener for tag, _ in stack):
+                while stack and stack.pop()[0] != opener:
+                    pass
+        elif "end" + name in closers:
+            counts = name in _T030_TRANSPARENT_BLOCK_TAGS or _t030_block_tag_emits_body(name)
+            stack.append((name, counts))
+    if skip_until is None:
+        scan_text(cursor, len(content))
 
 
 def _check_table_section_root(

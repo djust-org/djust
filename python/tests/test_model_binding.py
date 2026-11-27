@@ -50,7 +50,9 @@ class TestModelBindingMixin:
             '<input dj-model="search_query">'
             '<input dj-model="count">'
             '<input dj-model="price">'
-            '<input dj-model="active">'
+            '<input dj-model="active">',
+            # A template without tags renders all of its text.
+            rendered_bindings={"search_query", "count", "price", "active"},
         )
 
     def test_update_string_field(self):

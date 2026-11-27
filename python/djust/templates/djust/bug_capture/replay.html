@@ -118,8 +118,8 @@
     </p>
 
     <div class="dj-share">
-      <input type="text" readonly value="{{ blob }}" aria-label="djbug1 share blob">
-      <button type="button" class="dj-bugcapture-copy" data-bugcapture-url="{{ blob }}">Copy as djbug1. URL</button>
+      <input type="text" readonly value="{{ blob|force_escape }}" aria-label="djbug1 share blob">
+      <button type="button" class="dj-bugcapture-copy" data-bugcapture-url="{{ blob|force_escape }}">Copy as djbug1. URL</button>
     </div>
 
     <h2>State diff</h2>
@@ -130,9 +130,9 @@
       </thead>
       <tbody>
         {% for row in diff_rows %}
-        <tr class="dj-diff-{{ row.status }}">
+        <tr class="dj-diff-{{ row.status|force_escape }}">
           <td><code>{{ row.key }}</code></td>
-          <td><span class="dj-status-badge dj-status-{{ row.status }}">{{ row.status }}</span></td>
+          <td><span class="dj-status-badge dj-status-{{ row.status|force_escape }}">{{ row.status }}</span></td>
           <td><pre>{{ row.before|default:"—" }}</pre></td>
           <td><pre>{{ row.after|default:"—" }}</pre></td>
         </tr>
@@ -172,7 +172,7 @@
 
     {% if dom_preview %}
     <h2>Captured HTML preview (sandboxed — no scripts, no same-origin)</h2>
-    <iframe class="dj-dom-preview" sandbox="" srcdoc="{{ dom_preview }}"></iframe>
+    <iframe class="dj-dom-preview" sandbox="" srcdoc="{{ dom_preview|force_escape }}"></iframe>
     {% endif %}
   </main>
   <script src="{% static 'djust/bug_capture_replay.js' %}"></script>

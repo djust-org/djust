@@ -24,6 +24,7 @@ from django import template
 from django.utils.html import conditional_escape, format_html, format_html_join
 from django.utils.safestring import SafeString
 
+from djust._dj_model_bindings import commit_bindings, held_bindings
 from djust._template_guards import call_method_for_template
 from djust.components.utils import safe_url  # from where it is DEFINED, not ``._registry`` (#3820)
 from djust.components.utils import (
@@ -533,7 +534,12 @@ class DropdownNode(template.Node):
         toggle_event = kw.get("toggle_event", "toggle_dropdown")
         variant = kw.get("variant", "default")
 
-        content = self.nodelist.render(context)
+        # The menu (and so the body) is drawn only while open: its dj-model
+        # bindings count exactly then.
+        with held_bindings() as body_bindings:
+            content = self.nodelist.render(context)
+        if is_open:
+            commit_bindings(body_bindings)
         open_attr = " data-open" if is_open else ""
         variant_cls = f"dj-dropdown--{conditional_escape(variant)}"
         component_id = kw.get("component_id", "")
@@ -6218,6 +6224,7 @@ def do_theme_toggle(parser: Any, token: Any) -> template.Node:
 # ---------------------------------------------------------------------------
 
 _page_header_actions_key = "__page_header_actions__"
+_page_header_actions_bindings_key = "__page_header_actions_bindings__"
 
 
 class PageHeaderActionsNode(template.Node):
@@ -6227,9 +6234,12 @@ class PageHeaderActionsNode(template.Node):
         self.nodelist = nodelist
 
     def render(self, context: Any) -> SafeString:
-        content = self.nodelist.render(context)
-        # Stash the rendered actions content on the context for the parent
+        with held_bindings() as body_bindings:
+            content = self.nodelist.render(context)
+        # Stash the rendered actions content on the context for the parent,
+        # with its dj-model bindings: they count only if the parent draws it.
         context[_page_header_actions_key] = content
+        context[_page_header_actions_bindings_key] = body_bindings
         return ""
 
 
@@ -6256,8 +6266,11 @@ class PageHeaderNode(template.Node):
         # Render child nodelist — this may include page_header_actions which
         # stashes its content in the context.
         context[_page_header_actions_key] = ""
+        context[_page_header_actions_bindings_key] = ()
         breadcrumb_content = self.nodelist.render(context)
         actions_html = context.get(_page_header_actions_key, "")
+        if actions_html.strip():
+            commit_bindings(context.get(_page_header_actions_bindings_key, ()))
 
         cls = "dj-page-header"
         if e_custom_class:
@@ -10473,3 +10486,65 @@ def do_dashboard_grid(parser: Any, token: Any) -> template.Node:
     nodelist = parser.parse(("enddashboard_grid",))
     parser.delete_first_token()
     return DashboardGridNode(nodelist, kwargs)
+
+
+# Block-tag nodes that render only the parts of their body they emit (most emit all of it; the
+# accordion renders only the open item, ``tabs`` only the active pane). Under Django's engine the
+# dj-model bindings in their bodies count toward the view's write allowlist; every other custom
+# node's body does not (``djust._dj_model_bindings``). ``DropdownNode`` renders its body and drops
+# it while closed, and ``PageHeaderActionsNode`` hands its body to the enclosing ``page_header``:
+# both hold their body's bindings (``held_bindings``) and count them only when the body is drawn.
+# The Rust handlers declare it through ``rust_handlers.EMITS_BODY_TAGS``; pinned by
+# ``test_dj_model_emits_body_tags``.
+for _emits_body_node in (
+    ModalDescriptionNode,
+    CardNode,
+    DropdownNode,
+    AccordionNode,
+    AccordionItemNode,
+    AlertNode,
+    FormGroupNode,
+    TimelineNode,
+    TimelineItemNode,
+    TooltipNode,
+    PopoverNode,
+    CollapsibleNode,
+    SheetNode,
+    CommandPaletteNode,
+    ContextMenuNode,
+    InputGroupNode,
+    InputAddonNode,
+    DjLabelNode,
+    FieldsetNode,
+    LoadingOverlayNode,
+    AnnouncementBarNode,
+    PageHeaderActionsNode,
+    PageHeaderNode,
+    SidebarNode,
+    SidebarItemNode,
+    NavMenuNode,
+    AppShellNode,
+    AppSidebarNode,
+    AppHeaderNode,
+    AppContentNode,
+    ToolbarNode,
+    ToolbarOverflowNode,
+    FilterBarNode,
+    HoverCardNode,
+    ExpandableTextNode,
+    WizardNode,
+    InfiniteScrollNode,
+    CookieConsentNode,
+    PageAlertNode,
+    ErrorBoundaryNode,
+    ResizablePanelNode,
+    DashboardGridNode,
+    AspectRatioNode,
+    CalloutNode,
+    ScrollAreaNode,
+    StickyHeaderNode,
+    TabNode,
+    TabsNode,
+    SplitPaneNode,
+):
+    _emits_body_node.EMITS_BODY = True  # type: ignore[attr-defined]

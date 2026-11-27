@@ -116,7 +116,7 @@ class TestPresenceIdentityUnderTheClient:
     actually run under ``LiveViewTestClient`` — that is the point of the fix —
     but it also exposed the fallback identity. With the DEFAULT
     ``presence_unique_per_connection = False``, ``get_presence_user_id()``
-    returns ``f"anon_{session_key}"``, and an UNSAVED session has
+    returns an id derived from the session key, and an UNSAVED session has
     ``session_key is None``: every client collapsed to the single identity
     ``anon_None``, so two clients counted as ONE presence — the false-green
     class this PR exists to kill.

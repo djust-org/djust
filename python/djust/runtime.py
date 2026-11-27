@@ -1225,9 +1225,9 @@ class Transport(Protocol):
           from websocket.py:3193-3222) and returns ``False``. Fail-safe: any error
           (no session in scope, etc.) skips the re-check and returns ``True``.
         - SSE: when the flag is set + the view requires auth, re-runs
-          ``check_view_auth_lightweight`` against the LIVE event-POST request
+          ``check_view_auth_lightweight`` against the LIVE event-POST principal
           (``session._event_request`` — the current POSTer's request.user, not the
-          stale mount request); on failure sends an auth-error frame + ends the
+          stale mount request), with the mount's route (#4255); on failure sends an auth-error frame + ends the
           stream and returns ``False``. The owner-binding check (Finding #24) runs
           at the endpoint BEFORE dispatch, so this is the SSE analog of the WS
           mid-session deauth gate — a still-owning POSTer whose auth was revoked is
@@ -2698,9 +2698,14 @@ class SSESessionTransport:
 
     @property
     def turn_request(self) -> Any:
-        """The live request for a turn: the event POST, else the stream GET."""
+        """The page request this turn's view is (being) mounted under.
+
+        The stream GET's, or the destination ``page_request`` a navigation or
+        slot mount built from the live event POST -- so the principal is the
+        POST's and the route the page's, never ``/djust/sse/<id>/message/``
+        (#4255). The event POST itself is only a defensive fallback."""
         session = self._session
-        return getattr(session, "_event_request", None) or getattr(session, "_request", None)
+        return getattr(session, "_request", None) or getattr(session, "_event_request", None)
 
     @property
     def mount_turn_source(self) -> Optional[str]:
@@ -2906,7 +2911,9 @@ class SSESessionTransport:
         raise NotImplementedError("Actor events are WS-only; SSE refuses use_actors mounts.")
 
     async def recheck_event_auth(self, view: Any) -> bool:
-        """SSE per-event auth re-check against the LIVE event-POST request (#1777).
+        """SSE per-event auth re-check against the LIVE event-POST principal (#1777),
+        with the route (path, resolver match, slot, page query) of the view's mount
+        request (#4255).
 
         SSE parity for the WS mid-session deauth gate. The owner-binding check
         (Finding #24) already runs at the ``/event/`` + ``/message/`` endpoints
@@ -2944,6 +2951,17 @@ class SSESessionTransport:
             # (e.g. a direct runtime.dispatch_event call) — the mount request
             # still carries a real user, so the re-check stays meaningful.
             request = getattr(session, "_event_request", None)
+            mounted = getattr(view, "_djust_mount_request", None)
+            if request is not None and mounted is not None:
+                # The principal is the live POST's; the route (path, resolver
+                # match, slot, page query) is the mount's, as on WS and the
+                # HTTP fallback -- the /message/ URL never counts (#4255).
+                from copy import copy
+
+                from ._exposure_auth import apply_mount_route
+
+                request = copy(request)
+                apply_mount_route(request, mounted)
             if request is None:
                 # A server-originated turn (tick, push, background result): no
                 # POST is in flight. The mount request's user was resolved when

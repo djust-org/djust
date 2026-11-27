@@ -1,4 +1,4 @@
-{% load djust_assets %}
+{% load djust_assets djust_attrs %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -28,7 +28,7 @@
             <p class="text-sm text-gray-600 mb-6">
                 You have been logged out of the admin site.
             </p>
-            <a href="{{ login_url }}"
+            <a href="{{ login_url|djust_url_attr }}"
                class="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
                 Log in again
             </a>

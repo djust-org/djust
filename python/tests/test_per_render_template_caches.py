@@ -230,7 +230,7 @@ def test_record_dj_model_fields_caches_only_with_debug_off(settings, debug, cach
     seen = {}
 
     class FakeRustView:
-        def dj_model_fields(self, cache=False):
+        def writable_dj_model_fields(self, cache=False):
             seen["cache"] = cache
             return ["name"]
 

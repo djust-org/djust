@@ -1111,9 +1111,8 @@ class LiveView(  # type: ignore[misc]  # StreamsMixin(sync) + StreamingMixin(asy
 
         # dj-model auto-allowlist (CWE-915 mass-assignment guard). Populated
         # each render by ModelBindingMixin._record_dj_model_fields_from_rust()
-        # with the set of fields bound via static dj-model="<field>" in the
-        # TEMPLATE SOURCE (collected from the Rust template AST's Text-node
-        # literals — immune to rendered-output poisoning). Assigned HERE —
+        # with the dj-model="<field>" bindings of the template's own text that
+        # the current state renders (rendered data never adds one). Assigned HERE —
         # BEFORE the _framework_attrs snapshot — so it is treated as a framework
         # slot: recomputed every render, reset on reconnect, and EXCLUDED from
         # user-private state serialization (it must never be persisted; it is

@@ -4556,8 +4556,9 @@ function _collectDraftData(scope) {
     const draftData = {};
     scope.querySelectorAll('[data-draft="true"]').forEach(f => {
         // Prevent prototype pollution attacks. A file input has no value a
-        // draft could put back (setting one throws).
-        if (f.name && !UNSAFE_KEYS.includes(f.name) && f.type !== 'file') {
+        // draft could put back (setting one throws). A password is never
+        // written to browser storage (#4067).
+        if (f.name && !UNSAFE_KEYS.includes(f.name) && f.type !== 'file' && !_isSecretControl(f)) {
             if (f.type === 'checkbox') {
                 draftData[f.name] = f.checked;
             } else {
@@ -4573,14 +4574,24 @@ function _collectDraftData(scope) {
  * the key (the unwritten save if one is pending, else storage). A name the
  * page does not hold at the moment, such as a wizard's earlier step, keeps its
  * saved value until `clear_draft()` removes the draft.
+ *
+ * A stored name that belongs to a password field in `scope` is dropped: a
+ * draft saved before #4067 can hold one, and carrying it over would keep the
+ * password in browser storage for as long as the draft lives.
  */
-function _mergeDraftData(draftKey, current) {
+function _mergeDraftData(draftKey, current, scope) {
     const previous = globalDraftManager.pendingData.get(draftKey) || globalDraftManager.loadDraft(draftKey);
+    const secret = new Set();
+    if (scope && typeof scope.querySelectorAll === 'function') {
+        scope.querySelectorAll('input[name], textarea[name]').forEach(f => {
+            if (_isSecretControl(f)) secret.add(f.name);
+        });
+    }
     const merged = {};
     if (previous && typeof previous === 'object') {
         Object.keys(previous).forEach(name => {
             // eslint-disable-next-line security/detect-object-injection
-            if (!UNSAFE_KEYS.includes(name)) merged[name] = previous[name];
+            if (!UNSAFE_KEYS.includes(name) && !secret.has(name)) merged[name] = previous[name];
         });
     }
     Object.keys(current).forEach(name => {
@@ -4600,7 +4611,7 @@ function _onDraftFieldChange(event) {
     const draftKey = place.root.getAttribute('data-draft-key');
     if (!draftKey) return;
     _draftEdited.set(field, field.name);
-    globalDraftManager.saveDraft(draftKey, _mergeDraftData(draftKey, _collectDraftData(place.scope)));
+    globalDraftManager.saveDraft(draftKey, _mergeDraftData(draftKey, _collectDraftData(place.scope), place.scope));
 }
 
 function _installDraftListeners() {
@@ -4633,7 +4644,7 @@ function syncDraftFields(atInit) {
         const place = _draftTargetFor(field);
         const draftKey = place && place.root.getAttribute('data-draft-key');
         if (!draftKey || !field.name || UNSAFE_KEYS.includes(field.name)) return;
-        if (field.type === 'file') return;
+        if (field.type === 'file' || _isSecretControl(field)) return;
         if (!savedByKey.has(draftKey)) {
             // A debounced save still waiting to be written is newer than storage.
             savedByKey.set(
@@ -4737,12 +4748,23 @@ if (typeof window !== 'undefined') {
     });
 }
 
+/**
+ * A password field (or one the page marks as holding a password) is never
+ * read into a draft, an auto-recover envelope or `_collectFormData`, and never
+ * written back from one (1.3 backport of #4067).
+ */
+function _isSecretControl(field) {
+    if (field.type === 'password') return true;
+    const autocomplete = (field.getAttribute('autocomplete') || '').toLowerCase();
+    return /(^|\s)(new|current)-password(\s|$)/.test(autocomplete);
+}
+
 function _collectFormData(container) {
     const data = {};
 
     const fields = container.querySelectorAll('input, textarea, select');
     fields.forEach(field => {
-        if (field.name && !UNSAFE_KEYS.includes(field.name)) {
+        if (field.name && !UNSAFE_KEYS.includes(field.name) && !_isSecretControl(field)) {
             if (field.type === 'checkbox') {
                 data[field.name] = field.checked;
             } else if (field.type === 'radio') {
@@ -4778,7 +4800,7 @@ function _restoreFormData(container, data) {
             field = container.querySelector(`#${name}`);
         }
 
-        if (!field) return;
+        if (!field || (field.tagName === 'INPUT' && _isSecretControl(field))) return;
 
         if (field.tagName === 'INPUT') {
             if (field.type === 'checkbox') {
@@ -8063,7 +8085,8 @@ function _processAutoRecover() {
         const formValues = {};
         container.querySelectorAll('input, textarea, select').forEach(function(field) {
             const name = field.name;
-            if (!name) return;
+            // A password value is never sent back in the envelope (#4067).
+            if (!name || _isSecretControl(field)) return;
             if (field.type === 'checkbox') {
                 // eslint-disable-next-line security/detect-object-injection
                 formValues[name] = field.checked;
@@ -8105,7 +8128,9 @@ function _processAutoRecover() {
  * server-rendered default, restoring server state transparently.
  *
  * Skips fields with dj-no-recover or fields inside dj-auto-recover
- * containers (custom handlers take precedence).
+ * containers (custom handlers take precedence), and password fields
+ * (`_isSecretControl`, #4078): their values are neither captured before the
+ * reconnect mount, restored into the new markup, nor replayed to the server.
  *
  * Fires events sequentially (batched) via handleEvent() to avoid
  * race conditions on the server.
@@ -8114,7 +8139,7 @@ function _formRecoveryFields(root) {
     return Array.from(root.querySelectorAll('input, textarea, select')).filter(field =>
         (field.hasAttribute('dj-change') || field.hasAttribute('dj-input') || field.closest('[dj-auto-recover]'))
         && !field.hasAttribute('dj-no-recover') && !field.hasAttribute('dj-force-value')
-        && !field.disabled && field.type !== 'file');
+        && !field.disabled && field.type !== 'file' && !_isSecretControl(field));
 }
 
 function _formRecoveryKey(field, root) {

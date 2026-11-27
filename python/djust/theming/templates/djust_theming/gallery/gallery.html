@@ -1,4 +1,4 @@
-{% load theme_tags theme_components static %}<!DOCTYPE html>
+{% load theme_tags theme_components static djust_attrs %}<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -92,7 +92,7 @@
 <nav class="gallery-topbar">
   <a href="/" class="gallery-topbar-brand">djust-theming</a>
   <span class="gallery-topbar-sep">|</span>
-  {% if components_gallery_url %}<a href="{{ components_gallery_url }}">Components</a>{% endif %}
+  {% if components_gallery_url %}<a href="{{ components_gallery_url|djust_url_attr }}">Components</a>{% endif %}
   <span class="gallery-topbar-sep">|</span>
   <a href="{% url 'djust_theming:gallery' %}" class="gallery-topbar-active">Gallery</a>
   <a href="{% url 'djust_theming:components' %}">Catalogue</a>
@@ -119,7 +119,7 @@
         <select id="preset-select" name="preset"
                 onchange="window.djustTheme &amp;&amp; window.djustTheme.setPreset(this.value)">
           {% for preset in presets %}
-          <option value="{{ preset.name }}" {% if preset.name == current_preset %}selected{% endif %}>{{ preset.display_name }}</option>
+          <option value="{{ preset.name|force_escape }}" {% if preset.name == current_preset %}selected{% endif %}>{{ preset.display_name }}</option>
           {% endfor %}
         </select>
         <noscript><button type="submit" class="gallery-trigger">Apply</button></noscript>

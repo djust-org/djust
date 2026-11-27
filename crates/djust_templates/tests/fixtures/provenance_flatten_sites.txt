@@ -587,8 +587,9 @@ djust_live/src/lib.rs
 Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
 self.dj_if_id_namespace = namespace.to_string();
 let prefix = format!("{key}.");
+let key = (self.template_source.to_string(), self.template_dirs.clone());
 Ok(dict.into())
-Ok((result.html, spans, result.origins))
+(result.html, spans, result.origins)
 return Err(e.into());
 let open = format!("<{sentinel_tag} ");
 reduced_html.clone()

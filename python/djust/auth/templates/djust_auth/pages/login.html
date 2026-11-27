@@ -6,7 +6,7 @@
 {% auth_errors form %}
 <form method="post" class="dj-auth-form" novalidate>{% csrf_token %}
   {% for field in form.visible_fields %}{% if field.name == "code" %}{% auth_code_input field %}{% else %}{% auth_field field %}{% endif %}{% endfor %}{% for h in form.hidden_fields %}{{ h }}{% endfor %}
-  {% if auth.next %}<input type="hidden" name="next" value="{{ auth.next }}">{% endif %}
+  {% if auth.next %}<input type="hidden" name="next" value="{{ auth.next|force_escape }}">{% endif %}
   <button class="dj-auth-submit" type="submit">Sign in</button>
 </form>
 {% auth_links auth %}

@@ -634,6 +634,7 @@ fn render_effectful_node_output<L: TemplateLoader, R: RenderOutput>(
         let _namespace = crate::registry_scope::NamespaceGuard::enter(*registry_namespace);
         let previous = context.replace_node_identity(Some((source.as_ptr() as usize, span.0)));
         let mut rendered = if let (Some(metadata), Node::Text(text)) = (lazy_text, &nodes[0]) {
+            crate::model_bindings::record_text(text);
             let mut output = R::source_text(text, metadata);
             if R::TRACKED {
                 output.loop_identity(context);
@@ -798,6 +799,7 @@ fn sibling_updates<L: TemplateLoader>(
             // Python-only context (request, view) the same way
             // `Node::CustomTag` handlers do (#1167).
             let raw_py = context.render_raw_py_objects();
+            let _bindings = crate::model_bindings::Suppress::begin();
             let updates = crate::registry::call_assign_handler_with_py_sidecar(
                 name,
                 &resolved_args,
@@ -1299,6 +1301,8 @@ fn call_custom_tag(
     args: &[String],
     context: &Context,
 ) -> Result<(String, Vec<SiblingBinding>)> {
+    // Whatever the handler renders is not template text of this render.
+    let _bindings = crate::model_bindings::Suppress::begin();
     // Resolve any variable references in args. Scalars inline; lists and
     // objects are JSON-encoded through the shared `value_to_arg_string`
     // (#1646, #2042). This path keeps its own filter-aware `get_value`
@@ -1517,6 +1521,11 @@ fn call_block_custom_tag<L: TemplateLoader>(
     context: &mut Context,
     loader: Option<&L>,
 ) -> Result<(String, Vec<SiblingBinding>)> {
+    // The handler decides what of its body reaches the page (a permission
+    // gate may drop it), so the body's dj-model bindings are not granted
+    // unless the handler declares it always emits the body (`EMITS_BODY`).
+    let _bindings = (!crate::registry::block_handler_emits_body(name))
+        .then(crate::model_bindings::Suppress::begin);
     if crate::registry::block_handler_lazy_body(name) {
         return call_lazy_body_block_tag(name, args, children, context, loader);
     }
@@ -1693,6 +1702,10 @@ fn call_raw_block_tag(
     body: &str,
     context: &Context,
 ) -> Result<(String, Vec<SiblingBinding>)> {
+    // The body is source the handler compiles and renders itself; only a
+    // handler declaring `EMITS_BODY` reports the bindings of that render.
+    let _bindings = (!crate::registry::raw_block_handler_emits_body(name))
+        .then(crate::model_bindings::Suppress::begin);
     let plain: Vec<TagArg> = args.iter().map(|a| TagArg::plain(a.clone())).collect();
     // #2710: through the ONE bridge, so a deferred `block.super` is
     // materialised for the flat map Python resolves against.
@@ -2654,7 +2667,11 @@ pub fn render_nodes_collecting<L: TemplateLoader>(
     let mut output = String::new();
     let mut fragments = Vec::with_capacity(nodes.len());
     for node in nodes {
+        // Per-node dj-model records, replayed for a node a later partial
+        // render serves from the cache (`model_bindings::reuse_node`).
+        let mark = crate::model_bindings::begin_node();
         let fragment = render_effectful_node_output::<L, String>(node, &mut context, loader)?;
+        crate::model_bindings::end_node(mark);
         output.push_str(&fragment);
         fragments.push(fragment);
     }
@@ -2692,8 +2709,12 @@ pub fn render_nodes_partial<L: TemplateLoader>(
         });
         let html = if needs_render {
             changed.push(i);
-            render_effectful_node_output::<L, String>(node, &mut context, loader)?
+            let mark = crate::model_bindings::begin_node();
+            let html = render_effectful_node_output::<L, String>(node, &mut context, loader)?;
+            crate::model_bindings::end_node(mark);
+            html
         } else {
+            crate::model_bindings::reuse_node(i);
             node_html_cache[i].clone()
         };
         output.push_str(&html);
@@ -2903,6 +2924,7 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
     match node {
         Node::Located { .. } => render_effectful_node_output::<L, R>(node, context, loader),
         Node::Text(text) => {
+            crate::model_bindings::record_text(text);
             let mut output = R::authored(text);
             if R::TRACKED {
                 output.loop_identity(context);
@@ -3817,7 +3839,13 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                         //       See `loop_cache::body_is_cacheable`.
                         // When disabled, `loop_caching_enabled` is `false` and the
                         // render path below is byte-identical to before #1967.
+                        // Output served from the loop cache is not rendered, so
+                        // it records no dj-model binding: the cache is not used
+                        // for a body that may emit one while a recording runs.
+                        let records_bindings = crate::model_bindings::is_recording()
+                            && crate::model_bindings::nodes_may_emit_binding(nodes);
                         let loop_caching_enabled = !R::TRACKED
+                            && !records_bindings
                             && crate::loop_cache::with_active_cache(|cache| {
                                 cache.body_cacheable(nodes, var_names)
                             })
@@ -4797,7 +4825,12 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             // block is text, not a keyed subtree (documented limitation).
             let previous_markers = context.emit_dj_if_markers();
             context.set_emit_dj_if_markers(false);
-            let body = render_nodes_output::<L, R>(nodes, context, loader);
+            // The filters rewrite the body (`force_escape` turns its markup
+            // into text), so its dj-model bindings do not count.
+            let body = {
+                let _bindings = crate::model_bindings::Suppress::begin();
+                render_nodes_output::<L, R>(nodes, context, loader)
+            };
             context.set_emit_dj_if_markers(previous_markers);
             let body = body?;
             // `bind`, SAFE: `NodeList.render` returns `SafeString`, which is
@@ -4944,7 +4977,12 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             // a side effect (`{% cycle %}`, a custom tag) would otherwise
             // fire twice per iteration.
             let (compare_to, rendered) = if vars.is_empty() {
-                let body = render_nodes_output::<L, R>(nodes, context, loader)?;
+                // Rendered to compare and possibly dropped: its dj-model
+                // bindings are not granted.
+                let body = {
+                    let _bindings = crate::model_bindings::Suppress::begin();
+                    render_nodes_output::<L, R>(nodes, context, loader)?
+                };
                 (body.to_string(), Some(body))
             } else {
                 // Django resolves with `ignore_failures=True`, so a missing
@@ -5022,6 +5060,7 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             let context_map = bridged_context_map(context)?;
             // Forward raw-Python sidecar (#1167).
             let raw_py = context.render_raw_py_objects();
+            let _bindings = crate::model_bindings::Suppress::begin();
             crate::registry::call_assign_handler_with_py_sidecar(
                 name,
                 &resolved_args,

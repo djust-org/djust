@@ -1,5 +1,5 @@
-{% load allauth djust_auth %}{% if attrs.form %}{% auth_errors attrs.form %}{% endif %}
-<form class="dj-auth-form" method="{{ attrs.method|default:'post' }}"{% if attrs.action %} action="{{ attrs.action }}"{% endif %}{% if attrs.id %} id="{{ attrs.id }}"{% endif %}>
+{% load allauth djust_auth djust_attrs %}{% if attrs.form %}{% auth_errors attrs.form %}{% endif %}
+<form class="dj-auth-form" method="{{ attrs.method|default:'post'|force_escape }}"{% if attrs.action %} action="{{ attrs.action|djust_url_attr }}"{% endif %}{% if attrs.id %} id="{{ attrs.id|force_escape }}"{% endif %}>
   {% slot body %}{% endslot %}
   {% slot actions %}{% endslot %}
 </form>

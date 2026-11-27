@@ -13,7 +13,7 @@ djust_components:app_sidebar,IDENTICAL,0,,,19,7/7,19
 djust_components:approval_gate,DIFFERENT-escape-policy-only,7,escaping:7+tags:4+text:4,,21,7/7,21
 djust_components:audit_log,DIFFERENT-escape-policy-only,2,escaping:2,,10,5/5,10
 djust_components:autocomplete,DIFFERENT-escape-policy-only,8,escaping:8+tags:2+text:2,,19,15/15,19
-djust_components:avatar,DIFFERENT,18,a11y:15+classes:18+escaping:6+other-attrs:1+tags:2+text:4,,18,5/5,18
+djust_components:avatar,DIFFERENT,18,a11y:15+classes:18+escaping:1+tags:2+text:4,,18,5/5,18
 djust_components:avatar_group,IDENTICAL,0,,,17,7/7,17
 djust_components:await,DIFFERENT-escape-policy-only,4,escaping:4+tags:2+text:2,,17,5/5,17
 djust_components:badge,DIFFERENT,13,a11y:13+classes:13+escaping:4+tags:13+text:8,,13,3/3,13
@@ -50,7 +50,7 @@ djust_components:cursors,DIFFERENT-escape-policy-only,2,escaping:2,,18,6/6,18
 djust_components:dashboard_grid,DIFFERENT-escape-policy-only,4,escaping:4,,23,10/10,23
 djust_components:data_card_grid,DIFFERENT-escape-policy-only,2,escaping:2,,20,8/8,20
 djust_components:data_grid,DIFFERENT-escape-policy-only,3,escaping:3,,23,18/18,23
-djust_components:data_table,DIFFERENT,176,a11y:176+classes:176+data/dj-attrs:176+escaping:2+other-attrs:16+tags:16+text:16,rust_only_keys:python,176,120/120,177
+djust_components:data_table,DIFFERENT,176,a11y:176+classes:176+data/dj-attrs:176+other-attrs:16+tags:16+text:16,rust_only_keys:python,176,120/120,177
 djust_components:date_picker,DIFFERENT,31,classes:31+data/dj-attrs:1+escaping:11+other-attrs:1+tags:31+text:31,,34,15/15,34
 djust_components:dependent_select,DIFFERENT,10,a11y:1+classes:2+data/dj-attrs:1+escaping:9+ids:2+other-attrs:1+tags:6+text:6,,25,12/12,25
 djust_components:diff_viewer,DIFFERENT-escape-policy-only,4,escaping:4+tags:3+text:3,,19,7/7,19
@@ -129,7 +129,7 @@ djust_components:otp_input,DIFFERENT-escape-policy-only,5,data/dj-attrs:1+escapi
 djust_components:page_alert,DIFFERENT-escape-policy-only,6,escaping:6+tags:2+text:2,,17,6/6,17
 djust_components:page_header,DIFFERENT-escape-policy-only,5,escaping:5+tags:4+text:4,,16,4/4,16
 djust_components:page_header_actions,IDENTICAL,0,,,19,7/7,19
-djust_components:pagination,DIFFERENT,12,a11y:12+classes:12+data/dj-attrs:1+escaping:4+tags:12+text:12,,12,4/4,12
+djust_components:pagination,DIFFERENT,12,a11y:12+classes:12+tags:12+text:12,,12,4/4,12
 djust_components:palette_item,DIFFERENT-escape-policy-only,7,data/dj-attrs:1+escaping:7+tags:6+text:6,,19,5/5,19
 djust_components:password_input,DIFFERENT-escape-policy-only,6,escaping:6+tags:2+text:2,,15,11/11,15
 djust_components:pie_chart,DIFFERENT-escape-policy-only,2,escaping:2+tags:1+text:1,,16,12/12,16
@@ -137,7 +137,7 @@ djust_components:pivot_table,DIFFERENT-escape-policy-only,2,escaping:2+tags:1+te
 djust_components:popconfirm,DIFFERENT-escape-policy-only,10,escaping:10+tags:4+text:4,,25,9/9,25
 djust_components:popover,DIFFERENT-escape-policy-only,5,escaping:5+tags:3+text:3,,15,4/4,15
 djust_components:presence_avatars,DIFFERENT-escape-policy-only,2,escaping:2,,17,7/7,17
-djust_components:progress,DIFFERENT,13,a11y:1+classes:13+escaping:4+tags:3+text:3,,13,5/5,13
+djust_components:progress,DIFFERENT,13,classes:13+escaping:3+tags:3+text:3,,13,5/5,13
 djust_components:progress_circle,DIFFERENT,8,classes:7+escaping:3,,12,5/5,12
 djust_components:prompt_editor,DIFFERENT-escape-policy-only,5,escaping:5+tags:2+text:2,,19,6/6,19
 djust_components:qr_code,DIFFERENT-escape-policy-only,3,escaping:3,,16,5/5,16

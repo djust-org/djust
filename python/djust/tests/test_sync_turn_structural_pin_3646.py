@@ -850,7 +850,11 @@ ALLOWED: Dict[Tuple[str, str, str], Entry] = {
     ),
     ("websocket_utils.py", "_validate_event_security", "check_handler_permission"): leaf(),
     ("websocket_utils.py", "_post_only_rules_deny", "check_event_auth"): leaf(),
-    ("websocket_utils.py", "_validate_event_security", "check_object_permission_for_event"): leaf(),
+    (
+        "websocket_utils.py",
+        "_object_permission_refused",
+        "check_object_permission_for_event",
+    ): leaf(),
     ("worker_pool.py", "_SlotExecutor.submit", "_run_checked"): outside(
         "the worker pool's own executor machinery"
     ),

@@ -39,6 +39,7 @@ from django.utils.html import conditional_escape, escape, format_html, format_ht
 from django.utils.safestring import SafeString, mark_safe
 
 from .._attr_policy import passthrough_attrs
+from .._dj_model_bindings import record_bindings
 from .._include_guard import include_guard_scope
 from .._html import build_tag
 from ..auth._login_required_middleware import mark_embedded
@@ -46,6 +47,7 @@ from ..config import config
 from ..utils import get_csp_nonce
 
 register = template.Library()
+
 logger = logging.getLogger(__name__)
 
 
@@ -72,7 +74,7 @@ def djust_audio(context: Any) -> SafeString:
     )
 
 
-def _record_child_dj_model_allowlist(child: Any) -> None:
+def _record_child_dj_model_allowlist(child: Any, rendered_bindings: Any) -> None:
     """Populate an embedded ``{% live_render %}`` child's dj-model allowlist
     from the CHILD's own TEMPLATE SOURCE (CWE-915 mass-assignment guard).
 
@@ -83,7 +85,10 @@ def _record_child_dj_model_allowlist(child: Any) -> None:
     here. Source is preferred via ``child.get_template()`` (fully resolves
     ``{% extends %}``); falls back to the inline ``template`` / raw
     ``template_name`` source. Derivation is from the Rust template AST
-    (Text-node literals only), immune to rendered-output poisoning.
+    (Text-node literals only), narrowed to ``rendered_bindings``: the
+    template-text bindings the child's Django render executed
+    (``djust._dj_model_bindings.record_bindings``), so an untaken
+    ``{% if %}`` branch grants no writes and rendered data adds none.
     """
     if not hasattr(child, "_record_dj_model_fields_from_source"):
         return
@@ -104,7 +109,9 @@ def _record_child_dj_model_allowlist(child: Any) -> None:
                     from django.template import loader as _loader
 
                     source = _loader.get_template(template_name).template.source
-        child._record_dj_model_fields_from_source(source, get_template_dirs())
+        child._record_dj_model_fields_from_source(
+            source, get_template_dirs(), rendered_bindings=rendered_bindings
+        )
     except Exception:  # noqa: BLE001 — never let allowlist collection break a render
         # Fail closed: the child's _record_dj_model_fields_from_source already
         # resets to an empty frozenset on its own error path; guard the
@@ -1882,7 +1889,7 @@ def _render_sticky_child_html(
 
     inline = getattr(child, "template", None)
     if inline:
-        with active_parent_view(child), include_guard_scope():
+        with active_parent_view(child), include_guard_scope(), record_bindings() as bindings:
             rendered_inner = Template(inline).render(Context(child_context))
     else:
         template_name = getattr(child, "template_name", None)
@@ -1891,14 +1898,14 @@ def _render_sticky_child_html(
                 "{%% live_render %%} child %r has neither ``template`` nor "
                 "``template_name`` set" % view_path
             )
-        with active_parent_view(child), include_guard_scope():
+        with active_parent_view(child), include_guard_scope(), record_bindings() as bindings:
             rendered_inner = get_template(template_name).render(child_context, request)
 
     # Record the child's dj-model auto-allowlist from its own TEMPLATE SOURCE
     # so child update_model events (gated on the child's _dj_model_fields)
     # accept its dj-model inputs — this render bypasses render_with_diff
     # (#3 Stage-11 review, #1646 parallel-path).
-    _record_child_dj_model_allowlist(child)
+    _record_child_dj_model_allowlist(child, bindings)
     rendered_stamped = _stamp_view_id(rendered_inner, view_id)
     escaped_id = escape(view_id)
     if sticky_id_value is None:
@@ -2418,7 +2425,7 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
                 child_context.setdefault("view", child)
                 inline_template = getattr(child, "template", None)
                 if inline_template:
-                    with include_guard_scope():
+                    with include_guard_scope(), record_bindings() as bindings:
                         rendered_inner = Template(inline_template).render(Context(child_context))
                 else:
                     template_name = getattr(child, "template_name", None)
@@ -2427,14 +2434,14 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
                             "child %r has neither ``template`` nor "
                             "``template_name`` set" % view_path
                         )
-                    with include_guard_scope():
+                    with include_guard_scope(), record_bindings() as bindings:
                         rendered_inner = get_template(template_name).render(child_context, request)
                 # Record the child's dj-model auto-allowlist from its own
                 # TEMPLATE SOURCE so child update_model events (gated on the
                 # child's _dj_model_fields) accept its dj-model inputs — this
                 # render bypasses render_with_diff (#3 Stage-11 review, #1646
                 # parallel-path).
-                _record_child_dj_model_allowlist(child)
+                _record_child_dj_model_allowlist(child, bindings)
                 rendered_stamped = _stamp_view_id(rendered_inner, view_id)
                 # Wrap in a [dj-view] container so events route via
                 # data-djust-embedded just like the eager path.
@@ -2887,7 +2894,7 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
 
     inline = getattr(child, "template", None)
     if inline:
-        with include_guard_scope():
+        with include_guard_scope(), record_bindings() as bindings:
             rendered_inner = Template(inline).render(Context(child_context))
     else:
         template_name = getattr(child, "template_name", None)
@@ -2896,14 +2903,14 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
                 "{%% live_render %%} child %r has neither ``template`` nor "
                 "``template_name`` set" % view_path
             )
-        with include_guard_scope():
+        with include_guard_scope(), record_bindings() as bindings:
             rendered_inner = get_template(template_name).render(child_context, request)
 
     # Record the child's dj-model auto-allowlist from its own TEMPLATE SOURCE
     # so child update_model events (gated on the child's _dj_model_fields)
     # accept its dj-model inputs — this render bypasses render_with_diff
     # (#3 Stage-11 review, #1646 parallel-path).
-    _record_child_dj_model_allowlist(child)
+    _record_child_dj_model_allowlist(child, bindings)
     rendered_stamped = _stamp_view_id(rendered_inner, view_id)
     escaped_id = escape(view_id)
     return mark_safe(
