@@ -49,6 +49,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import re
 import string
 import threading
@@ -58,6 +59,8 @@ from html import unescape
 from typing import Any
 
 from django.utils.crypto import salted_hmac
+
+logger = logging.getLogger(__name__)
 
 #: Request header the client echoes the digest in.
 HEADER = "X-Djust-Render-Digest"
@@ -363,8 +366,35 @@ def render_shape(html: Any) -> RenderShape | None:
     return found
 
 
+try:  # the native walk; absent from a Python-only build
+    from djust._rust import render_shape_walk as _native_walk
+except ImportError:  # pragma: no cover - the extension ships in every wheel
+    _native_walk = None
+
+
 def _walk_shape(html: str) -> RenderShape | None:
-    """:func:`render_shape` without the memo."""
+    """:func:`render_shape` without the memo.
+
+    The Rust walk (``crates/djust_live/src/render_shape.rs``) is the same walk
+    at about a twentieth of the cost. :func:`_py_walk_shape` stays as the
+    reference it is tested against and answers where it cannot: no extension,
+    or text Rust cannot hold (a lone surrogate).
+    """
+    if _native_walk is not None:
+        try:
+            found = _native_walk(html, unescape)
+        except (UnicodeEncodeError, RuntimeError, ValueError, TypeError) as exc:
+            logger.debug("render_shape: native walk declined (%s); using Python", type(exc).__name__)
+        else:
+            if found is None:
+                return None
+            shape, opaque_paths, client_owned = found
+            return RenderShape(shape, [tuple(p) for p in opaque_paths], client_owned)
+    return _py_walk_shape(html)
+
+
+def _py_walk_shape(html: str) -> RenderShape | None:
+    """The walk in Python: the reference for the native one."""
     out: list[str] = []
     stack: list[str] = []
     #: per open element: the number of significant children seen so far
