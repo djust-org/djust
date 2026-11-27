@@ -214,6 +214,182 @@ coordinate explicitly via `pushEvent` + a server-side handler.
 Sync hooks (no async/await, no Promise return) behave exactly as
 before. This is purely additive: no API change for existing hook code.
 
+### Settled questions (#4322)
+
+Three behaviours that slice 1 of #3656 left open are settled as follows:
+
+- **`updated()` is not scoped further and is not paired with
+  `beforeUpdate()`.** `beforeUpdate()` is exact (the hooks inside the updated
+  region, rule 3). `updated()` means "the DOM this widget reads may have
+  changed": exact after an incremental patch, which carries a change record
+  (#4001), and conservative where there is none (a full morph, html recovery,
+  the first patch after a child, sticky or reconnect update), where every
+  mounted hook gets it. A hook can therefore get `updated()` without a
+  `beforeUpdate()` (outside a scoped update's region) and `beforeUpdate()`
+  without `updated()` (an incremental patch that did not touch it). Code that
+  needs a pair compares its inputs in `shouldUpdate()` or `updated()`, as the
+  Chart.js adapter does.
+- **A page swap destroys without `beforeUpdate()`.** `destroyed()` is the last
+  callback a widget gets on every exit (removal, replacement, navigation, page
+  swap), so state worth keeping is saved there or as it changes (see
+  [local drafts](#local-drafts-unsent-edits)), never only in `beforeUpdate()`.
+- **Bind-time order.** `mounted()` runs after djust has bound the `dj-*` event
+  attributes in the inserted DOM and before `dj-model` binding and virtual-list
+  setup. A widget that needs either reads it in `updated()` or after a
+  `queueMicrotask()`.
+
+## The widget contract
+
+The lifecycle rules above say *when* a hook runs. These say what a widget (a
+hook that hands part of the page to a client-side library: a chart, a map, a
+rich-text editor) owns, what reaches it, and what comes back from the server
+(#4322). `tests/js/hook-event-outcomes-4322.test.js` tests the event outcomes
+over every transport, and `tests/playwright/test_widget_contract_4322.py`
+proves the whole contract in Chromium with the shipped Chart.js adapter and the
+Quill rich-text editor (a test-only fixture, not part of djust), over
+WebSocket, SSE, HTTP-only and under a nonce-only CSP.
+
+### Ownership
+
+Every node and attribute the template renders is **server-owned**: each
+update makes it match the server's render again. A widget **owns** only:
+
+1. **The subtree of a `dj-update="ignore"` element** (give it an `id`). The
+   patcher never enters it, on incremental patches and full morphs alike; this
+   is where the library draws (Quill's editor, a map's tiles). Put the hook on
+   a wrapper around it, not on the ignored element (rule 7).
+2. **Attributes listed in `dj-ignore-attrs`** on a server-owned element:
+   incremental patches never set them and morphs neither set nor remove them.
+3. **A canvas's drawing buffer and size.** A morph never removes a canvas's
+   `width` / `height`. Don't render `width` / `height` on a canvas a library
+   sizes itself (Chart.js does), or a morph resets them to the template's values
+   and clears the drawing; list `style` in `dj-ignore-attrs` when the library
+   writes inline styles.
+4. **JavaScript state**: the hook instance, expandos on its nodes, and anything
+   the library keeps.
+
+### What a widget may write back
+
+- Into the DOM it owns, anything.
+- Into server-owned DOM, **nothing it expects to keep**. An attribute a widget
+  sets on a server-owned element is overwritten when a patch next sets that
+  attribute and removed by the next full morph (html recovery, a reconnect's
+  mount, an HTTP answer), unless it is in `dj-ignore-attrs`. Text or children a
+  widget inserts are replaced by the next patch or morph of that element.
+- **Never add, remove or move server-owned nodes.** Patches address nodes by
+  their position; a structural change makes the next patch fail, and djust
+  recovers by asking for the whole HTML (`html_recovery`), which costs a round
+  trip and resets every widget-written attribute on the page.
+- **State goes to the server by `pushEvent()`**, and comes back through the
+  render, as props.
+
+### Props
+
+- **In:** `dj-hook-value-*` attributes on the hook element, read live through
+  `this.values` (JSON-first; see [Typed values](#typed-values--targets)). Keep
+  them off an ignored element (its attributes freeze on a full morph). A change
+  to a value attribute is a change to the hook element, so `updated()` runs.
+- **Out:** `pushEvent()`. `this.values` is read-only.
+- **Server props versus local edits:** a widget whose user can edit (an editor)
+  decides in `updated()` whether a new server value replaces local content.
+  The rule the Quill fixture follows, and the one to copy: replace only content
+  the user has not edited since the last successful save.
+
+### Event outcomes
+
+`this.pushEvent(event, payload)` resolves with the server's reply frame, or
+`null` when the event did not succeed (unchanged since #3990). Pass
+`{outcome: true}` to learn how it ended:
+
+```javascript
+const outcome = await this.pushEvent('save', {text}, {outcome: true});
+// outcome = {status, reply, error}
+if (outcome.status === 'ok') this.dirty = false;
+else if (outcome.status === 'disconnected') this.retryOnReconnect = true;
+```
+
+| `status` | When | `reply` / `error` |
+|---|---|---|
+| `ok` | the server ran the turn and answered | `reply`: the `render` frame (its patches and `effects[]`) |
+| `error` | the handler raised, the view or handler does not exist, permission was refused, or another server error; also a refused turn's acknowledgement (`error.code: "refused"`) | `error: {message, code, validation_details: null}` |
+| `rejected` | the strict parameter contract refused the payload; the handler did not run | `error.validation_details` names the expected, missing and mistyped parameters |
+| `rate_limited` | `@rate_limit` or the connection's limiter dropped it (`code: "rate_limited"`, HTTP 429) | `error.code: "rate_limited"` |
+| `cancelled` | the client gave up on it: the page navigated or swapped, the connection was closed on purpose, or the page changed while an HTTP event was queued | both `null` |
+| `disconnected` | there was no connection to send it on (nothing is sent), or the connection dropped before the answer | both `null` |
+
+Rules:
+
+- **It never rejects**, and resolves exactly once.
+- **Matched by `ref`** (transport plan D2): every event carries a `ref`, and
+  the server echoes it on its answer, its error frame and its rate-limit frame,
+  so an answer to another event never settles this one.
+- **`ok` resolves after the reply has been applied**: its DOM change is in
+  the page and its effects (`push_event` to `handleEvent()`, flash,
+  navigation) have run.
+- **`ok` means the server ran the turn**, not that the handler did what the
+  widget wanted; a handler reports a domain failure in its render or with
+  `push_event`.
+- **After `disconnected` the event may or may not have run** (the connection
+  dropped after the send). Make events a widget re-sends idempotent, and
+  re-send in `reconnected()` or after the reconnect's render.
+- **Transports.** The same outcomes over WebSocket, SSE and the page POST. On a
+  page that chose the HTTP transport (`use_websocket: False` without
+  `EventSource`, or a function view) a hook's event is a page POST, as a
+  `dj-click` is. A WebSocket or SSE page whose connection is down does **not**
+  fall back to POSTs for hook events; they resolve `disconnected`.
+- A hook's events skip `@debounce` / `@throttle` (client-side, for `dj-*`
+  bindings) on every transport, and take no loading state.
+
+### Focus, selection and IME
+
+Inside the DOM a widget owns, focus, the caret, the selection and an IME
+composition in progress survive every update: an incremental patch (also one
+that changes the hook element's own attributes), a full morph and html
+recovery, because the patcher never touches that subtree. `updated()` runs
+during the composition; a widget must not rewrite its content then (check
+`this.dirty`, or the library's own composition state) or it ends the
+composition. The browser test composes Japanese text in Quill with the
+Chromium IME API across a patch and a recovery morph, and checks the caret,
+focus and that `compositionend` comes only from the commit. Server-owned form
+inputs are a separate case: the patcher keeps the value and caret of the
+focused input itself, and an input a widget renders inside its ignored region
+is the widget's.
+
+### Strict CSP
+
+Under a nonce-only `script-src` (no `'unsafe-inline'`, no `'unsafe-eval'`):
+
+- djust's own scripts, the route map of `{% djust_client_config %}`, the
+  optional client chunks and the official adapters (`DJUST_CONFIG["extensions"]`)
+  carry `request.csp_nonce`. Load the library itself (Chart.js, Quill) with
+  `nonce="{{ request.csp_nonce }}"`, and your hook registrations from a nonced
+  file or script.
+- `{% colocated_hook %}` bodies run in a script element with the nonce. A
+  morph of the hook's `<script>` (the socket render has no nonce) does not run
+  the same body again; a changed body needs the nonce of the page.
+- The DEBUG-only debug panel binds inline handlers and reports
+  `script-src-attr` violations; it is not part of the page's client.
+
+### Local drafts (unsent edits)
+
+A widget's unsent local edits are widget state:
+
+- **Across patches and morphs** they stay: they live in the DOM it owns or in
+  the library. Don't let `updated()` overwrite them with server props.
+- **Across a reconnect** they stay: WebSocket and SSE reconnects morph the
+  page back, so the instance survives (`disconnected()` then `reconnected()`,
+  then an ordinary update with the server's restored state). The widget
+  re-sends what is unsent once it is back.
+- **Across navigation** (`dj-navigate`, `live_redirect`, Back, a page swap) the
+  instance is destroyed. Edits that must survive are stored by the widget as
+  they happen (the Quill fixture writes `localStorage` on each user change,
+  keyed by page and element id, and clears it after an `ok` save) and restored
+  in `mounted()`. `pushEvent()` from `destroyed()` is not delivered reliably
+  (`cancelled`).
+- **`data-draft`** ([DraftModeMixin](../state/index.md#draftmodemixin)) saves
+  form fields only. It does not see a widget's owned DOM; a widget that wants
+  the same lifetime uses its own storage as above.
+
 ## Integrating third-party libraries (Chart.js, maps, editors)
 
 This is the canonical pattern for any client-side library that draws into or
@@ -351,7 +527,7 @@ See [Typed values & targets](#typed-values--targets) below for
 
 ### Methods
 
-**`this.pushEvent(event, payload)`** -- Send an event to the server LiveView. It returns a promise that resolves with the server's reply frame once the event is acknowledged, or with `null` when the event was cancelled or there is no live connection.
+**`this.pushEvent(event, payload, options)`** -- Send an event to the server LiveView. It returns a promise that resolves with the server's reply frame once the event is acknowledged, or with `null` when the event did not succeed (an error, a refusal, cancelled, or no live connection). With `{outcome: true}` it resolves with `{status, reply, error}` instead; see [Event outcomes](#event-outcomes). It never rejects.
 
 ```javascript
 this.pushEvent('item_clicked', { id: this.values.itemId });

@@ -1849,8 +1849,9 @@ class LiveViewWebSocket {
             optimisticUpdates.clear();
             pendingEvents.clear();
 
-            // Event sequencing (#560): clear pending event state
-            cancelEventRequests(this);
+            // Event sequencing (#560): clear pending event state. Their
+            // outcome (#4322): lost with the connection, unless we closed it.
+            cancelEventRequests(this, null, {status: this._intentionalDisconnect ? 'cancelled' : 'disconnected'});
             takeServerUpdates(this);
 
             // Remove loading indicators from DOM
@@ -2480,7 +2481,7 @@ class LiveViewWebSocket {
                 // Clear pending event refs (#560)
                 if (data.source !== 'async' &&
                     (data.ref == null || _pendingEventOwners.get(data.ref) === this)) {
-                    cancelEventRequests(this, data.ref ?? null);
+                    cancelEventRequests(this, data.ref ?? null, eventErrorOutcome(data));
                     // A failed event does not invalidate earlier server pushes.
                     // Retain them until the other owned requests settle, then
                     // apply with the same version checks as a successful reply.
@@ -2582,7 +2583,7 @@ class LiveViewWebSocket {
                     // The dropped event's own request (#4309): settle it, end
                     // its loading state, and apply what it held back.
                     if (_pendingEventOwners.get(data.ref) === this) {
-                        cancelEventRequests(this, data.ref);
+                        cancelEventRequests(this, data.ref, eventErrorOutcome({error: data.message, code: 'rate_limited'}));
                         if (!hasPendingEventRequests(this)) await flushServerUpdates(this);
                     }
                 } else if (this.lastEventName) {
@@ -2932,7 +2933,7 @@ class LiveViewWebSocket {
                 ...slotFrameFields(slotId || slotIdFor(triggerElement))
             });
         } catch (error) {
-            cancelEventRequests(this, request.ref);
+            cancelEventRequests(this, request.ref, {status: 'disconnected'});
             throw error;
         }
         return request.promise;
@@ -3228,6 +3229,9 @@ class LiveViewSSE {
             if (this._hasConnectedBefore) {
                 if (window.djust) window.djust._isReconnect = true;
                 this._replacingView = true;
+                // #4322: the page still shows this view; its mount is morphed
+                // in, as over WebSocket, so widgets keep their instances.
+                this._reconnectView = this.primaryViewPath;
             }
             this._hasConnectedBefore = true;
 
@@ -3292,7 +3296,7 @@ class LiveViewSSE {
             if (this.eventSource && this.eventSource.readyState === EventSource.CLOSED) {
                 console.warn('[SSE] EventSource closed unexpectedly.');
                 this.enabled = false;
-                cancelEventRequests(this);
+                cancelEventRequests(this, null, {status: 'disconnected'});
                 // Connection state CSS classes
                 document.body.classList.add('dj-disconnected');
                 document.body.classList.remove('dj-connected');
@@ -3423,7 +3427,7 @@ class LiveViewSSE {
                         if (typeof data.view === 'string') container.setAttribute('dj-view', data.view);
                         applyRootPoll(container, data.root_poll);
                         const hasDataDjAttrs = data.has_ids === true;
-                        if (hasDataDjAttrs && !this._replacingView) {
+                        if (hasDataDjAttrs && (!this._replacingView || data.view === this._reconnectView)) {
                             // The page was prerendered over HTTP: morph it
                             // against the mount HTML, as the WebSocket mount
                             // does (#1610), so mount-time state such as
@@ -3446,6 +3450,7 @@ class LiveViewSSE {
                     }
                 }
                 this._replacingView = false;
+                this._reconnectView = null;
                 // The views hydrated beside the page view lived on the session
                 // that closed (a reconnect, a fresh-id retry): mount them on this
                 // one (#3252). None are registered on the first mount, and a
@@ -3491,7 +3496,7 @@ class LiveViewSSE {
                     }
                 }));
                 if (data.source !== 'async') {
-                    cancelEventRequests(this, data.ref ?? null);
+                    cancelEventRequests(this, data.ref ?? null, eventErrorOutcome(data));
                 }
                 if (data.source !== 'async' && data.ref == null && this.lastEventName) {
                     globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
@@ -3520,6 +3525,7 @@ class LiveViewSSE {
         // has_ids describes the incoming markup, not whether the current DOM
         // already represents it. Navigation must replace the previous page.
         this._replacingView = true;
+        this._reconnectView = null;
         this.primaryViewPath = outgoing.view;
         this.viewMounted = false;
         this._freshIdRetried = false; // #3164: a new page gets its own retry
@@ -3564,10 +3570,10 @@ class LiveViewSSE {
                 type: 'event', event: eventName, params, ref: request.ref,
                 ...slotFrameFields(slotId || slotIdFor(triggerElement)),
             })) {
-                cancelEventRequests(this, request.ref);
+                cancelEventRequests(this, request.ref, {status: 'disconnected'});
             }
         } catch (error) {
-            cancelEventRequests(this, request.ref);
+            cancelEventRequests(this, request.ref, {status: 'disconnected'});
             throw error;
         }
         return request.promise;
@@ -3683,13 +3689,16 @@ class LiveViewSSE {
                     protocolMismatch(this);
                     return null;
                 }
-                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                if (!r.ok) throw Object.assign(new Error(`HTTP ${r.status}`), {status: r.status});
                 return r.json();
             })
             .catch(err => {
                 console.error('[SSE] Message POST failed:', err);
                 if (eventName && data.ref != null) {
-                    cancelEventRequests(this, data.ref);
+                    // #4322: refused by the server (429: rate limited), or not delivered.
+                    cancelEventRequests(this, data.ref, err.status
+                        ? eventErrorOutcome({error: err.message, code: err.status === 429 ? 'rate_limited' : null})
+                        : {status: 'disconnected'});
                 } else if (eventName) {
                     globalLoadingManager.stopLoading(eventName, triggerElement);
                     this.lastEventName = null;
@@ -3793,6 +3802,7 @@ const _pendingEventNames = new Map();    // ref -> event name for pending events
 const _pendingTriggerEls = new Map();    // ref -> trigger element for loading state
 const _pendingEventResolvers = new Map(); // ref -> resolve() for Promise-based sendEvent (#1315)
 const _pendingEventOwners = new Map();   // ref -> transport instance
+const _pendingEventOutcomes = new Map(); // ref -> settle(outcome) for pushEvent's outcome (#4322)
 const _pendingAsyncBatches = new Map();  // opaque server batch -> originating control
 const _tickBuffer = [];                  // server-initiated render frames held during pending events
 const _tickBufferOwners = new WeakMap();
@@ -3856,7 +3866,26 @@ function registerEventRequest(transport, eventName, triggerElement) {
     transport.lastEventName = eventName;
     transport.lastTriggerElement = triggerElement;
     const promise = new Promise(resolve => _pendingEventResolvers.set(ref, resolve));
+    // #4322: how the request ended, for a hook's pushEvent(..., {outcome: true}):
+    // {status, reply, error}. Rides on the promise, so every transport's
+    // sendEvent hands it out unchanged.
+    promise.outcome = new Promise(settle => _pendingEventOutcomes.set(ref, settle));
     return { ref, promise };
+}
+
+/**
+ * The outcome (#4322) of a request settled by an error frame: rejected by the
+ * handler's parameter contract, rate limited, or any other server error.
+ */
+function eventErrorOutcome(data) {
+    const error = {
+        message: typeof data.error === 'string' ? data.error : null,
+        code: typeof data.code === 'string' ? data.code : null,
+        validation_details: data.validation_details || null,
+    };
+    const status = error.code === 'rate_limited' ? 'rate_limited'
+        : error.validation_details ? 'rejected' : 'error';
+    return { status, error };
 }
 
 /** Every async_pending carries its batch token (#4309); false when none is held. */
@@ -3896,6 +3925,8 @@ function acknowledgeEventRequest(transport, data) {
         data.async_pending = false;
     }
     const resolve = _pendingEventResolvers.get(ref);
+    const settle = _pendingEventOutcomes.get(ref);
+    _pendingEventOutcomes.delete(ref);
     _pendingEventRefs.delete(ref);
     _pendingEventNames.delete(ref);
     _pendingTriggerEls.delete(ref);
@@ -3906,16 +3937,28 @@ function acknowledgeEventRequest(transport, data) {
     transport.lastEventName = latest == null ? null : _pendingEventNames.get(latest);
     transport.lastTriggerElement = latest == null ? null : _pendingTriggerEls.get(latest);
     if (resolve) resolve(data.cancelled ? null : data);
+    if (settle) {
+        settle(data.cancelled
+            ? { status: data.status || 'cancelled', reply: data.reply || null, error: data.error || null }
+            // A refused turn (permission, login, flash) still acknowledges.
+            : data.source === 'refusal'
+                ? { status: 'error', reply: data, error: { message: null, code: 'refused', validation_details: null } }
+                : { status: 'ok', reply: data, error: null });
+    }
     return { eventName, trigger };
 }
 
-/** Cancel this transport's requests, never those of a replacement connection. */
-function cancelEventRequests(transport, ref = null) {
+/**
+ * Cancel this transport's requests, never those of a replacement connection.
+ * `why` (#4322) is the outcome they settle with: {status, error, reply};
+ * `cancelled` when omitted.
+ */
+function cancelEventRequests(transport, ref = null, why = null) {
     const refs = ref == null
         ? [..._pendingEventOwners].filter(([, owner]) => owner === transport).map(([key]) => key)
         : [ref];
     for (const key of refs) {
-        const event = acknowledgeEventRequest(transport, { ref: key, cancelled: true });
+        const event = acknowledgeEventRequest(transport, { ...why, ref: key, cancelled: true });
         if (event?.eventName) globalLoadingManager.stopLoading(event.eventName, event.trigger);
     }
     if (ref == null) {
@@ -8867,7 +8910,7 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
     // Build clean server params (strip underscore-prefixed internal properties)
     const serverParams = {};
     for (const key of Object.keys(params)) {
-        if (key === '_targetElement' || key === '_slotId' || key === '_optimisticUpdateId' || key === '_skipLoading' || key === '_djTargetSelector') {
+        if (key === '_targetElement' || key === '_slotId' || key === '_optimisticUpdateId' || key === '_skipLoading' || key === '_djTargetSelector' || key === '_onRequest') {
             continue;
         }
         // eslint-disable-next-line security/detect-object-injection
@@ -9037,6 +9080,11 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
 
     const httpRequest = teardown ? null
         : registerEventRequest(_localEventTransport, eventName, triggerElement);
+    // #4322: a hook's pushEvent over this transport reads the request's
+    // outcome; `httpOutcome` is what the request settles with (cancelled
+    // when it stays null: the page changed, or the protocol differs).
+    let httpOutcome = null;
+    if (httpRequest && typeof params._onRequest === 'function') params._onRequest(httpRequest.promise.outcome);
     // Keepalive teardown sends deliberately outlive the outgoing page.
     const httpController = teardown ? null : new AbortController();
     if (httpController) _pendingHttpControllers.add(httpController);
@@ -9105,6 +9153,7 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
                         return;
                     }
                     if (body && typeof body.error === 'string') {
+                        httpOutcome = eventErrorOutcome(body);
                         detail = {
                             error: body.error,
                             // Stable refusal code (#3319), e.g. 'permission_denied'.
@@ -9116,6 +9165,7 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
                         };
                     }
                 } catch (_e) { /* a non-JSON error body keeps the status message */ }
+                if (!httpOutcome) httpOutcome = eventErrorOutcome({error: detail.error, code: response.status === 429 ? 'rate_limited' : null});
                 window.dispatchEvent(new CustomEvent('djust:error', {detail}));
             }
             throw new Error(`HTTP error! status: ${response.status}`);
@@ -9168,13 +9218,21 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
         // when it names `view_id`, #3104), then the effects. This request
         // settles here, by name, not by `ref`. An embedded child's answer
         // resolves to whether it was applied (an HTTP lazy fill reads it).
+        httpOutcome = {status: 'ok', reply: data};
         return await applyRenderFrame(_localEventTransport, data, {eventName, trigger: triggerElement});
 
     } catch (error) {
-        if (!httpController?.signal.aborted) console.error('[LiveView] HTTP fallback failed:', error);
+        if (!httpController?.signal.aborted) {
+            console.error('[LiveView] HTTP fallback failed:', error);
+            // Not delivered (a network failure), or a broken answer.
+            if (!httpOutcome && ownsHttpResponse()) {
+                httpOutcome = error && error.name === 'TypeError' ? {status: 'disconnected'}
+                    : eventErrorOutcome({error: String(error && error.message)});
+            }
+        }
     } finally {
         if (httpController) _pendingHttpControllers.delete(httpController);
-        if (httpRequest) cancelEventRequests(_localEventTransport, httpRequest.ref);
+        if (httpRequest) cancelEventRequests(_localEventTransport, httpRequest.ref, httpOutcome);
         if (releaseHttpEvent) releaseHttpEvent();
     }
 }
@@ -16743,20 +16801,49 @@ function _createHookInstance(hookDef, el) {
     // acknowledgment at all. Returns the promise `sendEvent` returns: it
     // resolves with the server's reply frame, or `null` when the event was
     // cancelled or there is no live connection to send it on.
-    instance.pushEvent = function(event, payload = {}) {
+    //
+    // #4322: `{outcome: true}` resolves with how the event ended instead:
+    // {status, reply, error}, status one of ok / error / rejected /
+    // rate_limited / cancelled / disconnected, after the reply frame has been
+    // applied. Never rejects. On a page that chose the HTTP transport the
+    // event is a page POST, like a dj-click; a WebSocket or SSE page whose
+    // connection is down does not fall back to POSTs (status disconnected).
+    instance.pushEvent = function(event, payload = {}, options = null) {
         const transport = window.djust.liveViewInstance;
-        // A hook inside a view mounted beside the page view talks to that
-        // view, not the page view (#3252): its slot is named explicitly, and
-        // the hook's element is not passed as the trigger, so it takes no
-        // loading state from its own events.
-        const sent = transport && typeof transport.sendEvent === 'function'
-            ? transport.sendEvent(event, payload, null, slotIdFor(el))
-            : false;
-        if (!sent) {
-            console.warn(`[dj-hook] Cannot pushEvent "${event}" — no live connection`);
-            return Promise.resolve(null);
+        const slot = slotIdFor(el);
+        let outcome;
+        if (transport && transport.httpOnly === true && !slot) {
+            outcome = new Promise((resolve) => {
+                const done = () => resolve({ status: 'cancelled', reply: null, error: null });
+                // _rateBypass: a hook's event is sent as asked, over every
+                // transport (no handler debounce on the socket path either).
+                window.djust.handleEvent(event, Object.assign({}, payload, {
+                    _skipLoading: true,
+                    _onRequest: (settled) => settled.then(resolve),
+                }), true).then(done, done);
+            });
+        } else {
+            // A hook inside a view mounted beside the page view talks to that
+            // view, not the page view (#3252): its slot is named explicitly,
+            // and the hook's element is not passed as the trigger, so it takes
+            // no loading state from its own events.
+            const sent = transport && typeof transport.sendEvent === 'function'
+                ? transport.sendEvent(event, payload, null, slot)
+                : false;
+            if (!sent) {
+                console.warn(`[dj-hook] Cannot pushEvent "${event}" — no live connection`);
+                outcome = Promise.resolve({ status: 'disconnected', reply: null, error: null });
+            } else if (!(options && options.outcome)) {
+                return sent;
+            } else {
+                // Settled once the frames received so far are applied, so the
+                // reply's DOM change and effects are in the page.
+                outcome = (sent.outcome || sent.then((reply) => ({
+                    status: reply ? 'ok' : 'cancelled', reply: reply || null, error: null,
+                }))).then((o) => Promise.resolve(transport._inflight).then(() => o, () => o));
+            }
         }
-        return sent;
+        return options && options.outcome ? outcome : outcome.then((o) => (o.status === 'ok' ? o.reply : null));
     };
 
     // handleEvent: register a callback for server-pushed events
@@ -20124,6 +20211,11 @@ window.djust.bindModelElements = bindModelElements;
         if (root.matches && root.matches('script[type="djust/hook"]')) scripts.unshift(root);
         for (const scriptEl of scripts) {
             if (scriptEl.dataset.djustHookRegistered === '1') continue;
+            // #4322: a morph re-syncs this element's attributes to the server's
+            // render, which has neither the sentinel nor (over a socket) the
+            // nonce. The same node with the same body is already registered;
+            // running it again would need 'unsafe-eval' under a nonce CSP.
+            if (scriptEl._djustHookBody === scriptEl.textContent) continue;
             const hookName = scriptEl.getAttribute('data-hook');
             if (!hookName) {
                 // Mark as processed so we don't keep scanning it.
@@ -20159,6 +20251,7 @@ window.djust.bindModelElements = bindModelElements;
                 // eslint-disable-next-line security/detect-object-injection
                 globalThis.djust.hooks[hookName] = definition;
                 scriptEl.dataset.djustHookRegistered = '1';
+                scriptEl._djustHookBody = scriptEl.textContent;
                 if (globalThis.djustDebug) {
                     console.debug('[colocated-hook] Registered %s', hookName);
                 }
@@ -20193,6 +20286,7 @@ window.djust.bindModelElements = bindModelElements;
         // eslint-disable-next-line security/detect-object-injection
         const registered = !!(globalThis.djust.hooks && globalThis.djust.hooks[hookName]);
         scriptEl.dataset.djustHookRegistered = registered ? '1' : 'error';
+        if (registered) scriptEl._djustHookBody = scriptEl.textContent;
         if (globalThis.djustDebug) {
             console.debug('[colocated-hook] %s %s with the page nonce',
                 registered ? 'Registered' : 'Could not register', hookName);

@@ -49,6 +49,11 @@
         if (root.matches && root.matches('script[type="djust/hook"]')) scripts.unshift(root);
         for (const scriptEl of scripts) {
             if (scriptEl.dataset.djustHookRegistered === '1') continue;
+            // #4322: a morph re-syncs this element's attributes to the server's
+            // render, which has neither the sentinel nor (over a socket) the
+            // nonce. The same node with the same body is already registered;
+            // running it again would need 'unsafe-eval' under a nonce CSP.
+            if (scriptEl._djustHookBody === scriptEl.textContent) continue;
             const hookName = scriptEl.getAttribute('data-hook');
             if (!hookName) {
                 // Mark as processed so we don't keep scanning it.
@@ -84,6 +89,7 @@
                 // eslint-disable-next-line security/detect-object-injection
                 globalThis.djust.hooks[hookName] = definition;
                 scriptEl.dataset.djustHookRegistered = '1';
+                scriptEl._djustHookBody = scriptEl.textContent;
                 if (globalThis.djustDebug) {
                     console.debug('[colocated-hook] Registered %s', hookName);
                 }
@@ -118,6 +124,7 @@
         // eslint-disable-next-line security/detect-object-injection
         const registered = !!(globalThis.djust.hooks && globalThis.djust.hooks[hookName]);
         scriptEl.dataset.djustHookRegistered = registered ? '1' : 'error';
+        if (registered) scriptEl._djustHookBody = scriptEl.textContent;
         if (globalThis.djustDebug) {
             console.debug('[colocated-hook] %s %s with the page nonce',
                 registered ? 'Registered' : 'Could not register', hookName);

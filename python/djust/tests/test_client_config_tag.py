@@ -464,6 +464,27 @@ def test_client_config_route_map_with_nonce():
 
 
 @override_settings(ROOT_URLCONF="tests.route_map_test_urls")
+def test_client_config_route_map_nonce_from_the_views_request():
+    """#4322: a LiveView's context names the view, not the request; the nonce
+    still comes from the view's request, as {% colocated_hook %} reads it."""
+    request = RequestFactory().get("/")
+    request.csp_nonce = "viewnonce42"
+
+    class _View:
+        pass
+
+    view = _View()
+    view.request = request
+    tpl = Template("{% load live_tags %}{% djust_client_config %}")
+    html = tpl.render(Context({"view": view}))
+    assert 'nonce="viewnonce42"' in html
+
+    from djust.template_tags.client_config import ClientConfigTagHandler
+
+    assert 'nonce="viewnonce42"' in ClientConfigTagHandler().render([], {"view": view})
+
+
+@override_settings(ROOT_URLCONF="tests.route_map_test_urls")
 def test_client_config_route_map_without_nonce():
     """Without a nonce the route-map <script> is emitted nonce-free."""
     html = _render_tag()

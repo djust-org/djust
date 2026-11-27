@@ -562,8 +562,9 @@ class LiveViewWebSocket {
             optimisticUpdates.clear();
             pendingEvents.clear();
 
-            // Event sequencing (#560): clear pending event state
-            cancelEventRequests(this);
+            // Event sequencing (#560): clear pending event state. Their
+            // outcome (#4322): lost with the connection, unless we closed it.
+            cancelEventRequests(this, null, {status: this._intentionalDisconnect ? 'cancelled' : 'disconnected'});
             takeServerUpdates(this);
 
             // Remove loading indicators from DOM
@@ -1193,7 +1194,7 @@ class LiveViewWebSocket {
                 // Clear pending event refs (#560)
                 if (data.source !== 'async' &&
                     (data.ref == null || _pendingEventOwners.get(data.ref) === this)) {
-                    cancelEventRequests(this, data.ref ?? null);
+                    cancelEventRequests(this, data.ref ?? null, eventErrorOutcome(data));
                     // A failed event does not invalidate earlier server pushes.
                     // Retain them until the other owned requests settle, then
                     // apply with the same version checks as a successful reply.
@@ -1295,7 +1296,7 @@ class LiveViewWebSocket {
                     // The dropped event's own request (#4309): settle it, end
                     // its loading state, and apply what it held back.
                     if (_pendingEventOwners.get(data.ref) === this) {
-                        cancelEventRequests(this, data.ref);
+                        cancelEventRequests(this, data.ref, eventErrorOutcome({error: data.message, code: 'rate_limited'}));
                         if (!hasPendingEventRequests(this)) await flushServerUpdates(this);
                     }
                 } else if (this.lastEventName) {
@@ -1645,7 +1646,7 @@ class LiveViewWebSocket {
                 ...slotFrameFields(slotId || slotIdFor(triggerElement))
             });
         } catch (error) {
-            cancelEventRequests(this, request.ref);
+            cancelEventRequests(this, request.ref, {status: 'disconnected'});
             throw error;
         }
         return request.promise;

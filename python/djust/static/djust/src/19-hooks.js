@@ -95,20 +95,49 @@ function _createHookInstance(hookDef, el) {
     // acknowledgment at all. Returns the promise `sendEvent` returns: it
     // resolves with the server's reply frame, or `null` when the event was
     // cancelled or there is no live connection to send it on.
-    instance.pushEvent = function(event, payload = {}) {
+    //
+    // #4322: `{outcome: true}` resolves with how the event ended instead:
+    // {status, reply, error}, status one of ok / error / rejected /
+    // rate_limited / cancelled / disconnected, after the reply frame has been
+    // applied. Never rejects. On a page that chose the HTTP transport the
+    // event is a page POST, like a dj-click; a WebSocket or SSE page whose
+    // connection is down does not fall back to POSTs (status disconnected).
+    instance.pushEvent = function(event, payload = {}, options = null) {
         const transport = window.djust.liveViewInstance;
-        // A hook inside a view mounted beside the page view talks to that
-        // view, not the page view (#3252): its slot is named explicitly, and
-        // the hook's element is not passed as the trigger, so it takes no
-        // loading state from its own events.
-        const sent = transport && typeof transport.sendEvent === 'function'
-            ? transport.sendEvent(event, payload, null, slotIdFor(el))
-            : false;
-        if (!sent) {
-            console.warn(`[dj-hook] Cannot pushEvent "${event}" — no live connection`);
-            return Promise.resolve(null);
+        const slot = slotIdFor(el);
+        let outcome;
+        if (transport && transport.httpOnly === true && !slot) {
+            outcome = new Promise((resolve) => {
+                const done = () => resolve({ status: 'cancelled', reply: null, error: null });
+                // _rateBypass: a hook's event is sent as asked, over every
+                // transport (no handler debounce on the socket path either).
+                window.djust.handleEvent(event, Object.assign({}, payload, {
+                    _skipLoading: true,
+                    _onRequest: (settled) => settled.then(resolve),
+                }), true).then(done, done);
+            });
+        } else {
+            // A hook inside a view mounted beside the page view talks to that
+            // view, not the page view (#3252): its slot is named explicitly,
+            // and the hook's element is not passed as the trigger, so it takes
+            // no loading state from its own events.
+            const sent = transport && typeof transport.sendEvent === 'function'
+                ? transport.sendEvent(event, payload, null, slot)
+                : false;
+            if (!sent) {
+                console.warn(`[dj-hook] Cannot pushEvent "${event}" — no live connection`);
+                outcome = Promise.resolve({ status: 'disconnected', reply: null, error: null });
+            } else if (!(options && options.outcome)) {
+                return sent;
+            } else {
+                // Settled once the frames received so far are applied, so the
+                // reply's DOM change and effects are in the page.
+                outcome = (sent.outcome || sent.then((reply) => ({
+                    status: reply ? 'ok' : 'cancelled', reply: reply || null, error: null,
+                }))).then((o) => Promise.resolve(transport._inflight).then(() => o, () => o));
+            }
         }
-        return sent;
+        return options && options.outcome ? outcome : outcome.then((o) => (o.status === 'ok' ? o.reply : null));
     };
 
     // handleEvent: register a callback for server-pushed events

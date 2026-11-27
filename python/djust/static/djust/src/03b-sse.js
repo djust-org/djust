@@ -116,6 +116,9 @@ class LiveViewSSE {
             if (this._hasConnectedBefore) {
                 if (window.djust) window.djust._isReconnect = true;
                 this._replacingView = true;
+                // #4322: the page still shows this view; its mount is morphed
+                // in, as over WebSocket, so widgets keep their instances.
+                this._reconnectView = this.primaryViewPath;
             }
             this._hasConnectedBefore = true;
 
@@ -180,7 +183,7 @@ class LiveViewSSE {
             if (this.eventSource && this.eventSource.readyState === EventSource.CLOSED) {
                 console.warn('[SSE] EventSource closed unexpectedly.');
                 this.enabled = false;
-                cancelEventRequests(this);
+                cancelEventRequests(this, null, {status: 'disconnected'});
                 // Connection state CSS classes
                 document.body.classList.add('dj-disconnected');
                 document.body.classList.remove('dj-connected');
@@ -311,7 +314,7 @@ class LiveViewSSE {
                         if (typeof data.view === 'string') container.setAttribute('dj-view', data.view);
                         applyRootPoll(container, data.root_poll);
                         const hasDataDjAttrs = data.has_ids === true;
-                        if (hasDataDjAttrs && !this._replacingView) {
+                        if (hasDataDjAttrs && (!this._replacingView || data.view === this._reconnectView)) {
                             // The page was prerendered over HTTP: morph it
                             // against the mount HTML, as the WebSocket mount
                             // does (#1610), so mount-time state such as
@@ -334,6 +337,7 @@ class LiveViewSSE {
                     }
                 }
                 this._replacingView = false;
+                this._reconnectView = null;
                 // The views hydrated beside the page view lived on the session
                 // that closed (a reconnect, a fresh-id retry): mount them on this
                 // one (#3252). None are registered on the first mount, and a
@@ -379,7 +383,7 @@ class LiveViewSSE {
                     }
                 }));
                 if (data.source !== 'async') {
-                    cancelEventRequests(this, data.ref ?? null);
+                    cancelEventRequests(this, data.ref ?? null, eventErrorOutcome(data));
                 }
                 if (data.source !== 'async' && data.ref == null && this.lastEventName) {
                     globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
@@ -408,6 +412,7 @@ class LiveViewSSE {
         // has_ids describes the incoming markup, not whether the current DOM
         // already represents it. Navigation must replace the previous page.
         this._replacingView = true;
+        this._reconnectView = null;
         this.primaryViewPath = outgoing.view;
         this.viewMounted = false;
         this._freshIdRetried = false; // #3164: a new page gets its own retry
@@ -452,10 +457,10 @@ class LiveViewSSE {
                 type: 'event', event: eventName, params, ref: request.ref,
                 ...slotFrameFields(slotId || slotIdFor(triggerElement)),
             })) {
-                cancelEventRequests(this, request.ref);
+                cancelEventRequests(this, request.ref, {status: 'disconnected'});
             }
         } catch (error) {
-            cancelEventRequests(this, request.ref);
+            cancelEventRequests(this, request.ref, {status: 'disconnected'});
             throw error;
         }
         return request.promise;
@@ -571,13 +576,16 @@ class LiveViewSSE {
                     protocolMismatch(this);
                     return null;
                 }
-                if (!r.ok) throw new Error(`HTTP ${r.status}`);
+                if (!r.ok) throw Object.assign(new Error(`HTTP ${r.status}`), {status: r.status});
                 return r.json();
             })
             .catch(err => {
                 console.error('[SSE] Message POST failed:', err);
                 if (eventName && data.ref != null) {
-                    cancelEventRequests(this, data.ref);
+                    // #4322: refused by the server (429: rate limited), or not delivered.
+                    cancelEventRequests(this, data.ref, err.status
+                        ? eventErrorOutcome({error: err.message, code: err.status === 429 ? 'rate_limited' : null})
+                        : {status: 'disconnected'});
                 } else if (eventName) {
                     globalLoadingManager.stopLoading(eventName, triggerElement);
                     this.lastEventName = null;

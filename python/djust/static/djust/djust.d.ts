@@ -35,6 +35,21 @@
 // =============================================================================
 
 /**
+ * How a hook's `pushEvent(event, payload, { outcome: true })` ended (#4322).
+ * See "Event outcomes" in the hooks guide.
+ */
+interface DjustPushEventOutcome {
+  status: "ok" | "error" | "rejected" | "rate_limited" | "cancelled" | "disconnected";
+  /** The reply `render` frame (`ok`; also a refused turn's acknowledgement). */
+  reply: Record<string, unknown> | null;
+  error: {
+    message: string | null;
+    code: string | null;
+    validation_details: Record<string, unknown> | null;
+  } | null;
+}
+
+/**
  * Context available as `this` inside dj-hook lifecycle callbacks.
  *
  * @example
@@ -61,10 +76,19 @@ interface DjustHookContext {
   /**
    * Send a custom event to the server-side LiveView handler.
    *
+   * Resolves with the server's reply frame, or `null` when the event did not
+   * succeed. With `{ outcome: true }` it resolves with how the event ended
+   * (#4322). Never rejects.
+   *
    * @param event - The event name (must match a `@event_handler` on the server).
    * @param payload - Optional parameters to send with the event.
    */
-  pushEvent(event: string, payload?: Record<string, unknown>): void;
+  pushEvent(event: string, payload?: Record<string, unknown>): Promise<Record<string, unknown> | null>;
+  pushEvent(
+    event: string,
+    payload: Record<string, unknown> | undefined,
+    options: { outcome: true },
+  ): Promise<DjustPushEventOutcome>;
 
   /**
    * Register a callback for server-pushed events (from `push_event()` in Python).
