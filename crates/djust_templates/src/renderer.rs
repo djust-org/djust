@@ -4825,7 +4825,12 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             // block is text, not a keyed subtree (documented limitation).
             let previous_markers = context.emit_dj_if_markers();
             context.set_emit_dj_if_markers(false);
-            let body = render_nodes_output::<L, R>(nodes, context, loader);
+            // The filters rewrite the body (`force_escape` turns its markup
+            // into text), so its dj-model bindings do not count.
+            let body = {
+                let _bindings = crate::model_bindings::Suppress::begin();
+                render_nodes_output::<L, R>(nodes, context, loader)
+            };
             context.set_emit_dj_if_markers(previous_markers);
             let body = body?;
             // `bind`, SAFE: `NodeList.render` returns `SafeString`, which is

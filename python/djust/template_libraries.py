@@ -1060,7 +1060,7 @@ def _bridge_tag(label: str, name: str, compile_func: Callable[..., Any]) -> bool
         if not isinstance(handler, LibraryBlockTagHandler) or handler.name != name:
             handler = LibraryBlockTagHandler(label, name, compile_func)
             _engine_state("_handlers", _handlers)[compile_func] = handler
-        handler.EMITS_BODY = _builtin_emits_body(label, name)  # type: ignore[attr-defined]
+        handler.EMITS_BODY = _builtin_emits_body(label, name)
         register_block_tag_handler(name, handler.end_name, handler)
         unregister_tag_handler(name)
     elif kind == "raw" and _consumes_body(compile_func):
@@ -1080,7 +1080,7 @@ def _bridge_tag(label: str, name: str, compile_func: Callable[..., Any]) -> bool
             if not isinstance(handler, LibraryBlockTagHandler) or handler.name != name:
                 handler = LibraryBlockTagHandler(label, name, compile_func)
                 _engine_state("_handlers", _handlers)[compile_func] = handler
-            handler.EMITS_BODY = _builtin_emits_body(label, name)  # type: ignore[attr-defined]
+            handler.EMITS_BODY = _builtin_emits_body(label, name)
             register_block_tag_handler(name, handler.end_name, handler)
             unregister_tag_handler(name)
         else:
@@ -1609,6 +1609,10 @@ class LibraryTagHandler:
     """The generic inline handler: a ``simple_tag``, an ``inclusion_tag``, or
     a raw ``@register.tag`` that builds its node from its own token."""
 
+    #: Whether the handler always emits its body, so its ``dj-model`` bindings count
+    #: (``block_tag_handler_emits_body``). Built-in tags set it; see ``rust_handlers.EMITS_BODY_TAGS``.
+    EMITS_BODY: bool = False
+
     #: Share the render's ``RenderContext`` (#3044). True only for djust's own
     #: tags in :data:`_DJUST_TAGS_BRIDGED`; see :data:`_render_scope`.
     shares_render_context = False
@@ -2039,6 +2043,10 @@ class LibraryRawBlockTagHandler:
     the ``RETURNS_BINDINGS`` exception channel (#2547) — parity is the
     point, a LiveView page 500s exactly as Django's does.
     """
+
+    #: Whether the handler always emits its body, so its ``dj-model`` bindings count
+    #: (``block_tag_handler_emits_body``). Built-in tags set it; see ``rust_handlers.EMITS_BODY_TAGS``.
+    EMITS_BODY: bool = False
 
     #: Share the render's ``RenderContext`` (#3044). True only for djust's own
     #: tags in :data:`_DJUST_TAGS_BRIDGED`; see :data:`_render_scope`.
