@@ -838,7 +838,7 @@ class TemplateMixin:
         caches.
         """
         from .._render_caches import render_caches_enabled
-        from .jit import _GET_TEMPLATE_CACHE_MAX, _get_template_cache
+        from .jit import _get_template_cache, _remember_get_template
 
         # A class that overrides a helper of the build may read instance state
         # in it, so its result is not kept. A hit skips the build's tag-library
@@ -870,9 +870,7 @@ class TemplateMixin:
         result = self._build_template_from_name()
         if key is not None:
             attrs = tuple((attr, getattr(self, attr, None)) for attr in _GET_TEMPLATE_ATTRS)
-            if len(_get_template_cache) >= _GET_TEMPLATE_CACHE_MAX:
-                _get_template_cache.clear()
-            _get_template_cache[key] = (result, attrs)
+            _remember_get_template(key, (result, attrs))
         return result
 
     def _build_template_from_name(self) -> str:

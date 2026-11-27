@@ -32,7 +32,7 @@ from __future__ import annotations
 import logging
 import weakref
 from types import FunctionType, MappingProxyType
-from typing import Any, Mapping
+from typing import Any, Mapping, Set
 
 from ._exposure import ExposureConfigurationError
 
@@ -52,7 +52,8 @@ class UnsuppliedTemplateNameError(ExposureConfigurationError):
     """
 
 
-_INVALID_MODE_LOGGED = False
+#: Non-empty once an invalid value has been reported: the error is logged once per process.
+_INVALID_MODES_LOGGED: Set[str] = set()
 
 
 def _normalised_mode(value: Any) -> "str | None":
@@ -78,14 +79,13 @@ def unsupplied_names_mode() -> str:
     dev-only diagnostic setting must not take a production render down. ``manage.py
     check`` fails on it at startup (djust.C043).
     """
-    global _INVALID_MODE_LOGGED
     from django.conf import settings
 
     value = getattr(settings, SETTING, "debug")
     mode = _normalised_mode(value)
     if mode is None:
-        if not _INVALID_MODE_LOGGED:
-            _INVALID_MODE_LOGGED = True
+        if not _INVALID_MODES_LOGGED:
+            _INVALID_MODES_LOGGED.add(repr(value)[:80])
             logger.error('%s Using "debug" until it is fixed.', invalid_mode_message(value))
         return "debug"
     return mode

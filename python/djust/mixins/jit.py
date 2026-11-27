@@ -773,6 +773,25 @@ _get_template_cache: Dict[
 _GET_TEMPLATE_CACHE_MAX = 256
 
 
+def _remember_shell_children(
+    key: Tuple[str, Tuple[str, ...], Tuple[str, ...]], answer: bool
+) -> None:
+    """Keep a page-shell scan answer, emptying the cache once it holds the cap."""
+    if len(_shell_children_cache) >= _SHELL_CHILDREN_CACHE_MAX:
+        _shell_children_cache.clear()
+    _shell_children_cache[key] = answer
+
+
+def _remember_get_template(
+    key: Tuple[Any, str, Tuple[str, ...], str],
+    entry: Tuple[str, Tuple[Tuple[str, Any], ...]],
+) -> None:
+    """Keep a ``get_template()`` result, emptying the cache once it holds the cap."""
+    if len(_get_template_cache) >= _GET_TEMPLATE_CACHE_MAX:
+        _get_template_cache.clear()
+    _get_template_cache[key] = entry
+
+
 def clear_template_source_caches() -> None:
     """Forget every cached extraction source, hash and variable map."""
     _template_source_cache.clear()

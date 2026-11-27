@@ -3070,7 +3070,7 @@ def _page_shell_may_register_children(view: Any) -> bool:
     cannot read answers ``True``: the full render runs, as before.
     """
     from ._render_caches import render_caches_enabled
-    from .mixins.jit import _SHELL_CHILDREN_CACHE_MAX, _shell_children_cache
+    from .mixins.jit import _remember_shell_children, _shell_children_cache
     from .utils import get_template_dirs
 
     from .mixins.template import TemplateMixin
@@ -3096,9 +3096,7 @@ def _page_shell_may_register_children(view: Any) -> bool:
         logger.debug("Page-shell child scan could not read the templates")
         return True
     if key is not None:
-        if len(_shell_children_cache) >= _SHELL_CHILDREN_CACHE_MAX:
-            _shell_children_cache.clear()
-        _shell_children_cache[key] = answer
+        _remember_shell_children(key, answer)
     return answer
 
 
