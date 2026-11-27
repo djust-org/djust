@@ -99,7 +99,7 @@ fn finite_deep_partial_renders_without_python() {
         std::thread::Builder::new().stack_size(stack_size).spawn(|| {
             let mut node = Value::None;
             for _ in 0..300 {
-                node = Value::Object([("child".into(), node)].into_iter().collect());
+                node = Value::Object([("child".into(), node)].into_iter().collect::<indexmap::IndexMap<_, _>>().into());
             }
             let mut context = Context::new();
             context.set("node".to_owned(), node);

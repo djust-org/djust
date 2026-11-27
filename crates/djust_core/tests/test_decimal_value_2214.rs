@@ -38,7 +38,10 @@ fn a_nested_decimal_renders_the_constructor_form() {
     );
     let mut m = IndexMap::new();
     m.insert("p".into(), dec("19.99"));
-    assert_eq!(Value::Object(m).to_string(), "{'p': Decimal('19.99')}");
+    assert_eq!(
+        Value::Object(Box::new(m)).to_string(),
+        "{'p': Decimal('19.99')}"
+    );
 }
 
 #[test]
@@ -124,9 +127,9 @@ fn the_decimal_tag_does_not_capture_an_ordinary_dict() {
     extra_key.insert("other".into(), Value::Integer(2));
 
     for v in [
-        Value::Object(plain),
-        Value::Object(wrong_type),
-        Value::Object(extra_key),
+        Value::Object(Box::new(plain)),
+        Value::Object(Box::new(wrong_type)),
+        Value::Object(Box::new(extra_key)),
     ] {
         let bytes = rmp_serde::to_vec(&v).unwrap();
         let back: Value = rmp_serde::from_slice(&bytes).unwrap();

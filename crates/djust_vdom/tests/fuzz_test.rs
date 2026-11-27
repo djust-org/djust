@@ -79,14 +79,14 @@ fn arb_keyed_inner(max_depth: u32, current_depth: u32) -> BoxedStrategy<VNode> {
                     for (i, child) in children.iter_mut().enumerate() {
                         if let Some(ref k) = child.key {
                             if !seen_keys.insert(k.clone()) {
-                                child.key = Some(format!("{}_{}", k, i));
+                                child.key = Some(format!("{}_{}", k, i).into());
                             }
                         }
                     }
                     let mut node = VNode::element(tag);
                     node.attrs = attrs.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
                     node.children = children;
-                    node.key = key;
+                    node.key = Option::map(key, String::into_boxed_str);
                     node
                 }),
         ]
@@ -134,7 +134,7 @@ fn arb_fully_keyed_inner(
             .prop_map(|(tag, attrs, key)| {
                 let mut node = VNode::element(tag);
                 node.attrs = attrs.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
-                node.key = Some(key);
+                node.key = Some(key.into());
                 node
             })
             .boxed()
@@ -164,7 +164,7 @@ fn arb_fully_keyed_inner(
                         attrs: attrs.into_iter().collect(),
                         children: vec![],
                         text: None,
-                        key: Some(key.clone()),
+                        key: Some(key.clone().into()),
                         djust_id: None,
                         cached_html: None,
                     })
@@ -179,7 +179,7 @@ fn arb_fully_keyed_inner(
                             for (i, child) in children.iter_mut().enumerate() {
                                 if let Some(ref k) = child.key {
                                     if !seen.insert(k.clone()) {
-                                        child.key = Some(format!("{}_{}", k, i));
+                                        child.key = Some(format!("{}_{}", k, i).into());
                                     }
                                 }
                             }
@@ -188,7 +188,7 @@ fn arb_fully_keyed_inner(
                                 attrs: attrs.clone().into_iter().collect(),
                                 children,
                                 text: None,
-                                key: Some(key.clone()),
+                                key: Some(key.clone().into()),
                                 djust_id: None,
                                 cached_html: None,
                             }
@@ -246,7 +246,7 @@ fn mutate_tree(node: &VNode, rng: &mut impl Iterator<Item = u8>, key_counter: &m
             *key_counter += 1;
             let new_key = format!("new_{}", key_counter);
             let mut child = VNode::element("div");
-            child.key = Some(new_key);
+            child.key = Some(new_key.into());
             let pos = if n_children > 0 {
                 rng.next().unwrap_or(0) as usize % (n_children + 1)
             } else {
@@ -295,7 +295,7 @@ fn arb_keyed_mutation_pair() -> BoxedStrategy<(VNode, VNode)> {
 /// For testing, we assign IDs to text nodes too so that `apply_patches` can
 /// resolve them by ID after structural changes shift path indices (#221).
 fn assign_ids(node: &mut VNode, counter: &mut u64) {
-    node.djust_id = Some(format!("t{}", counter));
+    node.djust_id = Some(format!("t{}", counter).into());
     *counter += 1;
     for child in &mut node.children {
         assign_ids(child, counter);

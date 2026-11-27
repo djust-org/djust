@@ -12,7 +12,7 @@ fn map(entries: Vec<(&str, Value)>) -> Value {
     for (k, v) in entries {
         m.insert(k.into(), v);
     }
-    Value::Object(m)
+    Value::Object(Box::new(m))
 }
 
 fn model(marker: Value) -> Value {

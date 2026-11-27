@@ -122,10 +122,27 @@ pub enum ObjectKey {
     /// shows `repr(key)`. Distinct from `Str` so `{'x': 1}` and an object
     /// whose `repr()` is `x` cannot collide, and so [`ObjectKey::py_repr`]
     /// does not add quotes a Python repr never had.
-    Other {
-        display: String,
-        repr: String,
-    },
+    ///
+    /// Boxed (#4319): the two strings would make every key, and so every
+    /// entry of every dict a view holds, 48 bytes rather than 32, for a
+    /// variant a plain-data dict never has.
+    Other(Box<OtherKey>),
+}
+
+/// The two forms an [`ObjectKey::Other`] carries.
+#[derive(Debug, Clone)]
+pub struct OtherKey {
+    /// `str(key)`.
+    pub display: String,
+    /// `repr(key)`.
+    pub repr: String,
+}
+
+impl ObjectKey {
+    /// An [`ObjectKey::Other`] of its two forms.
+    pub fn other(display: String, repr: String) -> Self {
+        ObjectKey::Other(Box::new(OtherKey { display, repr }))
+    }
 }
 
 /// The canonical numeric value of a key, when it has one.
@@ -164,7 +181,7 @@ impl ObjectKey {
     pub fn to_display_string(&self) -> Cow<'_, str> {
         match self {
             ObjectKey::Str(s) | ObjectKey::Method(s) => Cow::Borrowed(s.as_str()),
-            ObjectKey::Other { display, .. } => Cow::Borrowed(display.as_str()),
+            ObjectKey::Other(other) => Cow::Borrowed(other.display.as_str()),
             _ => Cow::Owned(crate::Value::from(self.clone()).to_string()),
         }
     }
@@ -174,7 +191,7 @@ impl ObjectKey {
     pub fn py_repr(&self) -> String {
         match self {
             // NOT quoted: `Other` already holds a `repr()`.
-            ObjectKey::Other { repr, .. } => repr.clone(),
+            ObjectKey::Other(other) => other.repr.clone(),
             other => crate::Value::from(other.clone()).py_repr(),
         }
     }
@@ -197,7 +214,7 @@ impl From<ObjectKey> for crate::Value {
             }
             // The DISPLAY form, because that is what `str()` of the original
             // object gave and what a bound loop variable must render as.
-            ObjectKey::Other { display, .. } => crate::Value::String(display),
+            ObjectKey::Other(other) => crate::Value::String(other.display),
         }
     }
 }
@@ -309,7 +326,7 @@ impl PartialEq for ObjectKey {
                 (ObjectKey::None, ObjectKey::None) => true,
                 // By `repr`, which is the more discriminating of the two: two
                 // distinct objects can share a `str()`.
-                (ObjectKey::Other { repr: a, .. }, ObjectKey::Other { repr: b, .. }) => a == b,
+                (ObjectKey::Other(a), ObjectKey::Other(b)) => a.repr == b.repr,
                 (ObjectKey::Tuple(a), ObjectKey::Tuple(b)) => a == b,
                 // A Decimal/BigInt whose digits do not parse falls here.
                 (ObjectKey::Decimal(a), ObjectKey::Decimal(b)) => a == b,
@@ -334,7 +351,7 @@ impl ObjectKey {
             ObjectKey::Float(_) => "<class 'float'>",
             ObjectKey::Decimal(_) => "<class 'decimal.Decimal'>",
             ObjectKey::Tuple(_) => "<class 'tuple'>",
-            ObjectKey::Other { .. } => "<class 'object'>",
+            ObjectKey::Other(_) => "<class 'object'>",
         }
     }
 }
@@ -406,10 +423,10 @@ impl Hash for ObjectKey {
                 state.write_u8(NON_STR_TAG);
                 state.write_u8(2);
             }
-            ObjectKey::Other { repr, .. } => {
+            ObjectKey::Other(other) => {
                 state.write_u8(NON_STR_TAG);
                 state.write_u8(3);
-                repr.hash(state);
+                other.repr.hash(state);
             }
             ObjectKey::Tuple(items) => {
                 state.write_u8(NON_STR_TAG);
@@ -549,10 +566,7 @@ mod tests {
             ObjectKey::None,
             ObjectKey::Decimal("1".into()),
             ObjectKey::BigInt("1".into()),
-            ObjectKey::Other {
-                display: "obj".into(),
-                repr: "<obj>".into(),
-            },
+            ObjectKey::other("obj".into(), "<obj>".into()),
             ObjectKey::Tuple(vec![ObjectKey::Int(1)]),
             ObjectKey::Float(1.5),
         ];
@@ -577,10 +591,7 @@ mod tests {
     #[test]
     fn other_is_not_a_str_that_reads_the_same() {
         assert_ne!(
-            ObjectKey::Other {
-                display: "x".into(),
-                repr: "x".into()
-            },
+            ObjectKey::other("x".into(), "x".into()),
             ObjectKey::Str("x".into())
         );
     }

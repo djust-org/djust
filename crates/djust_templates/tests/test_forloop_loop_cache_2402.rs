@@ -44,7 +44,7 @@ fn obj(pairs: &[(&str, &str)]) -> Value {
     for (k, v) in pairs {
         m.insert((*k).into(), Value::String((*v).to_string()));
     }
-    Value::Object(m)
+    Value::Object(Box::new(m))
 }
 
 fn items(rows: &[(&str, &str)]) -> Value {

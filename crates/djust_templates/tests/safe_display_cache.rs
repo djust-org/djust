@@ -29,7 +29,10 @@ fn changing_only_display_safety_invalidates_cached_html() {
             })),
         );
         let mut context = Context::new();
-        context.set("rows".into(), Value::List(vec![Value::Object(row)]));
+        context.set(
+            "rows".into(),
+            Value::List(vec![Value::Object(Box::new(row))]),
+        );
         cache.begin_render();
         let actual = {
             let _guard = LoopCacheGuard::install(&mut cache);

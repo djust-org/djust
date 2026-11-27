@@ -27,9 +27,14 @@ async def test_cache():
         # Enable debug mode
         await page.evaluate("window.djustDebug = true")
 
-        # Wait for automated tests to complete (they take ~7 seconds)
+        # Wait for the automated tests to finish. Each step waits for the
+        # previous search to settle, so a slow server stretches the run
+        # rather than reordering it.
         print("⏳ Waiting for automated cache tests to complete...")
-        await asyncio.sleep(8)
+        for _ in range(120):
+            if any("=== Tests Complete ===" in log for log in console_logs):
+                break
+            await asyncio.sleep(0.5)
 
         # Extract results from console logs
         cache_hits = len([log for log in console_logs if "Cache hit" in log])

@@ -56,7 +56,10 @@ fn rows_with(v: Value) -> Context {
     let mut row = IndexMap::new();
     row.insert("v".into(), v);
     let mut c = Context::new();
-    c.set("rows".to_string(), Value::List(vec![Value::Object(row)]));
+    c.set(
+        "rows".to_string(),
+        Value::List(vec![Value::Object(Box::new(row))]),
+    );
     c
 }
 
@@ -94,7 +97,7 @@ fn dicts_differing_only_in_key_order_do_not_share_a_cache_entry() {
     ba.insert("b".into(), Value::Integer(2));
     ba.insert("a".into(), Value::Integer(1));
 
-    let (first, second) = render_twice(Value::Object(ab), Value::Object(ba));
+    let (first, second) = render_twice(Value::Object(Box::new(ab)), Value::Object(Box::new(ba)));
 
     assert_eq!(first, "<i>{&#x27;a&#x27;: 1, &#x27;b&#x27;: 2}</i>");
     assert_eq!(

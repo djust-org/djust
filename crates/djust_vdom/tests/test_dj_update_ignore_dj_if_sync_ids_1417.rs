@@ -89,7 +89,7 @@ fn ignore_subtree(c: &IdGen) -> VNode {
 /// Recursively collect every `djust_id` present in the tree.
 fn collect_ids(node: &VNode, out: &mut Vec<String>) {
     if let Some(id) = node.djust_id.as_ref() {
-        out.push(id.clone());
+        out.push(String::from(id.clone()));
     }
     for child in &node.children {
         collect_ids(child, out);

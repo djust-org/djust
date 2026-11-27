@@ -19,11 +19,11 @@ fn el(tag: &str, key: Option<&str>, attrs: &[(&str, &str)], children: Vec<VNode>
     }
     VNode {
         tag: tag.to_string(),
-        attrs: map,
+        attrs: map.into(),
         children,
         text: None,
-        key: key.map(|s| s.to_string()),
-        djust_id: Some(format!("id-{}", key.unwrap_or(tag))),
+        key: Option::map(key.map(|s| s.to_string()), String::into_boxed_str),
+        djust_id: Some(format!("id-{}", key.unwrap_or(tag)).into()),
         cached_html: None,
     }
 }
@@ -309,7 +309,7 @@ fn text(t: &str) -> VNode {
         tag: "#text".to_string(),
         attrs: Default::default(),
         children: vec![],
-        text: Some(t.to_string()),
+        text: Some(Box::<str>::from(t.to_string())),
         key: None,
         djust_id: None,
         cached_html: None,
@@ -416,7 +416,7 @@ fn comment(text: &str) -> VNode {
         tag: "#comment".to_string(),
         attrs: Default::default(),
         children: vec![],
-        text: Some(text.to_string()),
+        text: Some(Box::<str>::from(text.to_string())),
         key: None,
         djust_id: None,
         cached_html: None,

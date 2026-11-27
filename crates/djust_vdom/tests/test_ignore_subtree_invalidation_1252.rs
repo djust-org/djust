@@ -74,8 +74,9 @@ fn test_splice_recomputes_html_after_invalidation() {
     // Forge a stale cache: pretend the cache holds out-of-date content.
     // (This simulates the bug surface — the cache no longer matches the
     // children, but splicing copies it forward anyway.)
-    old.children[0].cached_html =
-        Some(r#"<div dj-update="ignore"><span>VERY-STALE-CACHE</span></div>"#.to_string());
+    old.children[0].cached_html = Some(Box::<str>::from(
+        r#"<div dj-update="ignore"><span>VERY-STALE-CACHE</span></div>"#.to_string(),
+    ));
 
     // Splice into a fresh tree.
     let new_html = r#"<div><div dj-update="ignore"><span>STALE</span></div></div>"#;
@@ -101,7 +102,7 @@ fn test_splice_no_ignore_does_not_touch_cache() {
     let mut old = parse_html(old_html).unwrap();
     // Synthetic cache on a non-ignored node — should NOT be cleared by splice
     // since splice only touches the matched ignore-marked node.
-    old.cached_html = Some("synthetic".to_string());
+    old.cached_html = Some(Box::<str>::from("synthetic".to_string()));
 
     let new_html = r#"<div><span>hello</span></div>"#;
     let mut new = parse_html(new_html).unwrap();
@@ -121,7 +122,7 @@ fn test_splice_clears_cached_html_via_builder() {
             .with_child(VNode::text("inner")),
     );
     // Force a cached_html on the ignored node, simulating prior render.
-    old.children[0].cached_html = Some("CACHED-OLD".to_string());
+    old.children[0].cached_html = Some(Box::<str>::from("CACHED-OLD".to_string()));
 
     let mut new = VNode::element("div").with_child(
         VNode::element("section")

@@ -68,10 +68,10 @@ mod tests {
             Value::Object({
                 let mut inner = IndexMap::new();
                 inner.insert("a".into(), Value::Bool(true));
-                inner
+                Box::new(inner)
             }),
         );
-        let original = Value::Object(map);
+        let original = Value::Object(Box::new(map));
 
         let bytes = to_msgpack(&original).unwrap();
         let deserialized = from_msgpack(&bytes).unwrap();
@@ -124,7 +124,7 @@ mod tests {
         let mut map = IndexMap::new();
         map.insert("name".into(), Value::String("test".to_string()));
         map.insert("count".into(), Value::Integer(5));
-        let original = Value::Object(map);
+        let original = Value::Object(Box::new(map));
 
         let json = to_json(&original).unwrap();
         let deserialized = from_json(&json).unwrap();

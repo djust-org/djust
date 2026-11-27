@@ -6356,7 +6356,7 @@ pub(crate) fn python_type_name(value: &Value) -> &str {
         Value::String(_) | Value::SafeString(_) | Value::ModelName(_) | Value::Missing => "str",
         Value::List(_) => "list",
         Value::Tuple(_) => "tuple",
-        Value::NamedTuple { name, .. } => name,
+        Value::NamedTuple { meta, .. } => &meta.name,
         Value::Object(map) => {
             if value.object_str().is_some() {
                 // Only the #3947 marker names a class: a user map carrying `__model__`
@@ -6853,8 +6853,8 @@ mod tests {
             Value::String(String::new()),
             Value::List(vec![Value::Integer(1), Value::Integer(2)]),
             Value::Tuple(vec![Value::Integer(1)]),
-            Value::Object(map),
-            Value::Object(model),
+            Value::Object(Box::new(map)),
+            Value::Object(Box::new(model)),
             Value::DictView {
                 kind: djust_core::DictViewKind::Keys,
                 items: vec![Value::Integer(1), Value::Integer(2), Value::Integer(3)],
@@ -7145,14 +7145,14 @@ mod tests {
             djust_core::ObjectKey::Str("a".to_string()),
             Value::Integer(1),
         );
-        assert_eq!(python_len(&Value::Object(dict)), Some(1));
+        assert_eq!(python_len(&Value::Object(Box::new(dict))), Some(1));
 
         let mut model = IndexMap::new();
         model.insert(
             djust_core::ObjectKey::Str("__str__".to_string()),
             Value::String("Model #1".to_string()),
         );
-        let model = Value::Object(model);
+        let model = Value::Object(Box::new(model));
         assert!(model.object_str().is_some(), "fixture is not a model");
         assert_eq!(python_len(&model), None);
     }
@@ -7208,7 +7208,7 @@ mod tests {
             m.insert("__str__".into(), Value::String("x".into()));
             m.insert("__model__".into(), marker);
             m.insert("pk".into(), Value::Integer(1));
-            Value::Object(m)
+            Value::Object(Box::new(m))
         };
         assert_eq!(
             python_type_name(&row(Value::ModelName("User".into()))),
@@ -8490,7 +8490,7 @@ mod tests {
         dict.insert("a".into(), Value::Integer(1));
         dict.insert("b".into(), Value::Integer(2));
         assert_eq!(
-            apply_filter("length", &Value::Object(dict.clone()), None)
+            apply_filter("length", &Value::Object(Box::new(dict.clone())), None)
                 .unwrap()
                 .to_string(),
             "2"
@@ -8501,7 +8501,7 @@ mod tests {
         let mut model = dict.clone();
         model.insert("__str__".into(), Value::String("bob".to_string()));
         assert_eq!(
-            apply_filter("length", &Value::Object(model), None)
+            apply_filter("length", &Value::Object(Box::new(model)), None)
                 .unwrap()
                 .to_string(),
             "0"
@@ -8512,7 +8512,7 @@ mod tests {
         let mut broken = dict.clone();
         broken.insert("__str__".into(), Value::None);
         assert_eq!(
-            apply_filter("length", &Value::Object(broken), None)
+            apply_filter("length", &Value::Object(Box::new(broken)), None)
                 .unwrap()
                 .to_string(),
             "3"
@@ -8520,9 +8520,13 @@ mod tests {
 
         // An empty dict was already right and stays right.
         assert_eq!(
-            apply_filter("length", &Value::Object(indexmap::IndexMap::new()), None)
-                .unwrap()
-                .to_string(),
+            apply_filter(
+                "length",
+                &Value::Object(Box::new(indexmap::IndexMap::new())),
+                None
+            )
+            .unwrap()
+            .to_string(),
             "0"
         );
     }
@@ -8552,7 +8556,7 @@ mod tests {
         ] {
             m.insert(djust_core::ObjectKey::Str(k.to_string()), v);
         }
-        Value::Object(m)
+        Value::Object(Box::new(m))
     }
 
     /// A serialized model is not iterable: `list(model)` raises in Python, so the filters that
@@ -8567,7 +8571,13 @@ mod tests {
             djust_core::ObjectKey::Str("a".to_string()),
             Value::Integer(1),
         );
-        assert_eq!(iter_values(&Value::Object(d)).unwrap().unwrap().len(), 1);
+        assert_eq!(
+            iter_values(&Value::Object(Box::new(d)))
+                .unwrap()
+                .unwrap()
+                .len(),
+            1
+        );
 
         // `join` fails soft on a non-iterable (Django's `except TypeError: return value`),
         // and spells the model by its text; the filters that raise still raise.
@@ -8597,7 +8607,7 @@ mod tests {
         ] {
             m.insert(djust_core::ObjectKey::Str(k.to_string()), v);
         }
-        Value::Object(m)
+        Value::Object(Box::new(m))
     }
 
     fn text_key_dict() -> Value {
@@ -8610,7 +8620,7 @@ mod tests {
             djust_core::ObjectKey::Str("k1".to_string()),
             Value::String("v1".to_string()),
         );
-        Value::Object(m)
+        Value::Object(Box::new(m))
     }
 
     #[test]
@@ -8660,7 +8670,7 @@ mod tests {
                 djust_core::ObjectKey::Str("a".to_string()),
                 Value::Integer(1),
             );
-            Value::Object(m)
+            Value::Object(Box::new(m))
         };
         assert_eq!(
             apply_filter("pluralize", &one, None).unwrap().to_string(),
@@ -8708,7 +8718,7 @@ mod tests {
             model_map("Account:a2"),
         );
         assert_eq!(
-            json_script_of(&Value::Object(d)),
+            json_script_of(&Value::Object(Box::new(d))),
             "<script id=\"x\" type=\"application/json\">{\"items\": [\"Account:a1\"], \"owner\": \"Account:a2\"}</script>"
         );
         let deep = Value::List(vec![Value::List(vec![Value::Tuple(vec![model_map(
@@ -8730,7 +8740,7 @@ mod tests {
             Value::String("x".to_string()),
         );
         assert_eq!(
-            json_script_of(&Value::Object(d)),
+            json_script_of(&Value::Object(Box::new(d))),
             "<script id=\"x\" type=\"application/json\">{\"a\": 1, \"b\": \"x\"}</script>"
         );
     }
@@ -8864,7 +8874,8 @@ mod tests {
     fn test_json_script_escapes_control_characters_in_object_keys() {
         let mut map = IndexMap::new();
         map.insert("a\nb\tc\rd\\e\"f".into(), Value::String("v".to_string()));
-        let result = apply_filter("json_script", &Value::Object(map), Some("data")).unwrap();
+        let result =
+            apply_filter("json_script", &Value::Object(Box::new(map)), Some("data")).unwrap();
         let s = result.to_string();
         assert!(
             s.contains(r#""a\nb\tc\rd\\e\"f""#),
@@ -8883,7 +8894,8 @@ mod tests {
             let c = char::from_u32(code).unwrap();
             let mut map = IndexMap::new();
             map.insert(format!("k{c}").into(), Value::String(format!("v{c}")));
-            let result = apply_filter("json_script", &Value::Object(map), Some("d")).unwrap();
+            let result =
+                apply_filter("json_script", &Value::Object(Box::new(map)), Some("d")).unwrap();
             let s = result.to_string();
             assert!(
                 !s.contains(c),
@@ -8986,7 +8998,8 @@ mod tests {
         let nested = Value::List(vec![Value::Object(
             [(djust_core::ObjectKey::from("k"), Value::Float(1e20))]
                 .into_iter()
-                .collect(),
+                .collect::<indexmap::IndexMap<_, _>>()
+                .into(),
         )]);
         assert_eq!(crate::pprint::pformat(&nested), "[{'k': 1e+20}]");
         assert_eq!(value_to_json(&nested), "[{\"k\": 1e+20}]");

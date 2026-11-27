@@ -24,7 +24,6 @@ use html5ever::tendril::TendrilSink;
 use html5ever::tree_builder::TreeBuilderOpts;
 use html5ever::{ns, parse_document, parse_fragment, LocalName, ParseOpts, QualName};
 use markup5ever_rcdom::{Handle, NodeData, RcDom};
-use std::collections::HashMap;
 
 /// Trace macro for parser logging
 macro_rules! parser_trace {
@@ -449,9 +448,9 @@ pub fn parse_html_fragment_client_view_in(
                 if is_preserved_comment(&text) {
                     roots.push(VNode {
                         tag: "#comment".to_string(),
-                        attrs: HashMap::new(),
+                        attrs: crate::Attrs::new(),
                         children: Vec::new(),
-                        text: Some(text),
+                        text: Some(Box::<str>::from(text)),
                         key: None,
                         djust_id: None,
                         cached_html: None,
@@ -757,16 +756,21 @@ fn neighbour_kind(handle: &Handle) -> NeighbourKind {
 /// separated them (`A<!-- c -->B`), and keeping them apart would give the
 /// server one more child than the client — every later sibling's path would be
 /// off by one. So adjacent text is merged, as the browser does (#2999).
-fn push_text(children: &mut Vec<VNode>, text: String) {
-    if let Some(last) = children.last_mut() {
-        if last.is_text() {
-            let merged = last.text.get_or_insert_with(String::new);
-            merged.push_str(&text);
-            last.cached_html = None;
-            return;
-        }
+///
+/// The run is built in `pending`, a `String`, and becomes a node (one boxed
+/// string, #4319) only when something else follows it: [`flush_text`].
+fn push_text(pending: &mut Option<String>, text: String) {
+    match pending {
+        Some(run) => run.push_str(&text),
+        None => *pending = Some(text),
     }
-    children.push(VNode::text(text));
+}
+
+/// End the text run being built, if any, as one text node.
+fn flush_text(children: &mut Vec<VNode>, pending: &mut Option<String>) {
+    if let Some(run) = pending.take() {
+        children.push(VNode::text(run));
+    }
 }
 
 /// Convert the raw children of a `parent_tag` element into VDOM children.
@@ -828,6 +832,7 @@ fn build_children_observed<F: FnMut(&Handle, &str)>(
     }
 
     let mut children = Vec::with_capacity(raw.len());
+    let mut pending: Option<String> = None;
     for (i, child) in raw.iter().enumerate() {
         match &child.data {
             // Special placeholder comments preserved for VDOM diffing
@@ -839,11 +844,12 @@ fn build_children_observed<F: FnMut(&Handle, &str)>(
             NodeData::Comment { contents } => {
                 let comment_text = contents.to_string();
                 if is_preserved_comment(&comment_text) {
+                    flush_text(&mut children, &mut pending);
                     children.push(VNode {
                         tag: "#comment".to_string(),
-                        attrs: HashMap::new(),
+                        attrs: crate::Attrs::new(),
                         children: Vec::new(),
-                        text: Some(comment_text),
+                        text: Some(Box::<str>::from(comment_text)),
                         key: None,
                         djust_id: None,
                         cached_html: None,
@@ -853,30 +859,31 @@ fn build_children_observed<F: FnMut(&Handle, &str)>(
             NodeData::Text { contents } => {
                 let text = contents.borrow().to_string();
                 if preserve_whitespace {
-                    push_text(&mut children, text);
+                    push_text(&mut pending, text);
                 } else if is_html_whitespace_only(&text) {
                     if prev_inline[i] && next_inline[i] {
                         // Merged into a preceding text run it adds nothing
                         // to when that run already ends in whitespace.
-                        let ends_in_space = children.last().is_some_and(|c| {
-                            c.is_text()
-                                && c.text.as_deref().is_some_and(|t| {
-                                    t.ends_with(|ch: char| ch.is_ascii_whitespace())
-                                })
-                        });
+                        let ends_in_space = pending
+                            .as_deref()
+                            .is_some_and(|t| t.ends_with(|ch: char| ch.is_ascii_whitespace()));
                         if !ends_in_space {
-                            push_text(&mut children, " ".to_string());
+                            push_text(&mut pending, " ".to_string());
                         }
                     } else {
                         parser_trace!("Dropped whitespace-only text node {:?}", text);
                     }
                 } else {
-                    push_text(&mut children, text);
+                    push_text(&mut pending, text);
                 }
             }
-            _ => children.push(handle_to_vnode_observed(child, parent_depth + 1, observer)?),
+            _ => {
+                flush_text(&mut children, &mut pending);
+                children.push(handle_to_vnode_observed(child, parent_depth + 1, observer)?);
+            }
         }
     }
+    flush_text(&mut children, &mut pending);
     Ok(children)
 }
 
@@ -961,7 +968,7 @@ pub(crate) fn handle_to_vnode_observed<F: FnMut(&Handle, &str)>(
 
             // Pre-size attributes HashMap: most elements have 1-2 attrs + dj-id
             let attrs_borrow = attrs.borrow();
-            let mut attributes = HashMap::with_capacity(attrs_borrow.len() + 1);
+            let mut attributes = crate::Attrs::with_capacity(attrs_borrow.len() + 1);
             let mut key: Option<String> = None;
 
             // Add dj-id attribute for client-side querySelector lookup
@@ -1033,8 +1040,8 @@ pub(crate) fn handle_to_vnode_observed<F: FnMut(&Handle, &str)>(
                 attrs: attributes,
                 children,
                 text: None,
-                key,
-                djust_id: Some(djust_id),
+                key: Option::map(key, String::into_boxed_str),
+                djust_id: Some(Box::<str>::from(djust_id)),
                 cached_html: None,
             })
         }
@@ -1394,7 +1401,7 @@ mod tests {
         let vnode = parse_html(html).unwrap();
 
         assert_eq!(vnode.tag, "div");
-        assert_eq!(vnode.key, Some("item-123".to_string()));
+        assert_eq!(vnode.key, Some("item-123".into()));
         // data-key should still be in attrs for DOM rendering
         assert_eq!(vnode.attrs.get("data-key"), Some(&"item-123".to_string()));
     }
@@ -1408,7 +1415,7 @@ mod tests {
         let vnode = parse_html(html).unwrap();
         assert_eq!(vnode.children.len(), 2);
         assert!(vnode.children[0].is_comment());
-        assert_eq!(vnode.children[0].text, Some("dj-if".to_string()));
+        assert_eq!(vnode.children[0].text, Some("dj-if".into()));
         assert_eq!(vnode.children[1].tag, "span");
     }
 
@@ -1601,9 +1608,9 @@ mod tests {
         assert_eq!(vnode.children.len(), 3);
 
         // Each child should have its key extracted
-        assert_eq!(vnode.children[0].key, Some("1".to_string()));
-        assert_eq!(vnode.children[1].key, Some("2".to_string()));
-        assert_eq!(vnode.children[2].key, Some("3".to_string()));
+        assert_eq!(vnode.children[0].key, Some("1".into()));
+        assert_eq!(vnode.children[1].key, Some("2".into()));
+        assert_eq!(vnode.children[2].key, Some("3".into()));
     }
 
     #[test]
@@ -1626,9 +1633,9 @@ mod tests {
         "#;
         let vnode = parse_html(html).unwrap();
 
-        assert_eq!(vnode.key, Some("parent".to_string()));
+        assert_eq!(vnode.key, Some("parent".into()));
         assert_eq!(vnode.children.len(), 1);
-        assert_eq!(vnode.children[0].key, Some("child".to_string()));
+        assert_eq!(vnode.children[0].key, Some("child".into()));
     }
 
     #[test]
@@ -1649,7 +1656,7 @@ mod tests {
         let html = r#"<div dj-key="item-123">Content</div>"#;
         let vnode = parse_html(html).unwrap();
 
-        assert_eq!(vnode.key, Some("item-123".to_string()));
+        assert_eq!(vnode.key, Some("item-123".into()));
         // dj-key should be in attrs for DOM rendering
         assert_eq!(vnode.attrs.get("dj-key"), Some(&"item-123".to_string()));
     }
@@ -1699,9 +1706,9 @@ mod tests {
 
         assert_eq!(vnode.tag, "ul");
         assert_eq!(vnode.children.len(), 3);
-        assert_eq!(vnode.children[0].key, Some("item-1".to_string()));
-        assert_eq!(vnode.children[1].key, Some("item-2".to_string()));
-        assert_eq!(vnode.children[2].key, Some("item-3".to_string()));
+        assert_eq!(vnode.children[0].key, Some("item-1".into()));
+        assert_eq!(vnode.children[1].key, Some("item-2".into()));
+        assert_eq!(vnode.children[2].key, Some("item-3".into()));
     }
 
     #[test]

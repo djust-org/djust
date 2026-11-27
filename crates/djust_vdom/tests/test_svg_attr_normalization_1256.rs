@@ -47,10 +47,12 @@ fn attr_name_after_parse(svg_inner: &str, expected_tag: &str) -> Option<String> 
     }
     let elem = find_tag(&vnode, expected_tag)?;
     // Find the attribute that's NOT dj-id (the test attr we set).
-    elem.attrs
+    let name = elem
+        .attrs
         .keys()
         .find(|k| *k != "dj-id" && *k != "xmlns")
-        .cloned()
+        .cloned();
+    name
 }
 
 #[test]

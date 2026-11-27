@@ -21,7 +21,7 @@ fn model_value() -> Value {
     ] {
         map.insert(ObjectKey::Str(key.to_string()), value);
     }
-    Value::Object(map)
+    Value::Object(Box::new(map))
 }
 
 fn model_ctx() -> Context {
@@ -69,7 +69,7 @@ fn a_field_named_items_on_a_serialized_model_still_wins() {
     );
     map.insert(ObjectKey::Str("items".to_string()), Value::Integer(5));
     let mut ctx = Context::new();
-    ctx.set("d".to_string(), Value::Object(map));
+    ctx.set("d".to_string(), Value::Object(Box::new(map)));
     assert_eq!(ctx.resolve("d.items").unwrap().unwrap().to_string(), "5");
 }
 
@@ -79,7 +79,7 @@ fn an_ordinary_dict_still_answers_its_entries() {
     map.insert(ObjectKey::Str("a".to_string()), Value::Integer(1));
     map.insert(ObjectKey::Str("b".to_string()), Value::Integer(2));
     let mut ctx = Context::new();
-    ctx.set("d".to_string(), Value::Object(map));
+    ctx.set("d".to_string(), Value::Object(Box::new(map)));
     match ctx.resolve("d.items").unwrap().unwrap() {
         Value::DictView { kind, items } => {
             assert_eq!(kind, DictViewKind::Items);
@@ -105,7 +105,7 @@ fn a_model_with_a_safe_text_has_no_dict_methods_either() {
         map.insert(ObjectKey::Str(key.to_string()), value);
     }
     let mut ctx = Context::new();
-    ctx.set("r".to_string(), Value::Object(map));
+    ctx.set("r".to_string(), Value::Object(Box::new(map)));
     for path in ["r.items", "r.keys", "r.values"] {
         assert!(ctx.resolve(path).unwrap().is_none(), "{path}");
     }
@@ -124,7 +124,7 @@ fn a_dict_with_only_a_text_key_keeps_its_dict_methods() {
         Value::String("v1".to_string()),
     );
     let mut ctx = Context::new();
-    ctx.set("d".to_string(), Value::Object(map));
+    ctx.set("d".to_string(), Value::Object(Box::new(map)));
     for path in ["d.items", "d.keys", "d.values"] {
         match ctx.resolve(path).unwrap().unwrap() {
             Value::DictView { items, .. } => assert_eq!(items.len(), 2, "{path}"),
