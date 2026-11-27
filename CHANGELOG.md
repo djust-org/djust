@@ -19,6 +19,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`chrono` and `chrono-tz` unmaintained notices accepted on 1.3 (RUSTSEC-2026-0543, RUSTSEC-2026-0555).**
   Both are informational (no known vulnerability, no fixed version). 2.0 replaces them with `jiff`
   (#4222); 1.3 takes security fixes only, so `osv-scanner.toml` accepts the notices until 2027-03-31.
+- **A Component's hybrid template judges a URL whose character reference the slot completes, and more URL shapes (1.3 backport of #3923, #3924).**
+  `href="&#10{{ s }}"` with `6;avascript:...`, or `href="javascript&{{ s }}"` with `colon;...`,
+  printed a value the browser reads as `javascript:`; the value is now decoded as printed (the
+  literal and the slot's escaped text together) before the scheme check, and a literal ending in
+  an unfinished character reference no longer fixes the value. A URL value with more than 64
+  paths, or a `{% now %}` before the slot, was escaped but printed as given; identical paths now
+  count once, and a value still over the cap whose slots are plain names is judged slot by slot
+  and fails closed. Literal `{% cycle %}` values are branches, and `{% cycle ... as c %}` no
+  longer hides its text. Regression tests in `python/djust/tests/test_hybrid_attrs_charref_join_3923.py`
+  and `python/djust/tests/test_hybrid_attrs_unjudged_shapes_3924.py`.
+- **A `LiveComponent` / `BoundComponent` `template_name` file's own source follows the attribute and raw-text escaping rule (1.3 backport of #3933).**
+  Only an inline `template` was hardened; a file was rendered as written, so `<a href="{{ url }}">`
+  with `javascript:alert(1)`, or a marked-safe value in `title="{{ v }}"` / `<textarea>{{ v }}</textarea>`,
+  printed unescaped. Both classes now draw the file through `_render_template_file`: attribute
+  slots are escaped whatever the value is marked as, a URL is checked against the scheme
+  allowlist, and raw-text slots are escaped; a text slot keeps its markup. Content from
+  `{% extends %}` / `{% include %}` is not scanned and is named by the once-per-class warning; a
+  file whose source the backend does not expose is drawn as before and named once. The dj-if ids
+  of a file with attribute slots change once on upgrade. Tests in
+  `python/djust/tests/test_component_hybrid_rawtext_and_live_templates_3913_3914.py` (`TestTemplateNameFile`).
+- **Marked-safe values are escaped in the attributes of the admin, allauth / djust_auth, bug-capture replay and gallery templates (1.3 backport of #4157).**
+  Every attribute slot of those templates now uses `|force_escape`; a URL attribute goes through
+  the new `djust_url_attr` filter (`{% load djust_attrs %}`, which turns a `javascript:` /
+  `vbscript:` / `data:` URL into `#`), and a quoted `dj-click` / `dj-change` handler argument
+  through `djust_handler_arg`. Tests in `python/tests/test_page_template_attrs_4157.py`.
+- **The HTTP API and `@server_function` endpoints answer a `PermissionDenied` with the fixed message "Permission denied" (1.3 backport of #4170).**
+  The exception's text no longer reaches the caller, DEBUG included; it goes to the server log
+  only, as on WebSocket and SSE. Tests in `python/djust/tests/test_api_permission_detail_4170.py`.
+- **SSE events no longer lose the page's query string during authorization (1.3 backport of #4231).**
+  An explicit view resolving state from the query (a `TenantMixin` view reading `?tenant=`)
+  refused its first SSE event with "Event authorization failed". The event request now takes the
+  query from the trusted mount request, as the WebSocket and HTTP fallback do; the query on the
+  message POST itself is ignored and a changed tenant is still refused. Tests in
+  `python/djust/tests/test_sse_event_query_string_4231.py`.
+- **With `reauth_on_event`, the SSE per-event auth re-check sees the page's route (1.3 backport of #4255).**
+  On a legacy view with `login_required` / `permission_required` the re-check ran against the raw
+  `/djust/sse/<id>/message/` POST, so a `check_permissions` reading `request.path` or
+  `request.GET` could decide differently than on the other transports. It now keeps the live
+  POST's user and session and takes path, resolver match, slot and page query from the mount
+  request; an SSE navigation or slot mount turn uses the destination page's request. Tests in
+  `python/djust/tests/test_sse_reauth_mount_request_4255.py`.
+- **Password fields are kept out of drafts, the `dj-auto-recover` envelope and `_collectFormData` (1.3 backport of #4067).**
+  A `type="password"` field, or one marked `autocomplete="new-password"` / `"current-password"`,
+  is no longer saved to browser storage by the draft manager (even when marked
+  `data-draft="true"`), sent back by `dj-auto-recover`, or written to from a stored draft. Tests
+  in `tests/js/secret_fields_not_kept_4067.test.js`.
+- **Reconnect form recovery no longer keeps or re-sends password values (1.3 backport of #4078).**
+  The capture taken before a reconnect mount held a password field's value, wrote it back into
+  the new markup and replayed it to the server; it now uses the same password check as drafts.
+  Tests in `tests/js/form_recovery_secret_4078.test.js`.
+- **The scripts djust loads carry the CSP nonce (1.3 backport of #3991).** The client, extension
+  and DEBUG `<script src>` tags were emitted without the request's nonce while the inline scripts
+  beside them had it, so a nonce-only or `'strict-dynamic'` `script-src` refused them and the
+  client never loaded unless the policy was loosened. All four now carry the nonce. Tests in
+  `python/djust/tests/test_client_script_nonce.py`.
 
 ### Added
 
