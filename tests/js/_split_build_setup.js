@@ -14,7 +14,10 @@ import { syncBuiltinESMExports } from 'module';
 
 const STATIC = path.resolve('python/djust/static/djust');
 const FULL = path.join(STATIC, 'client.js');
-const CHUNKS = ['uploads', 'virtual-list', 'cursor-overlay', 'tutorial', 'service-worker'];
+const CHUNKS = ['uploads', 'virtual-list', 'cursor-overlay', 'tutorial', 'service-worker',
+    // #4320
+    'component-behaviors', 'keyboard-nav', 'error-overlay', 'dj-style', 'flip', 'transitions',
+    'infinite-scroll', 'prefetch', 'track-static', 'dialog'];
 
 const realRead = fs.readFileSync;
 let splitSource = null;

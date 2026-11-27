@@ -456,7 +456,7 @@ class TestHTTP:
 
 class TestBundleUrl:
     def test_versioned_url(self):
-        from djust.mixins.post_processing import _versioned_url
+        from djust._client_chunks import versioned_url as _versioned_url
 
         v = djust.__version__
         assert _versioned_url("/static/djust/client-core.min.js") == (
@@ -466,7 +466,7 @@ class TestBundleUrl:
 
     @pytest.mark.django_db
     def test_script_and_chunk_urls_carry_the_version(self, settings, monkeypatch):
-        from djust.mixins.post_processing import CLIENT_CHUNKS
+        from djust._client_chunks import CLIENT_CHUNKS
 
         monkeypatch.setattr(LiveView, "_validate_exposure_configuration", lambda self: None)
         settings.LIVEVIEW_ALLOWED_MODULES = ["djust", MOD]

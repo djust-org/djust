@@ -130,14 +130,22 @@ class Command(BaseCommand):
 
     def _get_djust_core_assets(self) -> List[str]:
         """Return djust's own static assets that should always be precached."""
-        static_url = getattr(settings, "STATIC_URL", "/static/")
+        # #4320: the bundle the LiveView actually injects (client-core or, with
+        # ``client_bundle: "full"``, client; minified unless DEBUG) and every
+        # chunk the core may load, at the exact URLs the page requests them
+        # (static() names plus the ``?v=`` query), so the cache matches them.
+        from djust._client_chunks import client_bundle_urls, static_url as _static
+
+        bundle_url, chunk_urls = client_bundle_urls()
+        # The error overlay loads only under DEBUG (window.DEBUG_MODE).
         assets = [
-            "%sdjust/client.js" % static_url,
+            bundle_url,
+            *(url for name, url in chunk_urls.items() if name != "error-overlay" or settings.DEBUG),
         ]
         from djust.config import debug_panel_enabled
 
         if debug_panel_enabled():
-            assets.append("%sdjust/debug-panel.js" % static_url)
+            assets.append(_static("djust/debug-panel.js"))
         return assets
 
     def _collect_static_assets(

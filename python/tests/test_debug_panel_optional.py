@@ -112,4 +112,5 @@ class TestServiceWorkerAssets:
     def test_debug_panel_not_precached_when_off(self):
         assets = self._assets()
         assert "/static/djust/debug-panel.js" not in assets
-        assert "/static/djust/client.js" in assets
+        # The bundle the LiveView injects (#4320): the readable core under DEBUG.
+        assert any(a.startswith("/static/djust/client-core.js?v=") for a in assets)
