@@ -12,14 +12,14 @@ use std::fmt;
 
 pub mod context;
 pub mod decimal;
-pub mod errors;
-pub mod html_whitespace;
 pub mod locale;
 pub mod object_key;
-pub mod raw_text;
 pub mod render_env;
 pub mod retained;
 pub mod serialization;
+
+// Moved to the Python-free `djust_base` crate; re-exported under the old paths.
+pub use djust_base::{errors, html_whitespace, raw_text};
 
 pub use context::{
     template_call_guard, Context, LazyBlock, LazyBlockGuard, SharedValues, TemplateCallGuard,

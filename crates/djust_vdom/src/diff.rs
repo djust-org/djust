@@ -799,7 +799,7 @@ fn reconcile_keyed(
         n.is_text()
             && n.text
                 .as_deref()
-                .is_some_and(djust_core::html_whitespace::is_html_whitespace_only)
+                .is_some_and(djust_base::html_whitespace::is_html_whitespace_only)
     };
     // Keys derived from `id` by the opt-in `key_by_id` (#4228) do not count:
     // with that opt-in most parents mix id-keyed and id-less children (a

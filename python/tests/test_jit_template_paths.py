@@ -310,9 +310,10 @@ class WholeAndFieldView(LiveView):
 def test_a_plain_object_read_whole_and_by_field_carries_its_text():
     """#3911 for ``serialize_for_template``: an object the template prints whole AND reads a
     field of carries its text beside the field, so ``{{ card }}`` prints it and not a dict.
-    ``template_paths()`` keeps that internal: a whole read is still no path there."""
+    ``template_paths()`` keeps that internal: a whole read is still no path there. The loop
+    variable ``card`` folds onto ``cards`` and is not a root of its own (#4318)."""
     view = WholeAndFieldView()
-    assert view.template_paths() == {"cards": ["title"], "card": ["title"], "featured": ["title"]}
+    assert view.template_paths() == {"cards": ["title"], "featured": ["title"]}
     rows = view.serialize_for_template(_cards(), "cards")
     assert [row["__str__"] for row in rows] == [str(card) for card in _cards()]
     assert [row["title"] for row in rows] == ["one", "two"]

@@ -56,6 +56,7 @@ export default defineConfig({
   test: {
     environment: 'happy-dom',
     globals: true,
+    setupFiles: ['tests/js/_jsdom_compat_setup.js'],
     // Don't discover tests inside agent git worktrees (`.claude/worktrees/*`)
     // or other `.claude/` internals — those are other branches' checkouts and
     // running their (possibly stale) test copies against this tree's built
@@ -74,7 +75,7 @@ export default defineConfig({
         extends: true,
         test: {
           name: 'split-build',
-          setupFiles: ['tests/js/_split_build_setup.js'],
+          setupFiles: ['tests/js/_jsdom_compat_setup.js', 'tests/js/_split_build_setup.js'],
           include: SPLIT_BUILD_TESTS,
         },
       },

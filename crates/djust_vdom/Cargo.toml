@@ -8,8 +8,12 @@ license.workspace = true
 [lib]
 crate-type = ["rlib"]
 
+[features]
+default = ["python"]
+python = ["dep:pyo3", "djust_base/python"]
+
 [dependencies]
-pyo3.workspace = true
+pyo3 = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 rmp-serde.workspace = true
@@ -20,7 +24,7 @@ markup5ever_rcdom.workspace = true
 thiserror.workspace = true
 regex.workspace = true
 tracing = { workspace = true }
-djust_core = { path = "../djust_core" }
+djust_base = { path = "../djust_base" }
 
 [dev-dependencies]
 criterion = "0.8"

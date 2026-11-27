@@ -362,6 +362,10 @@ describe('CollabSelection', () => {
             w.CSS = { highlights: registry };
             w.Highlight = class { constructor(...ranges) { this.ranges = ranges; } };
         }
+        // jsdom 31 ships constructable stylesheets; these tests mean a browser without
+        // them (the <style> fallback), and the ones that want the constructed-sheet
+        // path stub CSSStyleSheet back in through `before`.
+        delete w.CSSStyleSheet;
         w.Range.prototype.getClientRects = function () { return [rect]; };
         w.Range.prototype.getBoundingClientRect = function () { return rect; };
         let targetEl = null;
@@ -374,7 +378,7 @@ describe('CollabSelection', () => {
         env.$ = (sel) => w.document.querySelector(sel);
         env.$$ = (sel) => Array.from(w.document.querySelectorAll(sel));
         env.live = () => (w.document.getElementById('dj-component-live') || {}).textContent;
-        env.texts = () => [...registry.entries()].sort().map(([k, h]) => h.ranges[0].toString());
+        env.texts = () => [...registry.entries()].sort().map(([, h]) => h.ranges[0].toString());
         return env;
     };
     const patch = (env, users, target = '#doc') => {

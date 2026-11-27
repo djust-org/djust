@@ -18,8 +18,8 @@
 //! - Child filtering decisions
 
 use crate::{next_djust_id, reset_id_counter, should_trace, Namespace, VNode};
-use djust_core::html_whitespace::{is_html_whitespace_only, is_inline_level_tag};
-use djust_core::{DjangoRustError, Result};
+use djust_base::html_whitespace::{is_html_whitespace_only, is_inline_level_tag};
+use djust_base::{DjangoRustError, Result};
 use html5ever::tendril::TendrilSink;
 use html5ever::tree_builder::TreeBuilderOpts;
 use html5ever::{ns, parse_document, parse_fragment, LocalName, ParseOpts, QualName};
@@ -897,7 +897,7 @@ fn build_children_observed<F: FnMut(&Handle, &str)>(
 /// run is dropped except inside `pre`/`code`/`textarea`/`script`/`style`.
 /// That keeps `parse(to_html(tree))` equal to `tree` for a flattened tree.
 ///
-/// A raw-text-named element (`djust_core::raw_text`) that had child elements
+/// A raw-text-named element (`djust_base::raw_text`) that had child elements
 /// keeps no text: that happens only in `<svg>` / `<math>`, and the text of
 /// its descendants is not its own text.
 fn collapse_subtree_to_text(parent_tag: &str, handle: &Handle) -> Vec<VNode> {
@@ -923,7 +923,7 @@ fn collapse_subtree_to_text(parent_tag: &str, handle: &Handle) -> Vec<VNode> {
         // Only foreign content (svg/math) gives a raw-text-named element
         // element children. Text decoded from them must not become the
         // direct text of that element: keep none.
-        if djust_core::raw_text::is_raw_text_element(parent_tag) {
+        if djust_base::raw_text::is_raw_text_element(parent_tag) {
             return Vec::new();
         }
     }
