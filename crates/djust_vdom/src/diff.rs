@@ -270,45 +270,56 @@ fn diff_node_into(
 // ============================================================================
 
 fn diff_attrs(old: &VNode, new: &VNode, path: &[usize], out: &mut Vec<Patch>) {
-    // Deterministic order: sort keys.
-    let mut new_keys: Vec<&String> = new.attrs.keys().collect();
-    new_keys.sort();
-    for key in new_keys {
-        // `dj-id` is an id artifact, never diffed as a normal attribute.
-        if key == "dj-id" {
-            continue;
-        }
-        let new_val = &new.attrs[key];
-        match old.attrs.get(key) {
-            Some(old_val) if old_val == new_val => {}
-            _ => {
-                out.push(Patch::SetAttr {
-                    path: path.to_vec(),
-                    d: Option::map(old.djust_id.clone(), String::from),
-                    key: key.clone(),
-                    value: new_val.clone(),
-                });
+    // Both sides are sorted by name (`Attrs`), so one merge walk finds what
+    // was set and what was removed. The patches keep their order: every
+    // SetAttr in name order, then every RemoveAttr in name order.
+    use std::cmp::Ordering;
+    let d = || old.djust_id.as_deref().map(String::from);
+    let (old_pairs, new_pairs) = (old.attrs.as_slice(), new.attrs.as_slice());
+    let mut removed: Vec<&String> = Vec::new();
+    let (mut i, mut j) = (0, 0);
+    while i < old_pairs.len() || j < new_pairs.len() {
+        let order = match (old_pairs.get(i), new_pairs.get(j)) {
+            (Some((ok, _)), Some((nk, _))) => ok.cmp(nk),
+            (Some(_), None) => Ordering::Less,
+            _ => Ordering::Greater,
+        };
+        match order {
+            // Only in the old tree: removed, unless it is the id artifact
+            // or a dj-* event binding (client-side handlers never go).
+            Ordering::Less => {
+                let key = &old_pairs[i].0;
+                if !key.starts_with("dj-") {
+                    removed.push(key);
+                }
+                i += 1;
+            }
+            // New, or changed. `dj-id` is an id artifact, never diffed as
+            // a normal attribute.
+            Ordering::Greater | Ordering::Equal => {
+                let (key, new_val) = &new_pairs[j];
+                let unchanged = order == Ordering::Equal && old_pairs[i].1 == *new_val;
+                if key != "dj-id" && !unchanged {
+                    out.push(Patch::SetAttr {
+                        path: path.to_vec(),
+                        d: d(),
+                        key: key.clone(),
+                        value: new_val.clone(),
+                    });
+                }
+                if order == Ordering::Equal {
+                    i += 1;
+                }
+                j += 1;
             }
         }
     }
-
-    let mut old_keys: Vec<&String> = old.attrs.keys().collect();
-    old_keys.sort();
-    for key in old_keys {
-        if key == "dj-id" {
-            continue;
-        }
-        // dj-* event bindings must never be removed (client-side handlers).
-        if key.starts_with("dj-") {
-            continue;
-        }
-        if !new.attrs.contains_key(key) {
-            out.push(Patch::RemoveAttr {
-                path: path.to_vec(),
-                d: Option::map(old.djust_id.clone(), String::from),
-                key: key.clone(),
-            });
-        }
+    for key in removed {
+        out.push(Patch::RemoveAttr {
+            path: path.to_vec(),
+            d: d(),
+            key: key.clone(),
+        });
     }
 }
 

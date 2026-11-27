@@ -484,11 +484,13 @@ pub struct RustLiveViewBackend {
     render_env: Option<RenderEnv>,
 }
 
-#[derive(Clone, Debug)]
+/// One text node of the text-region index: where its run sits in the
+/// pre-hydration HTML, and its path in the tree.
 ///
 /// Only positions (#4319): the node's text and id are read from the tree at
 /// `path` when a fast path needs them, rather than kept here as a second copy
 /// of every text on the page.
+#[derive(Clone, Debug)]
 struct TextNodeEntry {
     /// Byte offset in the pre-hydration HTML where this text node begins.
     html_start: usize,
@@ -6724,7 +6726,6 @@ fn try_multi_text_region_fast_path(
     let mut shift: isize = 0;
     loop {
         let entry = &text_node_index[i];
-        let entry_path = entry.path();
         if old_bytes.get(entry.html_end) != Some(&b'<') {
             return None;
         }
@@ -6743,6 +6744,7 @@ fn try_multi_text_region_fast_path(
             if new_raw.bytes().any(|b| b == b'>') || text_change_needs_parse(old_raw, new_raw) {
                 return None;
             }
+            let entry_path = entry.path();
             let (old_text, _) = text_node_at(old_vdom, &entry_path)?;
             if text_node_value(old_vdom, &entry_path, old_raw).as_deref() != Some(old_text) {
                 return None;
@@ -8511,8 +8513,7 @@ mod dj_root_selection_3031 {
             out.push_str(&format!("{:?}", node.text.as_deref().unwrap_or("")));
             return;
         }
-        let mut attrs: Vec<_> = node.attrs.iter().filter(|(k, _)| *k != "dj-id").collect();
-        attrs.sort();
+        let attrs: Vec<_> = node.attrs.iter().filter(|(k, _)| *k != "dj-id").collect();
         out.push_str(&format!("<{} {attrs:?}>", node.tag));
         for child in &node.children {
             shape(child, out);

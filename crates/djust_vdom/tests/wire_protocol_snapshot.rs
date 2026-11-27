@@ -316,10 +316,7 @@ fn msgpack_round_trip_vnode_djust_id_none() {
 fn msgpack_round_trip_vnode_djust_id_some() {
     // The control case: a VNode with `djust_id: Some(...)` (6-element array).
     let v = elem_with_id("span", "1a");
-    assert_eq!(
-        v.djust_id,
-        Option::map(Some("1a".to_string()), String::into_boxed_str)
-    );
+    assert_eq!(v.djust_id, Some("1a".into()));
     let bytes = rmp_serde::to_vec(&v).expect("msgpack serialize");
     let restored: VNode = rmp_serde::from_slice(&bytes).expect("msgpack deserialize");
     assert_eq!(
@@ -362,10 +359,7 @@ fn msgpack_round_trip_nested_tree_mixed_djust_id() {
     // Sanity: the text-node children really did carry `djust_id: None`.
     assert_eq!(restored.children[0].djust_id, None);
     assert_eq!(restored.children[2].djust_id, None);
-    assert_eq!(
-        restored.children[1].djust_id,
-        Option::map(Some("2b".to_string()), String::into_boxed_str)
-    );
+    assert_eq!(restored.children[1].djust_id, Some("2b".into()));
 }
 
 // ============================================================================

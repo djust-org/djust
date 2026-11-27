@@ -2139,7 +2139,7 @@ impl<'de> Deserialize<'de> for Value {
                                 repr: repr.clone(),
                                 cmp_key: decode_cmp_key(key),
                                 attrs: match attrs {
-                                    Value::Object(map) => *map.clone(),
+                                    Value::Object(map) => (**map).clone(),
                                     _ => IndexMap::new(),
                                 },
                                 items: match items {
@@ -2201,7 +2201,7 @@ impl<'de> Deserialize<'de> for Value {
                                 repr: repr.clone(),
                                 cmp_key: decode_cmp_key(key),
                                 attrs: match attrs {
-                                    Value::Object(map) => *map.clone(),
+                                    Value::Object(map) => (**map).clone(),
                                     _ => IndexMap::new(),
                                 },
                                 items: match items {
@@ -2258,7 +2258,7 @@ impl<'de> Deserialize<'de> for Value {
                                 repr: repr.clone(),
                                 cmp_key: decode_cmp_key(key),
                                 attrs: match attrs {
-                                    Value::Object(map) => *map.clone(),
+                                    Value::Object(map) => (**map).clone(),
                                     _ => IndexMap::new(),
                                 },
                                 // See the four-line note in the shorter widths

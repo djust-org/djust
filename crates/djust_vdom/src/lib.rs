@@ -628,18 +628,9 @@ impl VNode {
         html.push('<');
         html.push_str(&self.tag);
 
-        // Sorting is needed only for multiple attributes. Most hydrated
-        // elements carry just their generated id.
-        if self.attrs.len() <= 1 {
-            for (key, value) in &self.attrs {
-                write_attribute(html, key, value);
-            }
-        } else {
-            let mut attrs: Vec<_> = self.attrs.iter().collect();
-            attrs.sort_unstable_by_key(|(key, _)| *key);
-            for (key, value) in attrs {
-                write_attribute(html, key, value);
-            }
+        // `Attrs` iterates in name order, the order the HTML is written in.
+        for (key, value) in &self.attrs {
+            write_attribute(html, key, value);
         }
 
         if is_void {
@@ -2254,10 +2245,7 @@ mod tests {
     fn test_text_node() {
         let node = VNode::text("Hello World");
         assert!(node.is_text());
-        assert_eq!(
-            node.text,
-            Option::map(Some("Hello World".to_string()), String::into_boxed_str)
-        );
+        assert_eq!(node.text, Some("Hello World".into()));
     }
 
     #[test]
@@ -2323,8 +2311,7 @@ mod tests {
 
     /// The tree without dj-ids: (tag, sorted attrs, text, children).
     fn shape(node: &VNode) -> String {
-        let mut attrs: Vec<_> = node.attrs.iter().filter(|(k, _)| *k != "dj-id").collect();
-        attrs.sort();
+        let attrs: Vec<_> = node.attrs.iter().filter(|(k, _)| *k != "dj-id").collect();
         let kids: Vec<String> = node.children.iter().map(shape).collect();
         format!("{}{:?}{:?}[{}]", node.tag, attrs, node.text, kids.join(","))
     }

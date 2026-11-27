@@ -562,10 +562,7 @@ mod tests {
         };
 
         apply_patch(&mut root, &patch);
-        assert_eq!(
-            root.text,
-            Option::map(Some("new".to_string()), String::into_boxed_str)
-        );
+        assert_eq!(root.text, Some("new".into()));
     }
 
     #[test]

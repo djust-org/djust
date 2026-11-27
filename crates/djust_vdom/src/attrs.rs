@@ -135,21 +135,45 @@ impl Attrs {
     pub fn shrink_to_fit(&mut self) {
         self.pairs.shrink_to_fit();
     }
+
+    /// The pairs, sorted by name with no name twice.
+    pub fn as_slice(&self) -> &[(String, String)] {
+        &self.pairs
+    }
+
+    /// Restore the invariant after an unsorted append: a stable sort by
+    /// name, then one pair per name holding the LAST value given for it.
+    fn normalize(&mut self) {
+        self.pairs.sort_by(|a, b| a.0.cmp(&b.0));
+        self.pairs.dedup_by(|later, kept| {
+            if later.0 == kept.0 {
+                std::mem::swap(&mut later.1, &mut kept.1);
+                true
+            } else {
+                false
+            }
+        });
+    }
 }
 
 impl Extend<(String, String)> for Attrs {
+    /// Appends, then sorts once: a name already present, or given twice,
+    /// keeps the last value, as repeated `insert`s would.
     fn extend<I: IntoIterator<Item = (String, String)>>(&mut self, iter: I) {
-        for (k, v) in iter {
-            self.insert(k, v);
+        let before = self.pairs.len();
+        self.pairs.extend(iter);
+        if self.pairs.len() != before {
+            self.normalize();
         }
     }
 }
 
 impl FromIterator<(String, String)> for Attrs {
     fn from_iter<I: IntoIterator<Item = (String, String)>>(iter: I) -> Self {
-        let iter = iter.into_iter();
-        let mut out = Attrs::with_capacity(iter.size_hint().0);
-        out.extend(iter);
+        let mut out = Attrs {
+            pairs: iter.into_iter().collect(),
+        };
+        out.normalize();
         out
     }
 }
@@ -212,12 +236,31 @@ impl Serialize for Attrs {
     }
 }
 
+/// Read from a map straight into the vector (no hash map per node); a name
+/// given twice keeps its last value, as the hash map it replaced did.
 impl<'de> Deserialize<'de> for Attrs {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let map = std::collections::HashMap::<String, String>::deserialize(deserializer)?;
-        let mut out: Attrs = map.into_iter().collect();
-        out.shrink_to_fit();
-        Ok(out)
+        struct PairsVisitor;
+        impl<'de> serde::de::Visitor<'de> for PairsVisitor {
+            type Value = Attrs;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a map of attribute names to values")
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<Attrs, A::Error> {
+                let mut pairs = Vec::with_capacity(map.size_hint().unwrap_or(0).min(64));
+                while let Some(pair) = map.next_entry::<String, String>()? {
+                    pairs.push(pair);
+                }
+                let mut out = Attrs { pairs };
+                out.normalize();
+                out.shrink_to_fit();
+                Ok(out)
+            }
+        }
+        deserializer.deserialize_map(PairsVisitor)
     }
 }
 
@@ -243,6 +286,27 @@ mod tests {
         assert_eq!(attrs.remove("dj-id"), Some("1".into()));
         assert!(!attrs.contains_key("dj-id"));
         assert_eq!(attrs.len(), 2);
+    }
+
+    #[test]
+    fn bulk_construction_keeps_the_last_value_of_a_repeated_name() {
+        let attrs: Attrs = [
+            ("b".to_string(), "1".to_string()),
+            ("a".into(), "x".into()),
+            ("b".into(), "2".into()),
+        ]
+        .into();
+        assert_eq!(
+            attrs.as_slice(),
+            [("a".into(), "x".into()), ("b".into(), "2".into())]
+        );
+        let mut more = attrs.clone();
+        more.extend([("a".to_string(), "y".to_string()), ("c".into(), "3".into())]);
+        let names: Vec<&String> = more.keys().collect();
+        assert_eq!(names, ["a", "b", "c"]);
+        assert_eq!(more.get("a").map(String::as_str), Some("y"));
+        let back: Attrs = serde_json::from_str(r#"{"b":"1","a":"x","b":"2"}"#).unwrap();
+        assert_eq!(back, attrs);
     }
 
     #[test]
