@@ -980,7 +980,7 @@ Retired in 2.0 (#4199). Nothing reports it; the class statement itself is refuse
 
 **Severity**: Warning
 
-**What causes it**: A view or one of its mixins defines `skip_render`, `rows_changed`, `request_full_render`, `cancel_full_render`, `reset_submitted_form`, `clear_push_events` or `get_theme_state`, or assigns `self.<name>`. These are djust's view methods; the attribute replaces the method of that name, and an `@event_handler` of that name can be called by the client. Message: "<view> defines skip_render, which replaces djust's skip_render() method on the view."
+**What causes it**: A view or one of its mixins defines `skip_render`, `rows_changed`, `request_full_render`, `cancel_full_render`, `reset_submitted_form`, `clear_push_events` or `get_theme_state`, or assigns `self.<name>`. These are djust's view methods; the attribute replaces the method of that name, and an `@event_handler` of that name can be called by the client. A value stored under any other LiveView method or read-only property (`self._pending = []`) is reported too (#4360): djust's own code calls it and breaks with no error at the assignment. Message: "<view> defines skip_render, which replaces djust's skip_render() method on the view." or "<view> mount() assigns self._pending, which replaces djust's method _pending() on the view."
 
 **Fix**: Rename the attribute or handler. Suppress with `DJUST_CONFIG = {"suppress_checks": ["V030"]}`.
 

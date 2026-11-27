@@ -13,10 +13,10 @@ class StreamingText(Component):
 
     Usage in a LiveView::
 
-        self.stream = StreamingText(stream_event="stream_chunk")
+        self.streaming_text = StreamingText(stream_event="stream_chunk")
 
         # With initial text
-        self.stream = StreamingText(
+        self.streaming_text = StreamingText(
             text="Hello...",
             stream_event="ai_response",
             markdown=True,

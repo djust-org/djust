@@ -1002,6 +1002,15 @@ label stays on `--foreground`, so no label's contrast depends on a status hue.
 </span>
 ```
 
+A badge whose status is not `default` writes `Status: <status>` for screen
+readers. `sr_label` names that text instead, and `sr_label=""` drops it, for a
+label that already says the state:
+
+```django
+{% badge label="High" status="error" sr_label="Priority" %}  {# read "Priority High" #}
+{% badge label="Completed" status="online" sr_label="" %}     {# read "Completed" #}
+```
+
 | Tag | Classes it renders |
 | --- | --- |
 | `{% badge %}` | `dj-badge`, `dj-badge--<status>` (`default`, `online`, `offline`, `warning`, `error`, `info`), `dj-badge__dot`, `dj-badge__dot--pulse`, `dj-badge__label` |
