@@ -2849,15 +2849,18 @@ pub fn render_nodes_collecting<L: TemplateLoader>(
     context: &Context,
     loader: Option<&L>,
 ) -> Result<(String, Vec<String>)> {
-    let rendered = render_nodes_collecting_with_children(nodes, context, loader)?;
+    let rendered = render_nodes_collecting_with_children(nodes, &[], context, loader)?;
     Ok((rendered.html, rendered.fragments))
 }
 
 /// [`render_nodes_collecting`], also filling the per-child fragment cache of
 /// every top-level `{% if %}` / `{% with %}` / `{% block %}` (#4315), so the
 /// first partial render after it can already reuse a wrapper's children.
+/// `child_deps` is `parser::extract_wrapper_child_deps` of `nodes`; it decides
+/// which children are worth keeping (empty: keep every child).
 pub fn render_nodes_collecting_with_children<L: TemplateLoader>(
     nodes: &[Node],
+    child_deps: &[Option<crate::parser::WrapperChildDeps>],
     context: &Context,
     loader: Option<&L>,
 ) -> Result<PartialRender> {
@@ -2868,9 +2871,10 @@ pub fn render_nodes_collecting_with_children<L: TemplateLoader>(
         children: Vec::with_capacity(nodes.len()),
         changed: Vec::new(),
     };
-    for node in nodes {
+    for (i, node) in nodes.iter().enumerate() {
         let mut children = None;
-        let fragment = match collecting_plan(node) {
+        let deps = child_deps.get(i).and_then(Option::as_ref);
+        let fragment = match collecting_plan(node, deps) {
             Some(plan) => {
                 render_wrapper_children::<L>(node, &mut context, loader, &plan, &mut children)?
             }
@@ -2882,7 +2886,18 @@ pub fn render_nodes_collecting_with_children<L: TemplateLoader>(
             .push(children.map(|c| c.fingerprinted(&fragment)));
         rendered.fragments.push(fragment);
     }
+    rendered.children = drop_empty(rendered.children);
     Ok(rendered)
+}
+
+/// A page with no cached wrapper keeps no per-node slots for one (the
+/// retained-memory report counts them, #3998).
+fn drop_empty(children: ChildFragmentCache) -> ChildFragmentCache {
+    if children.iter().all(Option::is_none) {
+        Vec::new()
+    } else {
+        children
+    }
 }
 
 /// The cached fragments of one top-level wrapper's children (#4315).
@@ -2957,9 +2972,10 @@ pub struct PartialRender {
 
 /// How one top-level wrapper renders its children (#4315).
 struct ChildPlan<'a> {
-    /// `None`: render every child (no dependency information, or a collecting
-    /// render). Otherwise the wrapper's per-child dependencies.
+    /// The wrapper's per-child dependencies; `None` renders and keeps every
+    /// child (no dependency information).
     deps: Option<&'a crate::parser::WrapperChildDeps>,
+    /// `None` in a collecting render: every child renders.
     changed_keys: Option<&'a HashSet<String>>,
     /// The entry from the previous render, already checked against the
     /// cached top-level fragment.
@@ -2969,9 +2985,14 @@ struct ChildPlan<'a> {
     latch: bool,
 }
 
-fn collecting_plan(node: &Node) -> Option<ChildPlan<'static>> {
+/// A collecting render renders every child (`changed_keys: None` makes every
+/// child stale) but still uses the deps to keep only reusable children.
+fn collecting_plan<'a>(
+    node: &Node,
+    deps: Option<&'a crate::parser::WrapperChildDeps>,
+) -> Option<ChildPlan<'a>> {
     is_child_cached_wrapper(node).then_some(ChildPlan {
-        deps: None,
+        deps,
         changed_keys: None,
         cached: None,
         latch: true,
@@ -3305,6 +3326,7 @@ pub fn render_nodes_partial_with_children<L: TemplateLoader>(
         rendered.fragments.push(html);
         rendered.children.push(child_entry);
     }
+    rendered.children = drop_empty(rendered.children);
     Ok(rendered)
 }
 

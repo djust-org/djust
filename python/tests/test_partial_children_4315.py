@@ -30,7 +30,10 @@ from django.urls import path
 
 from djust import _rust
 
-urlpatterns = [path("x4315/", lambda request: HttpResponse("x"), name="x4315")]
+urlpatterns = [
+    path("x4315/", lambda request: HttpResponse("x"), name="x4315"),
+    path("xs4315/<str:s>/", lambda request, s: HttpResponse(s), name="xs4315"),
+]
 
 LOOP = "<ul>{% for e in entries %}<li>{{ e }}</li>{% endfor %}</ul>"
 
@@ -281,6 +284,13 @@ IDENTITY = WRAPPED + [
     "{% if show %}{% firstof count as f %}<i>{{ f }}</i>" + LOOP + "{% endif %}",
     "{% if show %}<i>{% echo4315 count %}</i>{% if count %}" + LOOP + "{% endif %}{% endif %}",
     "<p>{{ count }}</p>{% echo4315 label %}{% static 'a.css' %}" + LOOP,
+    # Operands whose filter literal holds `=` or that start with a literal
+    # (#4315 review): their roots must still be dependencies.
+    "<i>{% url 'xs4315' label|default:'a=b' %}</i><b>{{ count }}</b>",
+    "{% if show %}<i>{% url 'xs4315' label|default:'a=b' %}</i><b>{{ count }}</b>{% endif %}",
+    "<i>{% url 'xs4315' s=\"p\"|add:label %}</i><b>{{ count }}</b>",
+    "<i>{% static label|add:'?v=2' %}</i><b>{{ count }}</b>",
+    "{% if show %}<i>{% static label|add:'?v=2' %}</i>" + LOOP + "{% endif %}",
 ]
 
 STEPS = [

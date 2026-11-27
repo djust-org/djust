@@ -344,6 +344,7 @@ impl Template {
         let _includes = inheritance::IncludeRenderGuard::new();
         renderer::render_nodes_collecting_with_children(
             self.effective_nodes(),
+            self.effective_child_deps(),
             context,
             Some(loader),
         )
@@ -365,6 +366,7 @@ impl Template {
             // Extends not yet resolved — fall back to full render
             let mut rendered = renderer::render_nodes_collecting_with_children(
                 &self.nodes,
+                &[],
                 context,
                 Some(loader),
             )?;

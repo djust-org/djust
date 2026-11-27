@@ -17,6 +17,14 @@ class UrlTagHandler(DjangoBuiltinTagHandler):
     BINDS_ONLY_AS_VAR = True
     # Django's URLNode reads its operands and `context.request` (for the
     # current application namespace), nothing else of the context (#4315).
+    # `reverse()` also reads thread-locals that are not context keys: the
+    # active language (`get_language()` under `i18n_patterns`), the URLconf
+    # (`get_urlconf()`, set from `request.urlconf`) and the script prefix
+    # (`get_script_prefix()`). They are taken as fixed for a connection, so a
+    # language switch without a reload keeps the URLs already rendered.
+    # `request` is never in a turn's changed keys (it rides the render
+    # sidecar, not the state), so ALSO_READS is belt-and-braces: it keeps the
+    # declaration true should a view ever put `request` in state.
     READS_ONLY_ARGS = True
     ALSO_READS = frozenset({"request"})
 

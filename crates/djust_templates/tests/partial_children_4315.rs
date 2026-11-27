@@ -197,3 +197,34 @@ fn partial_render_equals_a_full_render() {
         }
     }
 }
+
+/// #4315 review: a `READS_ONLY_ARGS` tag's operands are parsed strictly, and
+/// anything that does not parse cleanly keeps the `"*"` dependency.
+#[test]
+fn reads_only_operand_roots_names_every_operand_or_refuses() {
+    use djust_templates::parser::reads_only_operand_roots;
+    let roots = |args: &[&str]| {
+        reads_only_operand_roots(&args.iter().map(|a| a.to_string()).collect::<Vec<_>>())
+    };
+    // An `=` inside a filter literal is not a keyword split.
+    assert_eq!(roots(&["'xs'", "v|default:'a=b'"]), Some(vec!["v".into()]));
+    // A value that starts with a literal still reads its filter arguments.
+    assert_eq!(roots(&["'xs'", "s=\"p\"|add:v"]), Some(vec!["v".into()]));
+    assert_eq!(roots(&["asset|add:'?v=2'"]), Some(vec!["asset".into()]));
+    assert_eq!(
+        roots(&["e.id", "k=obj.items.0|default:w", "3", "-1.5"]),
+        Some(vec!["e".into(), "obj".into(), "w".into()])
+    );
+    for unclean in [
+        &["\"open"][..],
+        &["v|default:'open"],
+        &["_(\"x\")"],
+        &["v|"],
+        &["v||upper"],
+        &[""],
+        &["a b"],
+        &["=v"],
+    ] {
+        assert_eq!(roots(unclean), None, "{unclean:?}");
+    }
+}

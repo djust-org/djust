@@ -507,7 +507,10 @@ re-parsed by Django (#2558) — `CustomTag`, `BlockCustomTag`, `RawBlockCustomTa
 `Language`, `Timezone`, `Localize`, `LocalTime`. An inline `CustomTag` whose
 handler declares `READS_ONLY_ARGS` (#4315) is the exception: a use that binds
 nothing depends on its operands' root names plus the handler's `ALSO_READS`
-(`{% url %}`: `request`; `{% static %}`: nothing). `{% now %}` does not declare
+(`{% url %}`: `request`; `{% static %}`: nothing), read by a strict parse
+of each argument (`parser::reads_only_operand_roots`); an argument that does
+not parse cleanly keeps the `"*"`. Thread state that is not a context key (the
+active language, the URLconf) is taken as fixed per connection. `{% now %}` does not declare
 it (the clock is not an operand), and neither do `takes_context` tags, raw
 `@register.tag` nodes or `{% querystring %}`. Only this walk honours the
 declaration; the loop render cache and the JIT's path extraction keep the `"*"`.

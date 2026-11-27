@@ -182,6 +182,13 @@ class TagHandler:
     #: (``{% if %}``, a loop) around it. Leave it ``False`` for a handler that
     #: reads anything else — another context key, the request, the clock, the
     #: database — or the page shows stale output until its arguments change.
+    #: Process and thread state that is not a context key (the active language,
+    #: the URLconf, settings) is assumed fixed for a connection: a change to it
+    #: without a page reload keeps the cached output. The declaration is a
+    #: class attribute, so a subclass inherits it; a subclass that reads more
+    #: must set it back to ``False``. An argument the engine cannot parse
+    #: cleanly (``_("…")``, an unbalanced quote) makes that use "may read
+    #: anything" again.
     READS_ONLY_ARGS: ClassVar[bool] = False
 
     #: With :attr:`READS_ONLY_ARGS`, the context names the handler reads

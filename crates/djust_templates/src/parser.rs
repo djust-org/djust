@@ -3792,8 +3792,13 @@ impl Drop for PartialDepsWalk {
 /// enclosing `Node::Located`). A use that may bind keeps `"*"`, because the
 /// partial renderer's latch (`node_may_bind_names`) only fires for a `"*"`
 /// node: a binding must keep re-rendering what follows.
+///
+/// The names returned are the operands' roots, read by a STRICT parse of each
+/// argument ([`reads_only_operand_roots`]), plus the handler's `ALSO_READS`.
+/// An argument that does not parse cleanly answers `None`: a dependency the
+/// walk cannot name must never be dropped.
 fn inline_tag_reads_only(node: &Node) -> Option<Vec<String>> {
-    let Node::CustomTag { name, .. } = node else {
+    let Node::CustomTag { name, args } = node else {
         return None;
     };
     if !PARTIAL_DEPS_WALK.with(std::cell::Cell::get) {
@@ -3803,7 +3808,84 @@ fn inline_tag_reads_only(node: &Node) -> Option<Vec<String>> {
     if crate::renderer::node_may_bind_names(node) {
         return None;
     }
-    Some(extra)
+    let mut names = reads_only_operand_roots(args)?;
+    names.extend(extra);
+    Some(names)
+}
+
+/// The context roots a tag's arguments read, or `None` when any argument does
+/// not parse cleanly (#4315).
+///
+/// Each argument is `name=value` only when it starts with an identifier and
+/// `=` (`s="p"|add:v` is a keyword; `v|default:'a=b'` is not). The value is a
+/// filter expression: a head (quoted literal, number or dotted path) and
+/// filters `|name` or `|name:arg` whose argument is the same kind of operand.
+/// A head that is a literal still contributes the roots of its filter
+/// arguments. Anything else (`_("…")`, an unbalanced quote, an empty
+/// segment) is refused rather than guessed at, so the caller keeps `"*"`.
+pub fn reads_only_operand_roots(args: &[String]) -> Option<Vec<String>> {
+    fn is_identifier(text: &str) -> bool {
+        let mut chars = text.chars();
+        chars
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+    }
+    /// `Some(Some(root))` for a path, `Some(None)` for a literal.
+    fn operand_root(text: &str) -> Option<Option<String>> {
+        let text = text.trim();
+        let bytes = text.as_bytes();
+        if let Some(&quote @ (b'"' | b'\'')) = bytes.first() {
+            let closed = bytes.len() >= 2
+                && bytes[bytes.len() - 1] == quote
+                && !bytes[1..bytes.len() - 1].contains(&quote);
+            return closed.then_some(None);
+        }
+        let digits = text.strip_prefix(['-', '+']).unwrap_or(text);
+        if !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit() || c == '.') {
+            return Some(None);
+        }
+        let mut parts = text.split('.');
+        let root = parts.next()?;
+        if !is_identifier(root)
+            || !parts.all(|part| {
+                is_identifier(part) || part.chars().all(|c| c.is_ascii_digit()) && !part.is_empty()
+            })
+        {
+            return None;
+        }
+        Some(Some(root.to_string()))
+    }
+    let mut roots = Vec::new();
+    for arg in args {
+        let arg = arg.trim();
+        let value = match arg.split_once('=') {
+            Some((name, value)) if is_identifier(name) => value,
+            _ => arg,
+        };
+        let mut segments = crate::filter_lexer::split_pipes(value).into_iter();
+        let head = segments.next()?;
+        // `split_pipes` stops at an unbalanced quote; the pieces must add up.
+        roots.extend(operand_root(head)?);
+        let mut consumed = head.len();
+        for spec in segments {
+            consumed += 1 + spec.len();
+            let (filter, filter_arg) = match spec.split_once(':') {
+                Some((filter, filter_arg)) => (filter, Some(filter_arg)),
+                None => (spec, None),
+            };
+            if !is_identifier(filter.trim()) {
+                return None;
+            }
+            if let Some(filter_arg) = filter_arg {
+                roots.extend(operand_root(filter_arg)?);
+            }
+        }
+        if consumed != value.len() {
+            return None;
+        }
+    }
+    Some(roots)
 }
 
 /// Recursively extract variable paths from AST nodes
@@ -4135,8 +4217,8 @@ fn extract_from_nodes(
                 // declared `READS_ONLY_ARGS` reads its operands (extracted
                 // above) plus the names it listed, and nothing else (#4315).
                 match inline_tag_reads_only(node) {
-                    Some(extra) => {
-                        for name in extra {
+                    Some(names) => {
+                        for name in names {
                             variables.entry(name).or_default();
                         }
                     }
