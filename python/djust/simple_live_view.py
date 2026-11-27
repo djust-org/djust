@@ -184,7 +184,7 @@ class SimpleLiveView(View):
 # ``LiveView`` stays in ``__all__`` so ``from djust.simple_live_view import *``
 # keeps binding the old name; it resolves through the module ``__getattr__``
 # below, so a star import that takes it warns at the importing statement. The
-# TYPE_CHECKING binding tells linters the name exists (no ``noqa: F822``).
+# TYPE_CHECKING binding tells linters the name exists (no F822 suppression comment).
 __all__ = ["LiveView", "SimpleLiveView"]
 
 if TYPE_CHECKING:
