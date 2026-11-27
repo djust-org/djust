@@ -36,17 +36,24 @@ PAGE_GLOBS = (
 PAGES = sorted({p for g in PAGE_GLOBS for p in PKG.glob(g)})
 
 _ESCAPES = re.compile(r"\|\s*(force_escape|djust_url_attr|djust_handler_arg)\b")
-_START_TAG = re.compile(r"<[a-zA-Z][^<>]*?>", re.S)
+_START_TAG = re.compile(r"<[a-zA-Z][^<>]*>", re.S)
 
 
-def _unescaped_attribute_slots(source: str) -> list[str]:
-    """Every ``{{ }}`` inside a start tag that does not end in one of the attribute escapers."""
+def _unescaped_attribute_slots(source: str, escapes: re.Pattern[str] = _ESCAPES) -> list[str]:
+    """Every ``{{ }}`` inside a start tag that does not end in one of the attribute escapers.
+
+    Comments are blanked and a ``<`` / ``>`` inside a ``{% %}`` tag (``{% if page <= 1 %}``) is
+    masked first, so such a tag does not end the start tag early and hide the slots after it.
+    """
     source = re.sub(r"\{#.*?#\}", "", source, flags=re.S)
     source = re.sub(r"\{%\s*comment\s*%\}.*?\{%\s*endcomment\s*%\}", "", source, flags=re.S)
+    source = re.sub(
+        r"\{%.*?%\}", lambda m: re.sub(r"[<>]", "_", m.group(0)), source, flags=re.S
+    )
     found = []
     for tag in _START_TAG.finditer(source):
         for expr in re.findall(r"\{\{(.*?)\}\}", tag.group(0), re.S):
-            if not _ESCAPES.search(expr):
+            if not escapes.search(expr):
                 found.append(expr.strip())
     return found
 
@@ -61,6 +68,11 @@ def test_the_inventory_covers_every_area() -> None:
 @pytest.mark.parametrize("page", PAGES, ids=lambda p: p.relative_to(PKG).as_posix())
 def test_every_attribute_slot_escapes(page: Path) -> None:
     assert _unescaped_attribute_slots(page.read_text()) == []
+
+
+def test_the_scanner_reads_past_a_comparison_in_a_block_tag() -> None:
+    src = '<button dj-click="{{ a }}" {% if page <= 1 %}disabled{% endif %} title="{{ b }}">'
+    assert _unescaped_attribute_slots(src) == ["a", "b"]
 
 
 def test_the_scanner_sees_a_raw_attribute() -> None:
