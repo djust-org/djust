@@ -183,6 +183,7 @@ NON_EVENT_ATTRIBUTES = frozenset(
         "dj-throttle",
         "dj-track-static",
         "dj-transition",
+        "dj-transition-group",
         "dj-trigger-action",
         "dj-update",
         "dj-upload",
