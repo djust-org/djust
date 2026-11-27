@@ -1,4 +1,4 @@
-{% load theme_tags %}<!DOCTYPE html>
+{% load theme_tags djust_attrs %}<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -88,7 +88,7 @@
   <nav class="gallery-topbar">
     <a href="/" class="gallery-topbar-brand">djust-theming</a>
     <span class="gallery-topbar-sep">|</span>
-    {% if components_gallery_url %}<a href="{{ components_gallery_url }}">Components</a>{% endif %}
+    {% if components_gallery_url %}<a href="{{ components_gallery_url|djust_url_attr }}">Components</a>{% endif %}
     <span class="gallery-topbar-sep">|</span>
     <a href="{% url 'djust_theming:gallery' %}">Gallery</a>
     <a href="{% url 'djust_theming:components' %}">Catalogue</a>
@@ -102,7 +102,7 @@
         <label for="left-select">Left:</label>
         <select id="left-select" name="left" onchange="this.form.submit()">
           {% for preset in presets %}
-          <option value="{{ preset.name }}" {% if preset.name == left_preset %}selected{% endif %}>{{ preset.display_name }}</option>
+          <option value="{{ preset.name|force_escape }}" {% if preset.name == left_preset %}selected{% endif %}>{{ preset.display_name }}</option>
           {% endfor %}
         </select>
       </div>
@@ -110,7 +110,7 @@
         <label for="right-select">Right:</label>
         <select id="right-select" name="right" onchange="this.form.submit()">
           {% for preset in presets %}
-          <option value="{{ preset.name }}" {% if preset.name == right_preset %}selected{% endif %}>{{ preset.display_name }}</option>
+          <option value="{{ preset.name|force_escape }}" {% if preset.name == right_preset %}selected{% endif %}>{{ preset.display_name }}</option>
           {% endfor %}
         </select>
       </div>
@@ -120,11 +120,11 @@
   <div class="diff-panels">
     <div class="diff-panel">
       <span class="diff-panel-label">{{ left_preset }}</span>
-      <iframe src="{% url 'djust_theming:gallery' %}?preset={{ left_preset }}" title="Left preset: {{ left_preset }}"></iframe>
+      <iframe src="{% url 'djust_theming:gallery' %}?preset={{ left_preset|force_escape }}" title="Left preset: {{ left_preset|force_escape }}"></iframe>
     </div>
     <div class="diff-panel">
       <span class="diff-panel-label">{{ right_preset }}</span>
-      <iframe src="{% url 'djust_theming:gallery' %}?preset={{ right_preset }}" title="Right preset: {{ right_preset }}"></iframe>
+      <iframe src="{% url 'djust_theming:gallery' %}?preset={{ right_preset|force_escape }}" title="Right preset: {{ right_preset|force_escape }}"></iframe>
     </div>
   </div>
 </body>
