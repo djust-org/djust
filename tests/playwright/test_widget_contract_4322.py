@@ -3,9 +3,9 @@
 
 Drives a real LiveView in headless Chromium with two established libraries:
 the shipped Chart.js adapter (``DJUST_CONFIG["extensions"] = ["chart"]`` with
-Chart.js 4 from ``node_modules``) and the Quill 2 rich-text editor, a test-only
-fixture hook (``RichText`` below) loaded from ``node_modules`` and never part
-of djust. Each check prints ``ok`` / ``FAIL``; see "The widget contract" in
+Chart.js 4 from ``node_modules``) and an in-repo contenteditable editor, a
+test-only fixture hook (``RichText`` below, no third-party editor library) that
+is never part of djust. Each check prints ``ok`` / ``FAIL``; see "The widget contract" in
 docs/website/guides/hooks.md for the rules.
 
 WebSocket run (``/w/``):
@@ -42,7 +42,7 @@ Self-contained: builds the project in a temp dir and serves it with uvicorn::
 
     DJUST_SERVER_PYTHON=.venv/bin/python python tests/playwright/test_widget_contract_4322.py
 
-Needs ``npm ci`` (chart.js and quill are devDependencies). ``CHROMIUM_EXECUTABLE``
+Needs ``npm ci`` (chart.js is a devDependency). ``CHROMIUM_EXECUTABLE``
 optionally names the browser. Exits 0 on success, non-zero with the failures.
 """
 
@@ -65,8 +65,6 @@ from _transports import INIT, TransportWatch  # noqa: E402
 REPO = Path(__file__).resolve().parents[2]
 VENDOR = {
     "chart.umd.js": REPO / "node_modules/chart.js/dist/chart.umd.js",
-    "quill.js": REPO / "node_modules/quill/dist/quill.js",
-    "quill.snow.css": REPO / "node_modules/quill/dist/quill.snow.css",
 }
 
 PROJECT = {
@@ -142,9 +140,7 @@ PROJECT = {
         HEAD = (
             '{% load live_tags %}<!DOCTYPE html><html><head><title>w</title>'
             '{% djust_client_config %}'
-            '<link rel="stylesheet" href="/static/vendor/quill.snow.css">'
             '<script nonce="{{ nonce }}" src="/static/vendor/chart.umd.js"></script>'
-            '<script nonce="{{ nonce }}" src="/static/vendor/quill.js"></script>'
             '<script nonce="{{ nonce }}" src="/static/hooks.js"></script>'
             '</head><body>'
         )
@@ -285,8 +281,8 @@ PROJECT = {
                 self.n += 1
     ''',
     # The test's own hooks, loaded as a nonce'd file so the strict-CSP page uses
-    # them too. RichText is the rich-text widget: Quill owns the dj-update=ignore
-    # host, props arrive as dj-hook-value-doc, edits leave by pushEvent, and the
+    # them too. RichText is the editor widget: its own contenteditable subtree
+    # lives in the dj-update=ignore host, props arrive as dj-hook-value-doc, edits leave by pushEvent, and the
     # unsent text is the widget's own draft (localStorage), kept across patches,
     # reconnects and navigation.
     "assets/hooks.js": r"""
@@ -318,26 +314,46 @@ PROJECT = {
               this.el.__inst = Math.random();
               this.draftKey = 'draft:' + location.pathname + id;
               const host = this.el.querySelector('[dj-update="ignore"]');
-              this.quill = new Quill(host, { theme: 'snow', modules: { toolbar: false } });
+              // The widget owns a contenteditable inside the dj-update=ignore host:
+              // a patch never reaches it, so the caret, focus and an IME
+              // composition in it survive.
+              const ed = document.createElement('div');
+              ed.className = 'ed-editor';
+              ed.contentEditable = 'true';
+              ed.style.whiteSpace = 'pre-wrap';
+              ed.style.minHeight = '1.5em';
+              ed.style.border = '1px solid #888';
+              this.editor = ed;
               let draft = null;
               try { draft = localStorage.getItem(this.draftKey); } catch (e) { draft = null; }
               this.dirty = draft !== null;
-              this.quill.setText(draft !== null ? draft : this.values.doc, 'api');
-              this.quill.on('text-change', (_d, _o, source) => {
-                if (source !== 'user') return;
+              ed.textContent = draft !== null ? draft : this.values.doc;
+              host.appendChild(ed);
+              // 'input' fires for the user's typing and composition only, never
+              // for the programmatic textContent writes of mounted()/updated().
+              ed.addEventListener('input', () => {
                 this.dirty = true;
                 try { localStorage.setItem(this.draftKey, this.text()); } catch (e) { /* no storage */ }
               });
-              const ed = host.querySelector('.ql-editor');
               ['compositionstart', 'compositionend'].forEach((t) =>
                 ed.addEventListener(t, () => window.__comp.push(id + ':' + t)));
               log(id + '.mounted');
             },
-            text() { return this.quill.getText().replace(/\n$/, ''); },
+            text() { return this.editor.textContent; },
+            // The caret as a character offset into the text, or null when the
+            // selection is not inside the editor.
+            caret() {
+              const sel = getSelection();
+              if (!sel.rangeCount || !this.editor.contains(sel.anchorNode)) return null;
+              const r = document.createRange();
+              r.selectNodeContents(this.editor);
+              r.setEnd(sel.anchorNode, sel.anchorOffset);
+              return r.toString().length;
+            },
             updated() {
               log(this.el.id + '.updated');
               // Server props only replace content the user has not edited.
-              if (!this.dirty && this.values.doc !== this.text()) this.quill.setText(this.values.doc, 'api');
+              if (!this.dirty && this.values.doc !== this.text()) this.editor.textContent = this.values.doc;
             },
             async save() {
               const outcome = await this.pushEvent('save_doc', { key: this.el.id, text: this.text() }, { outcome: true });
@@ -349,7 +365,7 @@ PROJECT = {
             },
             disconnected() { log(this.el.id + '.disconnected'); },
             reconnected() { log(this.el.id + '.reconnected'); },
-            destroyed() { log(this.el.id + '.destroyed'); this.quill = null; },
+            destroyed() { log(this.el.id + '.destroyed'); this.editor = null; },
           },
         });
     """,
@@ -391,7 +407,7 @@ def start_server(root: Path, port: int) -> subprocess.Popen:
     for name, src in VENDOR.items():
         if not src.exists():
             raise SystemExit(
-                "%s is missing: run npm ci (chart.js and quill are devDependencies)" % src
+                "%s is missing: run npm ci (chart.js is a devDependency)" % src
             )
         shutil.copy(src, vendor / name)
     env = {
@@ -504,7 +520,7 @@ class Run:
         return self.js(f"() => window.djust.getHook('#{id_}').text()")
 
     def type_into(self, id_, text):
-        self.page.click(f"#{id_}-host .ql-editor")
+        self.page.click(f"#{id_}-host .ed-editor")
         self.page.keyboard.press("End")
         self.page.keyboard.press("Control+End")
         self.page.keyboard.type(text)
@@ -546,9 +562,9 @@ def common_widget_checks(run):
         run.editor_text("ed-a") == "alpha"
         and run.editor_text("ed-b") == "beta"
         and run.js(
-            "() => window.djust.getHook('#ed-a').quill !== window.djust.getHook('#ed-b').quill"
+            "() => window.djust.getHook('#ed-a').editor !== window.djust.getHook('#ed-b').editor"
         ),
-        "several instances: two Quill editors, each with its own server props",
+        "several instances: two editors, each with its own server props",
     )
 
     # A patch: the chart whose data changed updates IN PLACE; the other is not
@@ -621,14 +637,14 @@ def websocket_run(browser, base, failures):
     run.check(both == ["error", "ok"], f"an error outcome settles only its own event ({both})")
 
     # IME composition and caret across a patch to the widget's own element.
-    run.page.click("#ed-a-host .ql-editor")
+    run.page.click("#ed-a-host .ed-editor")
     run.page.keyboard.press("Control+End")
     run.page.keyboard.type(" ab")
     cdp = run.context.new_cdp_session(run.page)
     cdp.send("Input.imeSetComposition", {"text": "にほ", "selectionStart": 2, "selectionEnd": 2})
     run.page.wait_for_timeout(100)
     before = run.js(
-        "() => ({sel: window.djust.getHook('#ed-a').quill.getSelection(),"
+        "() => ({sel: window.djust.getHook('#ed-a').caret(),"
         " range: (() => { const r = getSelection().getRangeAt(0); return [r.startContainer.textContent, r.startOffset]; })()})"
     )
     run.clear()
@@ -637,7 +653,7 @@ def websocket_run(browser, base, failures):
     run.wait(f"() => document.getElementById('count').textContent === '{n + 1}'")
     run.page.wait_for_timeout(300)
     after = run.js(
-        "() => ({sel: window.djust.getHook('#ed-a').quill.getSelection(),"
+        "() => ({sel: window.djust.getHook('#ed-a').caret(),"
         " active: document.activeElement && document.activeElement.closest('#ed-a-host') !== null,"
         " range: (() => { const r = getSelection().getRangeAt(0); return [r.startContainer.textContent, r.startOffset]; })(),"
         " comp: window.__comp.slice(), mark: document.getElementById('ed-a').dataset.mark})"
