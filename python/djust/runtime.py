@@ -5079,12 +5079,16 @@ class ViewRuntime(RuntimeTurnPort):
             ref=event_ref,
         )
         turn._locked = True  # the flush runs inside the event's event_context
-        await run_turn(
-            turn,
-            lambda _turn: self._dispatch_single_event_body(
-                target_view, event_name, params, event_ref
-            ),
-        )
+        # #4322: the replay runs inside the CURRENT event's turn, whose ref its
+        # error frames must not carry; its own ref was settled when it was
+        # queued (the noop acknowledgement), so its errors carry none.
+        with event_error_ref(None):
+            await run_turn(
+                turn,
+                lambda _turn: self._dispatch_single_event_body(
+                    target_view, event_name, params, event_ref
+                ),
+            )
 
     @_runtime_diagnostic_scope
     async def _dispatch_single_event_body(

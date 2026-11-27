@@ -185,3 +185,19 @@ async def test_turn_rate_limit_refusal_carries_the_ref():
     await _Port().turn_refused(turn, Refusal(kind="rate_limited"))
     limited = [f for f in transport.sent if f.get("type") == "rate_limit_exceeded"]
     assert limited and limited[0]["ref"] == 33
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+async def test_deferred_replay_refusal_does_not_carry_the_current_ref():
+    """A queued activity event replayed during a later event's flush, and refused
+    by security, must not settle the CURRENT event (#4322 review)."""
+    runtime, transport = await _runtime()
+    view = runtime.view_instance
+    with event_error_ref(55):  # the current event's turn
+        await runtime._dispatch_single_event(view, "nope", {}, 3)
+        # A released embedded child's replay takes the same wrapper.
+        await runtime._dispatch_single_event(object(), "nope", {}, 4)
+        assert build_error_frame("after")["ref"] == 55  # restored afterwards
+    assert _errors(transport)  # the replay was refused
+    assert all(f.get("ref") != 55 for f in transport.sent)

@@ -1295,10 +1295,7 @@ class LiveViewWebSocket {
                 if (data.ref != null) {
                     // The dropped event's own request (#4309): settle it, end
                     // its loading state, and apply what it held back.
-                    if (_pendingEventOwners.get(data.ref) === this) {
-                        cancelEventRequests(this, data.ref, eventErrorOutcome({error: data.message, code: 'rate_limited'}));
-                        if (!hasPendingEventRequests(this)) await flushServerUpdates(this);
-                    }
+                    await settleRateLimitedEvent(this, data);
                 } else if (this.lastEventName) {
                     // Stop loading state if applicable
                     globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);

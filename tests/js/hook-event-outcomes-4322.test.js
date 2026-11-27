@@ -169,6 +169,18 @@ describe('pushEvent outcomes over the WebSocket (#4322)', () => {
         const failed = hook.pushEvent('save', {});
         await ws.handleMessage({ type: 'error', error: 'Boom', ref: lastRef() });
         expect(await failed).toBeNull();
+        // A refused turn acknowledges with a frame; plain pushEvent still
+        // resolves null, as over HTTP (review of #4322).
+        const refused = hook.pushEvent('save', {});
+        await ws.handleMessage({ type: 'render', source: 'refusal', view: VIEW, ref: lastRef() });
+        expect(await refused).toBeNull();
+    });
+
+    it('never rejects when the socket refuses the send', async () => {
+        const { ws, hook } = await wsPage();
+        ws.ws.send = () => { throw new Error('InvalidStateError'); };
+        expect(await hook.pushEvent('save', {}, { outcome: true })).toEqual({ status: 'disconnected', reply: null, error: null });
+        expect(await hook.pushEvent('save', {})).toBeNull();
     });
 });
 
@@ -222,6 +234,69 @@ describe('pushEvent outcomes over SSE (#4322)', () => {
         const { hook, setAnswer } = await ssePage();
         setAnswer(() => Promise.reject(new TypeError('Failed to fetch')));
         expect((await hook.pushEvent('save', {}, { outcome: true })).status).toBe('disconnected');
+    });
+
+    it('rate_limited: a turn-policy rate_limit_exceeded frame names its ref', async () => {
+        const { hook, serve, lastRef } = await ssePage();
+        const other = hook.pushEvent('other', {}, { outcome: true });
+        await tick(5);
+        const otherRef = lastRef();
+        const p = hook.pushEvent('save', {}, { outcome: true });
+        await tick(5);
+        const ref = lastRef();
+        await serve({ type: 'rate_limit_exceeded', message: 'slow down', ref });
+        // The refusal acknowledgement that follows changes nothing.
+        await serve({ type: 'render', source: 'refusal', view: VIEW, ref });
+        const outcome = await p;
+        expect(outcome.status).toBe('rate_limited');
+        expect(outcome.error.code).toBe('rate_limited');
+        expect(await settled(other)).toBe('pending');
+        await serve({ type: 'render', source: 'event', view: VIEW, ref: otherRef });
+        expect((await other).status).toBe('ok');
+    });
+
+    it('disconnected: the stream dropped and EventSource is reconnecting', async () => {
+        const { hook, es } = await ssePage();
+        const p = hook.pushEvent('save', {}, { outcome: true });
+        await tick(5);
+        es.readyState = 0; // CONNECTING: EventSource retries by itself
+        es.onerror({});
+        expect((await p).status).toBe('disconnected');
+    });
+
+    it('disconnected: the stream reopened on a new server session', async () => {
+        const { hook, es } = await ssePage();
+        const p = hook.pushEvent('save', {}, { outcome: true });
+        await tick(5);
+        es.onopen(); // a reconnect, no onerror seen first
+        expect((await p).status).toBe('disconnected');
+    });
+
+    it('disconnected: an onerror that drops the stream for a fresh one', async () => {
+        // A fresh-id retry (#3164): the stream never acked.
+        const retry = await ssePage();
+        const a = retry.hook.pushEvent('save', {}, { outcome: true });
+        await tick(5);
+        retry.win.djust.liveViewInstance._streamAcked = false;
+        retry.win.djust.liveViewInstance._freshIdRetried = false;
+        retry.es.readyState = retry.win.EventSource.CLOSED;
+        retry.es.onerror({});
+        expect((await a).status).toBe('disconnected');
+        // The page URL changed since the stream opened (SPA navigation).
+        const moved = await ssePage();
+        const b = moved.hook.pushEvent('save', {}, { outcome: true });
+        await tick(5);
+        moved.win.history.pushState({}, '', '/elsewhere/');
+        moved.es.onerror({});
+        expect((await b).status).toBe('disconnected');
+    });
+
+    it('cancelled: an intentional disconnect()', async () => {
+        const { hook, win } = await ssePage();
+        const p = hook.pushEvent('save', {}, { outcome: true });
+        await tick(5);
+        win.djust.liveViewInstance.disconnect();
+        expect((await p).status).toBe('cancelled');
     });
 
     it('disconnected: the stream closed while the event was pending', async () => {
@@ -298,6 +373,17 @@ describe('pushEvent outcomes on an HTTP-only page (#4322)', () => {
     it('disconnected: the POST never reached the server', async () => {
         const { hook } = await httpPage(() => Promise.reject(new TypeError('Failed to fetch')));
         expect((await hook.pushEvent('save', {}, { outcome: true })).status).toBe('disconnected');
+    });
+
+    it('error, not ok: an answer that fails to apply', async () => {
+        const answer = { type: 'render' };
+        Object.defineProperty(answer, 'effects', { get() { throw new Error('bad answer'); } });
+        const { hook } = await httpPage(() => Promise.resolve({
+            ok: true, status: 200, headers: { get: () => null }, json: () => Promise.resolve(answer),
+        }));
+        const outcome = await hook.pushEvent('save', {}, { outcome: true });
+        expect(outcome.status).toBe('error');
+        expect(outcome.error.message).toBe('bad answer');
     });
 
     it('without {outcome: true}: the answer, or null', async () => {

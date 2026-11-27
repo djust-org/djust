@@ -92,9 +92,9 @@ function _createHookInstance(hookDef, el) {
     // built here. The hand-built frame had no `ref`, so the server's reply
     // could not be told from the reply to another event: with one other event
     // pending it resolved THAT event's promise, and the hook itself got no
-    // acknowledgment at all. Returns the promise `sendEvent` returns: it
-    // resolves with the server's reply frame, or `null` when the event was
-    // cancelled or there is no live connection to send it on.
+    // acknowledgment at all. The promise resolves with the server's reply
+    // frame, or `null` when the event did not succeed (an error, a refusal,
+    // cancelled, or no live connection to send it on).
     //
     // #4322: `{outcome: true}` resolves with how the event ended instead:
     // {status, reply, error}, status one of ok / error / rejected /
@@ -121,14 +121,23 @@ function _createHookInstance(hookDef, el) {
             // view, not the page view (#3252): its slot is named explicitly,
             // and the hook's element is not passed as the trigger, so it takes
             // no loading state from its own events.
-            const sent = transport && typeof transport.sendEvent === 'function'
-                ? transport.sendEvent(event, payload, null, slot)
-                : false;
+            let sent = false;
+            try {
+                sent = transport && typeof transport.sendEvent === 'function'
+                    ? transport.sendEvent(event, payload, null, slot)
+                    : false;
+            } catch (_err) {
+                // The socket refused the send (#4322): the transport settled
+                // the request as disconnected; the hook's promise never rejects.
+                sent = false;
+            }
             if (!sent) {
                 console.warn(`[dj-hook] Cannot pushEvent "${event}" — no live connection`);
                 outcome = Promise.resolve({ status: 'disconnected', reply: null, error: null });
             } else if (!(options && options.outcome)) {
-                return sent;
+                // The reply frame when the event succeeded, else null (a
+                // refusal acknowledges with a frame too), as over HTTP.
+                return sent.outcome ? sent.outcome.then((o) => (o.status === 'ok' ? o.reply : null)) : sent;
             } else {
                 // Settled once the frames received so far are applied, so the
                 // reply's DOM change and effects are in the page.

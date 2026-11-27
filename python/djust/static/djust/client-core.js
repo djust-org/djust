@@ -1245,6 +1245,18 @@ function applyEffect(effect) {
 }
 
 /**
+ * Settle the event a ``rate_limit_exceeded`` frame names (#4309, #4322) as
+ * ``rate_limited``, end its loading state and apply what it held back.
+ * Returns false when the frame names no request of this transport.
+ */
+async function settleRateLimitedEvent(transport, data) {
+    if (data.ref == null || _pendingEventOwners.get(data.ref) !== transport) return false;
+    cancelEventRequests(transport, data.ref, eventErrorOutcome({error: data.message, code: 'rate_limited'}));
+    if (!hasPendingEventRequests(transport)) await flushServerUpdates(transport);
+    return true;
+}
+
+/**
  * Handle a frame both socket transports apply the same way. Returns false for
  * a frame type this does not know, so the caller can report it.
  *
@@ -1253,6 +1265,12 @@ function applyEffect(effect) {
  */
 async function dispatchCommonFrame(transport, data) {
     switch (data.type) {
+        case 'rate_limit_exceeded':
+            // SSE (and any transport without its own case, #4322): a
+            // turn-policy refusal names the dropped event's ref.
+            await settleRateLimitedEvent(transport, data);
+            return true;
+
         case 'view_refused':
             // A view beside the page view is refused (login, permission, an
             // `on_mount` redirect): its container shows it, the page does
@@ -2582,10 +2600,7 @@ class LiveViewWebSocket {
                 if (data.ref != null) {
                     // The dropped event's own request (#4309): settle it, end
                     // its loading state, and apply what it held back.
-                    if (_pendingEventOwners.get(data.ref) === this) {
-                        cancelEventRequests(this, data.ref, eventErrorOutcome({error: data.message, code: 'rate_limited'}));
-                        if (!hasPendingEventRequests(this)) await flushServerUpdates(this);
-                    }
+                    await settleRateLimitedEvent(this, data);
                 } else if (this.lastEventName) {
                     // Stop loading state if applicable
                     globalLoadingManager.stopLoading(this.lastEventName, this.lastTriggerElement);
@@ -3227,6 +3242,9 @@ class LiveViewSSE {
 
             // Track reconnections for form recovery
             if (this._hasConnectedBefore) {
+                // #4322: the server replaced the session, so an answer to an
+                // event sent before the drop is lost; settle it now.
+                cancelEventRequests(this, null, {status: 'disconnected'});
                 if (window.djust) window.djust._isReconnect = true;
                 this._replacingView = true;
                 // #4322: the page still shows this view; its mount is morphed
@@ -3269,7 +3287,7 @@ class LiveViewSSE {
             // URL names the previous page; open a fresh owner-bound stream for
             // the current route instead of remounting the wrong view.
             if (this.eventSource && pageUrl !== window.location.pathname + window.location.search) {
-                this.disconnect();
+                this.disconnect({status: 'disconnected'});
                 this.connect(this.primaryViewPath, djustQueryParams(window.location.search));
                 return;
             }
@@ -3282,11 +3300,14 @@ class LiveViewSSE {
             // and the reconnect must earn its own.
             if (this.eventSource && this.eventSource.readyState !== EventSource.CLOSED) {
                 this._streamAcked = false;
+                // #4322: the reconnect gets a fresh server session; pending
+                // answers on the dropped one never arrive.
+                cancelEventRequests(this, null, {status: 'disconnected'});
             }
             if (this.eventSource && this.eventSource.readyState === EventSource.CLOSED
                 && !this._streamAcked && !this._freshIdRetried) {
                 const retryParams = this._connectParams || {};
-                this.disconnect(); // resets the flag; set it for this retry
+                this.disconnect({status: 'disconnected'}); // resets the flag; set it for this retry
                 this._freshIdRetried = true;
                 this.connect(this.primaryViewPath, retryParams);
                 return;
@@ -3309,14 +3330,17 @@ class LiveViewSSE {
 
     /**
      * Cleanly close the SSE stream (e.g. during TurboNav page transitions).
+     * @param {Object|null} [why] how pending events settle (#4322): omitted
+     *   for an intentional close ('cancelled'); the stream-drop paths pass
+     *   {status: 'disconnected'}.
      */
-    disconnect() {
+    disconnect(why = null) {
         this._parameterContracts = new Map();
         this._parameterContractApplied = new Map();
         this._parameterContractHeld = new Map();
         this._parameterContractFrames = new WeakMap();
         this._parameterContractSequence = 0;
-        cancelEventRequests(this);
+        cancelEventRequests(this, null, why);
         // TurboNav may already have replaced the URL/DOM. Cancel immediately,
         // before a delayed close callback could send old-view edits to the new URL.
         cancelPendingRateLimits();
@@ -9082,7 +9106,9 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
         : registerEventRequest(_localEventTransport, eventName, triggerElement);
     // #4322: a hook's pushEvent over this transport reads the request's
     // outcome; `httpOutcome` is what the request settles with (cancelled
-    // when it stays null: the page changed, or the protocol differs).
+    // when it stays null: the page changed, or the protocol differs). A
+    // keepalive teardown send registers no request: its answer is never
+    // read, so the hook's pushEvent settles `cancelled` (hooks.md).
     let httpOutcome = null;
     if (httpRequest && typeof params._onRequest === 'function') params._onRequest(httpRequest.promise.outcome);
     // Keepalive teardown sends deliberately outlive the outgoing page.
@@ -9218,8 +9244,11 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
         // when it names `view_id`, #3104), then the effects. This request
         // settles here, by name, not by `ref`. An embedded child's answer
         // resolves to whether it was applied (an HTTP lazy fill reads it).
+        const applied = await applyRenderFrame(_localEventTransport, data, {eventName, trigger: triggerElement});
+        // `ok` only once the answer is in the page (#4322); a failed apply
+        // settles as an error below.
         httpOutcome = {status: 'ok', reply: data};
-        return await applyRenderFrame(_localEventTransport, data, {eventName, trigger: triggerElement});
+        return applied;
 
     } catch (error) {
         if (!httpController?.signal.aborted) {
@@ -15541,9 +15570,9 @@ function _createHookInstance(hookDef, el) {
     // built here. The hand-built frame had no `ref`, so the server's reply
     // could not be told from the reply to another event: with one other event
     // pending it resolved THAT event's promise, and the hook itself got no
-    // acknowledgment at all. Returns the promise `sendEvent` returns: it
-    // resolves with the server's reply frame, or `null` when the event was
-    // cancelled or there is no live connection to send it on.
+    // acknowledgment at all. The promise resolves with the server's reply
+    // frame, or `null` when the event did not succeed (an error, a refusal,
+    // cancelled, or no live connection to send it on).
     //
     // #4322: `{outcome: true}` resolves with how the event ended instead:
     // {status, reply, error}, status one of ok / error / rejected /
@@ -15570,14 +15599,23 @@ function _createHookInstance(hookDef, el) {
             // view, not the page view (#3252): its slot is named explicitly,
             // and the hook's element is not passed as the trigger, so it takes
             // no loading state from its own events.
-            const sent = transport && typeof transport.sendEvent === 'function'
-                ? transport.sendEvent(event, payload, null, slot)
-                : false;
+            let sent = false;
+            try {
+                sent = transport && typeof transport.sendEvent === 'function'
+                    ? transport.sendEvent(event, payload, null, slot)
+                    : false;
+            } catch (_err) {
+                // The socket refused the send (#4322): the transport settled
+                // the request as disconnected; the hook's promise never rejects.
+                sent = false;
+            }
             if (!sent) {
                 console.warn(`[dj-hook] Cannot pushEvent "${event}" — no live connection`);
                 outcome = Promise.resolve({ status: 'disconnected', reply: null, error: null });
             } else if (!(options && options.outcome)) {
-                return sent;
+                // The reply frame when the event succeeded, else null (a
+                // refusal acknowledges with a frame too), as over HTTP.
+                return sent.outcome ? sent.outcome.then((o) => (o.status === 'ok' ? o.reply : null)) : sent;
             } else {
                 // Settled once the frames received so far are applied, so the
                 // reply's DOM change and effects are in the page.

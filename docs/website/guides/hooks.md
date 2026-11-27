@@ -314,8 +314,8 @@ else if (outcome.status === 'disconnected') this.retryOnReconnect = true;
 | `error` | the handler raised, the view or handler does not exist, permission was refused, or another server error; also a refused turn's acknowledgement (`error.code: "refused"`) | `error: {message, code, validation_details: null}` |
 | `rejected` | the strict parameter contract refused the payload; the handler did not run | `error.validation_details` names the expected, missing and mistyped parameters |
 | `rate_limited` | `@rate_limit` or the connection's limiter dropped it (`code: "rate_limited"`, HTTP 429) | `error.code: "rate_limited"` |
-| `cancelled` | the client gave up on it: the page navigated or swapped, the connection was closed on purpose, or the page changed while an HTTP event was queued | both `null` |
-| `disconnected` | there was no connection to send it on (nothing is sent), or the connection dropped before the answer | both `null` |
+| `cancelled` | the client gave up on it: the page navigated or swapped, the connection was closed on purpose, or the page changed while an HTTP event was queued; also an event sent as the page leaves (from `destroyed()` during navigation), which may still reach the server but whose answer is never read | both `null` |
+| `disconnected` | there was no connection to send it on (nothing is sent), or the connection dropped before the answer (over SSE, also when the stream reconnects: the new server session never answers it) | both `null` |
 
 Rules:
 
@@ -385,7 +385,8 @@ A widget's unsent local edits are widget state:
   they happen (the Quill fixture writes `localStorage` on each user change,
   keyed by page and element id, and clears it after an `ok` save) and restored
   in `mounted()`. `pushEvent()` from `destroyed()` is not delivered reliably
-  (`cancelled`).
+  and always settles `cancelled`: on the HTTP transport it leaves as a
+  keepalive POST that may reach the server, but its answer is not read.
 - **`data-draft`** ([DraftModeMixin](../state/index.md#draftmodemixin)) saves
   form fields only. It does not see a widget's owned DOM; a widget that wants
   the same lifetime uses its own storage as above.

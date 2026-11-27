@@ -549,7 +549,9 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
         : registerEventRequest(_localEventTransport, eventName, triggerElement);
     // #4322: a hook's pushEvent over this transport reads the request's
     // outcome; `httpOutcome` is what the request settles with (cancelled
-    // when it stays null: the page changed, or the protocol differs).
+    // when it stays null: the page changed, or the protocol differs). A
+    // keepalive teardown send registers no request: its answer is never
+    // read, so the hook's pushEvent settles `cancelled` (hooks.md).
     let httpOutcome = null;
     if (httpRequest && typeof params._onRequest === 'function') params._onRequest(httpRequest.promise.outcome);
     // Keepalive teardown sends deliberately outlive the outgoing page.
@@ -685,8 +687,11 @@ async function handleEvent(eventName, params = {}, _rateBypass = false) {
         // when it names `view_id`, #3104), then the effects. This request
         // settles here, by name, not by `ref`. An embedded child's answer
         // resolves to whether it was applied (an HTTP lazy fill reads it).
+        const applied = await applyRenderFrame(_localEventTransport, data, {eventName, trigger: triggerElement});
+        // `ok` only once the answer is in the page (#4322); a failed apply
+        // settles as an error below.
         httpOutcome = {status: 'ok', reply: data};
-        return await applyRenderFrame(_localEventTransport, data, {eventName, trigger: triggerElement});
+        return applied;
 
     } catch (error) {
         if (!httpController?.signal.aborted) {

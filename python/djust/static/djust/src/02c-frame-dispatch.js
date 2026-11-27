@@ -243,6 +243,18 @@ function applyEffect(effect) {
 }
 
 /**
+ * Settle the event a ``rate_limit_exceeded`` frame names (#4309, #4322) as
+ * ``rate_limited``, end its loading state and apply what it held back.
+ * Returns false when the frame names no request of this transport.
+ */
+async function settleRateLimitedEvent(transport, data) {
+    if (data.ref == null || _pendingEventOwners.get(data.ref) !== transport) return false;
+    cancelEventRequests(transport, data.ref, eventErrorOutcome({error: data.message, code: 'rate_limited'}));
+    if (!hasPendingEventRequests(transport)) await flushServerUpdates(transport);
+    return true;
+}
+
+/**
  * Handle a frame both socket transports apply the same way. Returns false for
  * a frame type this does not know, so the caller can report it.
  *
@@ -251,6 +263,12 @@ function applyEffect(effect) {
  */
 async function dispatchCommonFrame(transport, data) {
     switch (data.type) {
+        case 'rate_limit_exceeded':
+            // SSE (and any transport without its own case, #4322): a
+            // turn-policy refusal names the dropped event's ref.
+            await settleRateLimitedEvent(transport, data);
+            return true;
+
         case 'view_refused':
             // A view beside the page view is refused (login, permission, an
             // `on_mount` redirect): its container shows it, the page does
