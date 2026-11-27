@@ -246,7 +246,7 @@ rich-text editor) owns, what reaches it, and what comes back from the server
 (#4322). `tests/js/hook-event-outcomes-4322.test.js` tests the event outcomes
 over every transport, and `tests/playwright/test_widget_contract_4322.py`
 proves the whole contract in Chromium with the shipped Chart.js adapter and the
-Quill rich-text editor (a test-only fixture, not part of djust), over
+contenteditable editor fixture (a test-only hook, not part of djust), over
 WebSocket, SSE, HTTP-only and under a nonce-only CSP.
 
 ### Ownership
@@ -256,7 +256,7 @@ update makes it match the server's render again. A widget **owns** only:
 
 1. **The subtree of a `dj-update="ignore"` element** (give it an `id`). The
    patcher never enters it, on incremental patches and full morphs alike; this
-   is where the library draws (Quill's editor, a map's tiles). Put the hook on
+   is where the library draws (an editor's surface, a map's tiles). Put the hook on
    a wrapper around it, not on the ignored element (rule 7).
 2. **Attributes listed in `dj-ignore-attrs`** on a server-owned element:
    incremental patches never set them and morphs neither set nor remove them.
@@ -292,7 +292,7 @@ update makes it match the server's render again. A widget **owns** only:
 - **Out:** `pushEvent()`. `this.values` is read-only.
 - **Server props versus local edits:** a widget whose user can edit (an editor)
   decides in `updated()` whether a new server value replaces local content.
-  The rule the Quill fixture follows, and the one to copy: replace only content
+  The rule the editor fixture follows, and the one to copy: replace only content
   the user has not edited since the last successful save.
 
 ### Event outcomes
@@ -348,7 +348,7 @@ that changes the hook element's own attributes), a full morph and html
 recovery, because the patcher never touches that subtree. `updated()` runs
 during the composition; a widget must not rewrite its content then (check
 `this.dirty`, or the library's own composition state) or it ends the
-composition. The browser test composes Japanese text in Quill with the
+composition. The browser test composes Japanese text in the editor fixture with the
 Chromium IME API across a patch and a recovery morph, and checks the caret,
 focus and that `compositionend` comes only from the commit. Server-owned form
 inputs are a separate case: the patcher keeps the value and caret of the
@@ -361,7 +361,7 @@ Under a nonce-only `script-src` (no `'unsafe-inline'`, no `'unsafe-eval'`):
 
 - djust's own scripts, the route map of `{% djust_client_config %}`, the
   optional client chunks and the official adapters (`DJUST_CONFIG["extensions"]`)
-  carry `request.csp_nonce`. Load the library itself (Chart.js, Quill) with
+  carry `request.csp_nonce`. Load the library itself (Chart.js, an editor library) with
   `nonce="{{ request.csp_nonce }}"`, and your hook registrations from a nonced
   file or script.
 - `{% colocated_hook %}` bodies run in a script element with the nonce. A
@@ -382,7 +382,7 @@ A widget's unsent local edits are widget state:
   re-sends what is unsent once it is back.
 - **Across navigation** (`dj-navigate`, `live_redirect`, Back, a page swap) the
   instance is destroyed. Edits that must survive are stored by the widget as
-  they happen (the Quill fixture writes `localStorage` on each user change,
+  they happen (the editor fixture writes `localStorage` on each user change,
   keyed by page and element id, and clears it after an `ok` save) and restored
   in `mounted()`. `pushEvent()` from `destroyed()` is not delivered reliably
   and always settles `cancelled`: on the HTTP transport it leaves as a
