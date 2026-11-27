@@ -52,7 +52,7 @@ xml5ever = "0.40"
 # the extension, so a zone name never depends on the host's /usr/share/zoneinfo;
 # `tz-system` is kept only for `{% now %}`'s process-local zone (Django's
 # `datetime.now()` under USE_TZ=False), which chrono's `Local` also read.
-jiff = { version = "0.2.42", default-features = false, features = ["std", "tz-system", "tzdb-bundle-always"] }
+jiff = { version = "1.0.2", default-features = false, features = ["std", "tz-system", "tzdb-bundle-always"] }
 # Unicode normalization for `Truncator.chars`'s NFC + combining-class skip and
 # `slugify`'s NFKD ASCII fold (#2319). NFC needs canonical decomposition,
 # canonical ordering AND the composition-exclusion set; there is no
