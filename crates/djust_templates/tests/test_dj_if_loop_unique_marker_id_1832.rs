@@ -44,7 +44,7 @@ fn obj(pairs: &[(&str, Value)]) -> Value {
     for (k, v) in pairs {
         m.insert((*k).into(), v.clone());
     }
-    Value::Object(m)
+    Value::Object(Box::new(m))
 }
 
 /// Build a list of N items each with `show=true` and a distinct name.

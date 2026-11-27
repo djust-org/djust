@@ -699,7 +699,10 @@ fn safe_filter_works_for_nested_dict_in_list() {
         "body_html".into(),
         Value::String("<strong>bold</strong>".to_string()),
     );
-    ctx.set("items".to_string(), Value::List(vec![Value::Object(obj)]));
+    ctx.set(
+        "items".to_string(),
+        Value::List(vec![Value::Object(Box::new(obj))]),
+    );
 
     let result = render(
         "{% for item in items %}{{ item.body_html|safe }}{% endfor %}",
@@ -721,7 +724,10 @@ fn safe_filter_nested_dict_without_safe_escapes() {
         "body_html".into(),
         Value::String("<strong>bold</strong>".to_string()),
     );
-    ctx.set("items".to_string(), Value::List(vec![Value::Object(obj)]));
+    ctx.set(
+        "items".to_string(),
+        Value::List(vec![Value::Object(Box::new(obj))]),
+    );
 
     let result = render(
         "{% for item in items %}{{ item.body_html }}{% endfor %}",

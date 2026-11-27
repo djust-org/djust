@@ -10,15 +10,16 @@ use djust_core::Result;
 use pyo3::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::cell::Cell;
-use std::collections::HashMap;
 use std::sync::OnceLock;
 
+pub mod attrs;
 pub mod diff;
 pub mod lis;
 pub mod parser;
 pub mod patch;
 pub mod retained;
 
+pub use attrs::Attrs;
 pub use parser::MAX_VDOM_DEPTH;
 
 /// Check if VDOM tracing is enabled via environment variable.
@@ -386,26 +387,6 @@ fn from_base62_hex(s: &str) -> Option<u64> {
     u64::from_str_radix(s, 16).ok()
 }
 
-/// Serialize a `HashMap<String,String>` of attributes in SORTED key order so
-/// the wire format (patch JSON / msgpack) is deterministic regardless of the
-/// map's hash-bucket layout. See the `VNode::attrs` field doc (#1970).
-fn serialize_attrs_sorted<S>(
-    attrs: &HashMap<String, String>,
-    serializer: S,
-) -> std::result::Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    use serde::ser::SerializeMap;
-    let mut keys: Vec<&String> = attrs.keys().collect();
-    keys.sort();
-    let mut map = serializer.serialize_map(Some(keys.len()))?;
-    for k in keys {
-        map.serialize_entry(k, &attrs[k])?;
-    }
-    map.end()
-}
-
 /// A virtual DOM node
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VNode {
@@ -419,8 +400,10 @@ pub struct VNode {
     /// cache-OFF path, a byte-identity violation. Sorting also matches
     /// `to_html`'s already-sorted attribute output. Deserialization is the
     /// default `HashMap` (order-insensitive on read).
-    #[serde(serialize_with = "serialize_attrs_sorted")]
-    pub attrs: HashMap<String, String>,
+    ///
+    /// An [`Attrs`] since #4319: the same pairs, kept sorted in a vector
+    /// rather than a hash table, which serializes in that same order.
+    pub attrs: Attrs,
     pub children: Vec<VNode>,
     pub text: Option<String>,
     pub key: Option<String>,
@@ -444,7 +427,7 @@ impl VNode {
     pub fn element(tag: impl Into<String>) -> Self {
         Self {
             tag: tag.into(),
-            attrs: HashMap::new(),
+            attrs: Attrs::new(),
             children: Vec::new(),
             text: None,
             key: None,
@@ -456,7 +439,7 @@ impl VNode {
     pub fn text(content: impl Into<String>) -> Self {
         Self {
             tag: "#text".to_string(),
-            attrs: HashMap::new(),
+            attrs: Attrs::new(),
             children: Vec::new(),
             text: Some(content.into()),
             key: None,

@@ -17,14 +17,12 @@
 //! the client team and bump a contract version), update the snapshot
 //! AND the client. Both must change in the same release.
 
-use std::collections::HashMap;
-
 use djust_vdom::{Patch, VNode};
 
 fn elem(tag: &str) -> VNode {
     VNode {
         tag: tag.to_string(),
-        attrs: HashMap::new(),
+        attrs: Default::default(),
         children: Vec::new(),
         text: None,
         key: None,
@@ -65,7 +63,7 @@ fn snapshot_vnode_with_djust_id() {
 fn snapshot_vnode_text_node() {
     let v = VNode {
         tag: "#text".to_string(),
-        attrs: HashMap::new(),
+        attrs: Default::default(),
         children: Vec::new(),
         text: Some("hello".to_string()),
         key: None,
@@ -334,7 +332,7 @@ fn msgpack_round_trip_nested_tree_mixed_djust_id() {
     // exact shape the HTML parser produces for any template containing text.
     let text_child = VNode {
         tag: "#text".to_string(),
-        attrs: HashMap::new(),
+        attrs: Default::default(),
         children: Vec::new(),
         text: Some("hello".to_string()),
         key: None,

@@ -19,7 +19,7 @@ fn el(tag: &str, key: Option<&str>, attrs: &[(&str, &str)], children: Vec<VNode>
     }
     VNode {
         tag: tag.to_string(),
-        attrs: map,
+        attrs: map.into(),
         children,
         text: None,
         key: key.map(|s| s.to_string()),

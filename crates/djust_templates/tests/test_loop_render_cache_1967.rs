@@ -21,7 +21,7 @@ fn obj(pairs: &[(&str, &str)]) -> Value {
     for (k, v) in pairs {
         m.insert((*k).into(), Value::String(v.to_string()));
     }
-    Value::Object(m)
+    Value::Object(Box::new(m))
 }
 
 /// Build a list of item objects, each `{id, name}`.
@@ -160,7 +160,10 @@ fn nested_loops_byte_identical() {
     );
     let mut m2 = IndexMap::new();
     m2.insert("cells".into(), Value::List(vec![obj(&[("v", "c")])]));
-    let rows = Value::List(vec![Value::Object(m1), Value::Object(m2)]);
+    let rows = Value::List(vec![
+        Value::Object(Box::new(m1)),
+        Value::Object(Box::new(m2)),
+    ]);
 
     let mut cache = LoopRenderCache::new(true);
     let uncached = render(src, "rows", &rows, None);

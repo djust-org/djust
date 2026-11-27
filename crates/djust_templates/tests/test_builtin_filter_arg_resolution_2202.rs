@@ -176,7 +176,7 @@ fn a_dotted_path_arg_resolves() {
     let mut post = IndexMap::new();
     post.insert("alt".into(), Value::String(String::new()));
     post.insert("title".into(), Value::String("The Title".into()));
-    c.set("post".to_string(), Value::Object(post));
+    c.set("post".to_string(), Value::Object(Box::new(post)));
     assert_eq!(render("{{ post.alt|default:post.title }}", &c), "The Title");
 }
 

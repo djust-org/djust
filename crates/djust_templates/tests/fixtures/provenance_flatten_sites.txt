@@ -28,7 +28,7 @@ format!("#{}", python_float_repr(f))
 Some(arg) => format!("{name}:{arg}"),
 value.to_string()
 filters::html_escape(&value.to_string())
-.insert(TYPED_ARGS_KEY.to_string(), Value::Object(typed));
+.insert(TYPED_ARGS_KEY.to_string(), Value::Object(Box::new(typed)));
 typed.insert(djust_core::ObjectKey::from(key), value);
 other => DjangoRustError::TemplateError(format!("{kind} '{name}' error: {other}")),
 let content = render_nodes_with_loader_mut(children, context, loader)?;
@@ -117,7 +117,7 @@ loop_dict.insert("counter".into(), Value::Integer(counter as i64 + 1));
 "revcounter0".into(),
 loop_dict.insert("first".into(), Value::Bool(counter == 0));
 "last".into(),
-ctx.set("forloop".to_string(), Value::Object(loop_dict.clone()));
+ctx.set("forloop".to_string(), Value::Object(Box::new(loop_dict.clone())));
 pyo3::exceptions::PyValueError::new_err(format!(
 .is_safe(&format!("{iterable}.{index}.{i}"))
 format!("{base}.{index}.{i}"),
@@ -359,15 +359,15 @@ context.set("text".to_string(), Value::String("hello world".to_string()));
 context.set("sub".to_string(), Value::String("xyz".to_string()));
 map.insert("2".into(), Value::Bool(true));
 map.insert("5".into(), Value::String("hello".to_string()));
-context.set("mydict".to_string(), Value::Object(map));
+context.set("mydict".to_string(), Value::Object(Box::new(map)));
 context.set("key".to_string(), Value::String("2".to_string()));
 context.set("key".to_string(), Value::String("99".to_string()));
 context.set("key".to_string(), Value::Integer(5));
-context.set("mydict".to_string(), Value::Object(int_keyed));
+context.set("mydict".to_string(), Value::Object(Box::new(int_keyed)));
 context.set("key".to_string(), Value::Integer(5));
 context.set("key".to_string(), Value::String("5".to_string()));
 map.insert("42".into(), Value::Bool(true));
-context.set("mydict".to_string(), Value::Object(map));
+context.set("mydict".to_string(), Value::Object(Box::new(map)));
 context.set("val".to_string(), Value::Integer(42));
 context.set("val".to_string(), Value::Integer(99));
 "content".to_string(),
@@ -407,7 +407,7 @@ Value::String("b".to_string()),
 Value::String("x".to_string()),
 Value::String("y".to_string()),
 user.insert("name".into(), Value::String("Alice".to_string()));
-context.set("user".to_string(), Value::Object(user));
+context.set("user".to_string(), Value::Object(Box::new(user)));
 context.set("x".to_string(), Value::String("<b>hi</b>".to_string()));
 context.set("x".to_string(), Value::String("<b>hi</b>".to_string()));
 context.set("x".to_string(), Value::String("<b>hi</b>".to_string()));
@@ -430,12 +430,14 @@ assert_eq!(Value::Bool(true).to_string(), "True");
 assert_eq!(Value::String("hello".to_string()).to_string(), "hello");
 "items".to_string(),
 obj.insert("key".into(), Value::String("val".to_string()));
-ctx.set("obj".to_string(), Value::Object(obj));
+ctx.set("obj".to_string(), Value::Object(Box::new(obj)));
 ctx.set("count".to_string(), Value::Integer(42));
 ctx.set("name".to_string(), Value::String("hello".to_string()));
 Value::Decimal("1.50".to_string()),
 Value::BigInt("123456789012345678901".to_string()),
 Value::String("ab".to_string()),
+.into(),
+.into(),
 type_name: "datetime.datetime".to_string(),
 display: "2020-01-01 03:04:05".to_string().into(),
 json: Some("2020-01-01T03:04:05".to_string()),
@@ -468,9 +470,9 @@ assert_eq!(value_to_arg_string(&Value::String("hi".to_string())), "hi");
 map.insert("id".into(), Value::Integer(1));
 map.insert("name".into(), cell);
 "<i>N</i>".into()
-name: "Col".into(),
-fields: vec!["key".into()],
-items: vec![Value::String("name".into())],
+"Col".into(),
+vec!["key".into()],
+vec![Value::String("name".into())]
 Value::SafeString("x".into())
 "<b>plain</b>".into()
 int_keyed.insert(djust_core::ObjectKey::Int(1), Value::String("a".into()));
@@ -768,6 +770,7 @@ if pfx < e.html_start {
 } else if pfx >= e.html_end {
 let offset_in_text = pfx - entry.html_start;
 if pfx + old_mid.len() > entry.html_end {
+let (old_text, djust_id) = (old_text.to_string(), djust_id.to_string());
 let old_html_end = entry.html_end;
 || !old_html.is_char_boundary(entry.html_start)
 let old_raw = &old_html[entry.html_start..old_html_end];
@@ -784,6 +787,7 @@ if old_bytes.get(entry.html_end..)? != new_bytes.get(new_end..)? {
 let next_new_start = usize::try_from(next.html_start as isize + shift).ok()?;
 if next.html_start < entry.html_end
 || old_bytes.get(entry.html_end..next.html_start)?
+Some(own_id.to_string())
 let start = (entry.html_start as isize + delta) as usize;
 let old_run_len = entry.html_end - entry.html_start;
 entry.html_start = start;
@@ -850,6 +854,7 @@ let mut view = RustLiveViewBackend::new_rust(TEMPLATE.to_string());
 view.set_changed_keys(vec!["label".to_string()]);
 view.set_changed_keys(vec!["rows".to_string()]);
 view.set_changed_keys(vec!["highlight_id".to_string()]);
+(e.html_start, e.html_end, e.path())
 let mut view = RustLiveViewBackend::new_rust("<p>hello</p>".to_string());
 view.update_state_rust(HashMap::from([("rows".to_string(), Value::List(rows))]));
 view.set_state("n".to_string(), Value::Integer(1));
@@ -1058,7 +1063,7 @@ inner.bind_upward("o".into(), Value::String("x".into()), false);
 ctx.set("name".to_string(), Value::String("Django".to_string()));
 user.insert("name".into(), Value::String("John".to_string()));
 user.insert("age".into(), Value::Integer(30));
-ctx.set("user".to_string(), Value::Object(user));
+ctx.set("user".to_string(), Value::Object(Box::new(user)));
 ctx.set("a".to_string(), Value::Integer(1));
 ctx.set("a".to_string(), Value::Integer(2));
 .map(|s| Value::String(s.to_string()))
@@ -1070,7 +1075,7 @@ ctx.mark_safe("p.0".to_string());
 ctx.mark_safe("p.1".to_string());
 ctx.set("p".to_string(), Value::List(strs(&["a", "b", "c"])));
 map.insert("0".into(), Value::String("<b>v</b>".to_string()));
-ctx.set("p".to_string(), Value::Object(map));
+ctx.set("p".to_string(), Value::Object(Box::new(map)));
 ctx.mark_safe("p.0".to_string());
 ctx.set("p".to_string(), Value::String("<b>x</b>".to_string()));
 ctx.mark_safe("p".to_string());
@@ -1094,20 +1099,20 @@ ctx.set("row".to_string(), unmarked);
 ctx.set_loop_mapping("row".to_string(), "rows".to_string(), 1);
 map.insert("a".into(), Value::Integer(1));
 map.insert("b".into(), Value::Integer(2));
-ctx.set("d".to_string(), Value::Object(map));
+ctx.set("d".to_string(), Value::Object(Box::new(map)));
 items.iter().map(|v| v.to_string()).collect::<Vec<_>>(),
 items.iter().map(|v| v.to_string()).collect::<Vec<_>>(),
 assert_eq!(pair[0].to_string(), "a");
 assert_eq!(pair[1].to_string(), "1");
 ctx.resolve(path).unwrap().unwrap().to_string(),
 map.insert("items".into(), Value::Integer(5));
-ctx.set("d".to_string(), Value::Object(map));
+ctx.set("d".to_string(), Value::Object(Box::new(map)));
 assert_eq!(ctx.resolve("d.items").unwrap().unwrap().to_string(), "5");
 ctx.set("s".to_string(), Value::String("x".to_string()));
 ctx.set("l".to_string(), Value::List(vec![Value::Integer(1)]));
 inner.insert("x".into(), Value::Integer(9));
-outer.insert("inner".into(), Value::Object(inner));
-ctx.set("d".to_string(), Value::Object(outer));
+outer.insert("inner".into(), Value::Object(Box::new(inner)));
+ctx.set("d".to_string(), Value::Object(Box::new(outer)));
 items.iter().map(|v| v.to_string()).collect::<Vec<_>>(),
 ctx.set("p".to_string(), Value::String("<b>x</b>".into()));
 ctx.mark_safe("p".to_string());

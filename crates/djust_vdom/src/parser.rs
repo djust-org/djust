@@ -24,7 +24,6 @@ use html5ever::tendril::TendrilSink;
 use html5ever::tree_builder::TreeBuilderOpts;
 use html5ever::{ns, parse_document, parse_fragment, LocalName, ParseOpts, QualName};
 use markup5ever_rcdom::{Handle, NodeData, RcDom};
-use std::collections::HashMap;
 
 /// Trace macro for parser logging
 macro_rules! parser_trace {
@@ -449,7 +448,7 @@ pub fn parse_html_fragment_client_view_in(
                 if is_preserved_comment(&text) {
                     roots.push(VNode {
                         tag: "#comment".to_string(),
-                        attrs: HashMap::new(),
+                        attrs: crate::Attrs::new(),
                         children: Vec::new(),
                         text: Some(text),
                         key: None,
@@ -841,7 +840,7 @@ fn build_children_observed<F: FnMut(&Handle, &str)>(
                 if is_preserved_comment(&comment_text) {
                     children.push(VNode {
                         tag: "#comment".to_string(),
-                        attrs: HashMap::new(),
+                        attrs: crate::Attrs::new(),
                         children: Vec::new(),
                         text: Some(comment_text),
                         key: None,
@@ -961,7 +960,7 @@ pub(crate) fn handle_to_vnode_observed<F: FnMut(&Handle, &str)>(
 
             // Pre-size attributes HashMap: most elements have 1-2 attrs + dj-id
             let attrs_borrow = attrs.borrow();
-            let mut attributes = HashMap::with_capacity(attrs_borrow.len() + 1);
+            let mut attributes = crate::Attrs::with_capacity(attrs_borrow.len() + 1);
             let mut key: Option<String> = None;
 
             // Add dj-id attribute for client-side querySelector lookup

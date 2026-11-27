@@ -1529,7 +1529,7 @@ fn add_typed_operands(
         // never-authored `String`. See `typed_operands` for the full classification.
         context_map
             .map
-            .insert(TYPED_ARGS_KEY.to_string(), Value::Object(typed));
+            .insert(TYPED_ARGS_KEY.to_string(), Value::Object(Box::new(typed)));
     }
 }
 
@@ -4256,7 +4256,7 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
                             // which is Django's order: `loop_dict` is written at
                             // the top of the iteration and `context[loopvar]` at
                             // the bottom.
-                            ctx.set("forloop".to_string(), Value::Object(loop_dict.clone()));
+                            ctx.set("forloop".to_string(), Value::Object(Box::new(loop_dict.clone())));
 
                             // The grant this item carries (#2361). Non-empty only
                             // for a NORMALISED operand, where the positional
@@ -5328,7 +5328,7 @@ pub fn render_node_output<L: TemplateLoader, R: RenderOutput>(
             context.with_scope(|scoped| {
                 scoped.bind(
                     "block".to_string(),
-                    Value::Object(indexmap::IndexMap::new()),
+                    Value::Object(Box::new(indexmap::IndexMap::new())),
                     false,
                 );
                 scoped.mark_safe("block.super".to_string());
@@ -8459,7 +8459,7 @@ mod tests {
         })
         .collect();
         let mut context = Context::new();
-        context.set("m".chars().collect(), Value::Object(model));
+        context.set("m".chars().collect(), Value::Object(Box::new(model)));
         for (src, want) in [
             ("{% if 'name' in m %}YES{% else %}NO{% endif %}", "NO"),
             ("{% if 'zzz' in m %}YES{% else %}NO{% endif %}", "NO"),
@@ -8484,7 +8484,7 @@ mod tests {
         let mut map = IndexMap::new();
         map.insert("2".into(), Value::Bool(true));
         map.insert("5".into(), Value::String("hello".to_string()));
-        context.set("mydict".to_string(), Value::Object(map));
+        context.set("mydict".to_string(), Value::Object(Box::new(map)));
 
         // Key exists → found
         context.set("key".to_string(), Value::String("2".to_string()));
@@ -8511,7 +8511,7 @@ mod tests {
         // case the coercion was said to protect and never did.
         let mut int_keyed = IndexMap::new();
         int_keyed.insert(djust_core::ObjectKey::Int(5), Value::Bool(true));
-        context.set("mydict".to_string(), Value::Object(int_keyed));
+        context.set("mydict".to_string(), Value::Object(Box::new(int_keyed)));
         context.set("key".to_string(), Value::Integer(5));
         assert_eq!(render_nodes(&nodes, &context).unwrap(), "found");
         context.set("key".to_string(), Value::String("5".to_string()));
@@ -8529,7 +8529,7 @@ mod tests {
 
         let mut map = IndexMap::new();
         map.insert("42".into(), Value::Bool(true));
-        context.set("mydict".to_string(), Value::Object(map));
+        context.set("mydict".to_string(), Value::Object(Box::new(map)));
 
         // Integer value, filter converts to string "42", should match dict key
         context.set("val".to_string(), Value::Integer(42));
@@ -8854,7 +8854,7 @@ mod tests {
         let mut context = Context::new();
         let mut user = IndexMap::new();
         user.insert("name".into(), Value::String("Alice".to_string()));
-        context.set("user".to_string(), Value::Object(user));
+        context.set("user".to_string(), Value::Object(Box::new(user)));
         let result = render_nodes(&nodes, &context).unwrap();
         assert_eq!(result, "Alice");
     }
@@ -9080,7 +9080,7 @@ mod tests {
         // value_to_arg_string should serialize Value::Object as JSON
         let mut map = IndexMap::new();
         map.insert("key".into(), Value::String("val".to_string()));
-        let obj = Value::Object(map);
+        let obj = Value::Object(Box::new(map));
         let json = serde_json::to_string(&obj).unwrap();
         assert_eq!(json, r#"{"key":"val"}"#);
     }
@@ -9114,7 +9114,7 @@ mod tests {
         );
         let mut obj = IndexMap::new();
         obj.insert("key".into(), Value::String("val".to_string()));
-        ctx.set("obj".to_string(), Value::Object(obj));
+        ctx.set("obj".to_string(), Value::Object(Box::new(obj)));
         ctx.set("count".to_string(), Value::Integer(42));
         ctx.set("name".to_string(), Value::String("hello".to_string()));
         ctx
@@ -9158,7 +9158,7 @@ mod tests {
             Value::List(vec![Value::Integer(1)]),
             Value::List(Vec::new()),
             Value::Tuple(vec![Value::Integer(1)]),
-            Value::Object(IndexMap::new()),
+            Value::Object(Box::new(IndexMap::new())),
             // A serialized model: `list(model)` raises, so BOTH probes say "not iterable".
             Value::Object(
                 [
@@ -9177,7 +9177,8 @@ mod tests {
                         },
                     )
                 })
-                .collect(),
+                .collect::<indexmap::IndexMap<_, _>>()
+                .into(),
             ),
             // A dict that merely carries a text `__str__` is user data and iterates its keys.
             Value::Object(
@@ -9189,7 +9190,8 @@ mod tests {
                             Value::String(v.chars().collect()),
                         )
                     })
-                    .collect(),
+                    .collect::<indexmap::IndexMap<_, _>>()
+                    .into(),
             ),
             Value::DictView {
                 kind: djust_core::DictViewKind::Keys,
@@ -9361,7 +9363,10 @@ mod tests {
         assert_eq!(value_to_arg_string(&list), "[1,2]");
         let mut map = IndexMap::new();
         map.insert("key".into(), Value::String("val".to_string()));
-        assert_eq!(value_to_arg_string(&Value::Object(map)), r#"{"key":"val"}"#);
+        assert_eq!(
+            value_to_arg_string(&Value::Object(Box::new(map))),
+            r#"{"key":"val"}"#
+        );
         assert_eq!(value_to_arg_string(&Value::Integer(42)), "42");
         // Scalars go through Display, so this follows it to `True` (#2203).
         assert_eq!(value_to_arg_string(&Value::Bool(true)), "True");
@@ -9378,7 +9383,7 @@ mod tests {
             let mut map = IndexMap::new();
             map.insert("id".into(), Value::Integer(1));
             map.insert("name".into(), cell);
-            Value::List(vec![Value::Object(map)])
+            Value::List(vec![Value::Object(Box::new(map))])
         };
         assert!(text_loses_a_member(&row(Value::SafeString(
             "<i>N</i>".into()
@@ -9386,11 +9391,11 @@ mod tests {
         assert!(text_loses_a_member(&row(Value::Float(f64::NAN))));
         assert!(text_loses_a_member(&row(Value::Float(f64::INFINITY))));
         assert!(text_loses_a_member(&row(Value::Float(f64::NEG_INFINITY))));
-        assert!(text_loses_a_member(&Value::List(vec![Value::NamedTuple {
-            name: "Col".into(),
-            fields: vec!["key".into()],
-            items: vec![Value::String("name".into())],
-        }])));
+        assert!(text_loses_a_member(&Value::List(vec![Value::named_tuple(
+            "Col".into(),
+            vec!["key".into()],
+            vec![Value::String("name".into())]
+        )])));
         // Nested deeper than a row: a cell holding a list.
         assert!(text_loses_a_member(&row(Value::List(vec![
             Value::SafeString("x".into())
@@ -9405,7 +9410,7 @@ mod tests {
         let mut int_keyed = IndexMap::new();
         int_keyed.insert(djust_core::ObjectKey::Int(1), Value::String("a".into()));
         assert!(text_loses_a_member(&Value::List(vec![Value::Object(
-            int_keyed
+            Box::new(int_keyed)
         )])));
         // A scalar operand is not a container: the existing rules decide it.
         assert!(!text_loses_a_member(&Value::SafeString("x".into())));
@@ -10309,11 +10314,17 @@ mod tests {
         let mut b = indexmap::IndexMap::new();
         b.insert("b".into(), Value::Integer(2));
         b.insert("a".into(), Value::Integer(1));
-        assert!(values_equal(&Value::Object(a.clone()), &Value::Object(b)));
+        assert!(values_equal(
+            &Value::Object(Box::new(a.clone())),
+            &Value::Object(Box::new(b))
+        ));
 
         let mut c = indexmap::IndexMap::new();
         c.insert("a".into(), Value::Integer(1));
-        assert!(!values_equal(&Value::Object(a), &Value::Object(c)));
+        assert!(!values_equal(
+            &Value::Object(Box::new(a)),
+            &Value::Object(Box::new(c))
+        ));
     }
 
     #[test]
@@ -10344,7 +10355,7 @@ mod tests {
     fn test_2335_only_an_equal_pair_continues_the_walk() {
         // Python compares with `==` FIRST, so equal-but-unorderable elements
         // do not stop the walk...
-        let d = Value::Object(indexmap::IndexMap::new());
+        let d = Value::Object(Box::new(indexmap::IndexMap::new()));
         assert_eq!(
             try_compare(
                 &l(vec![d.clone(), Value::Integer(1)]),
@@ -10391,7 +10402,7 @@ mod tests {
         assert_eq!(try_compare(&Value::None, &Value::Integer(1)), None);
         assert!(values_equal(&Value::Missing, &Value::Missing));
         // A dict against anything, including itself.
-        let d = Value::Object(indexmap::IndexMap::new());
+        let d = Value::Object(Box::new(indexmap::IndexMap::new()));
         assert_eq!(try_compare(&d, &d), None);
         // And the orderable pairs still answer, so `None` is not swallowing
         // everything.

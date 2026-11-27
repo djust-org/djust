@@ -283,9 +283,12 @@ pub enum Value {
     /// parentheses, which `str()` distinguishes (#2203).
     Tuple(Vec<Value>),
     /// A tuple with named fields, such as Django's GroupedResult.
+    ///
+    /// The name and field names are boxed (#4319), so this variant does not
+    /// make every `Value` 80 bytes: a view holds one `Value` per list item
+    /// and per dict entry of its state.
     NamedTuple {
-        name: String,
-        fields: Vec<String>,
+        meta: Box<NamedTupleMeta>,
         items: Vec<Value>,
     },
     /// Insertion-ordered, NOT a `HashMap`: Rust randomises `HashMap` iteration
@@ -297,7 +300,7 @@ pub enum Value {
     /// `"0"` key (#2339). `ObjectKey::Str` hashes exactly as its `str` does,
     /// so every `map.get("literal")` call site is unchanged — see that
     /// module's docs for why, and for what the wire format still loses.
-    Object(IndexMap<ObjectKey, Value>),
+    Object(Box<IndexMap<ObjectKey, Value>>),
     /// A live `dict_items` / `dict_keys` / `dict_values` view (#2340).
     ///
     /// #2334 made `d.items` resolve, to a plain `Value::List`. Everything a
@@ -718,6 +721,23 @@ impl PartialEq for DisplayText {
         }
         let (a, b) = (self.forced(), other.forced());
         a.text == b.text && a.safe == b.safe
+    }
+}
+
+/// The type name and field names of a [`Value::NamedTuple`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct NamedTupleMeta {
+    pub name: String,
+    pub fields: Vec<String>,
+}
+
+impl Value {
+    /// A [`Value::NamedTuple`] of its type name, field names and items.
+    pub fn named_tuple(name: String, fields: Vec<String>, items: Vec<Value>) -> Value {
+        Value::NamedTuple {
+            meta: Box::new(NamedTupleMeta { name, fields }),
+            items,
+        }
     }
 }
 
@@ -1414,20 +1434,9 @@ pub fn values_structurally_equal(a: &Value, b: &Value) -> bool {
         }
         (Value::Decimal(a), Value::Decimal(b)) => a == b,
         (Value::BigInt(a), Value::BigInt(b)) => a == b,
-        (
-            Value::NamedTuple {
-                name: an,
-                fields: af,
-                items: a,
-            },
-            Value::NamedTuple {
-                name: bn,
-                fields: bf,
-                items: b,
-            },
-        ) => {
-            an == bn
-                && af == bf
+        (Value::NamedTuple { meta: am, items: a }, Value::NamedTuple { meta: bm, items: b }) => {
+            am.name == bm.name
+                && am.fields == bm.fields
                 && a.len() == b.len()
                 && a.iter()
                     .zip(b)
@@ -1738,13 +1747,9 @@ impl Serialize for Value {
             Value::String(st) | Value::SafeString(st) | Value::ModelName(st) => serializer.serialize_str(st),
             // A tuple keeps its identity in binary formats only (#2276) — see
             // `TUPLE_TAG` for why JSON deliberately stays an array.
-            Value::NamedTuple {
-                name,
-                fields,
-                items,
-            } if !serializer.is_human_readable() => {
+            Value::NamedTuple { meta, items } if !serializer.is_human_readable() => {
                 let mut m = serializer.serialize_map(Some(1))?;
-                m.serialize_entry(NAMED_TUPLE_TAG, &(name, fields, items))?;
+                m.serialize_entry(NAMED_TUPLE_TAG, &(&meta.name, &meta.fields, items))?;
                 m.end()
             }
             Value::Tuple(items) if !serializer.is_human_readable() => {
@@ -2040,7 +2045,7 @@ impl<'de> Deserialize<'de> for Value {
                         (self.binary, obj.get(METHOD_KEYS_TAG))
                     {
                         if let Some(map) = method_keyed_map(payload) {
-                            return Ok(Value::Object(map));
+                            return Ok(Value::Object(Box::new(map)));
                         }
                     }
                     // A user map the writer escaped: `[key, value]`, read back as that one-key
@@ -2050,7 +2055,7 @@ impl<'de> Deserialize<'de> for Value {
                         if let [Value::String(key), value] = pair.as_slice() {
                             let mut inner = IndexMap::new();
                             inner.insert(ObjectKey::Str(key.clone()), value.clone());
-                            return Ok(Value::Object(inner));
+                            return Ok(Value::Object(Box::new(inner)));
                         }
                     }
                     // The binary-format missing-key tag (#2484). Same shape,
@@ -2083,11 +2088,7 @@ impl<'de> Deserialize<'de> for Value {
                                 })
                                 .collect();
                             if let Some(fields) = names.filter(|f| f.len() == items.len()) {
-                                return Ok(Value::NamedTuple {
-                                    name: name.clone(),
-                                    fields,
-                                    items: items.clone(),
-                                });
+                                return Ok(Value::named_tuple(name.clone(), fields, items.clone()));
                             }
                         }
                     }
@@ -2138,7 +2139,7 @@ impl<'de> Deserialize<'de> for Value {
                                 repr: repr.clone(),
                                 cmp_key: decode_cmp_key(key),
                                 attrs: match attrs {
-                                    Value::Object(map) => map.clone(),
+                                    Value::Object(map) => *map.clone(),
                                     _ => IndexMap::new(),
                                 },
                                 items: match items {
@@ -2200,7 +2201,7 @@ impl<'de> Deserialize<'de> for Value {
                                 repr: repr.clone(),
                                 cmp_key: decode_cmp_key(key),
                                 attrs: match attrs {
-                                    Value::Object(map) => map.clone(),
+                                    Value::Object(map) => *map.clone(),
                                     _ => IndexMap::new(),
                                 },
                                 items: match items {
@@ -2257,7 +2258,7 @@ impl<'de> Deserialize<'de> for Value {
                                 repr: repr.clone(),
                                 cmp_key: decode_cmp_key(key),
                                 attrs: match attrs {
-                                    Value::Object(map) => map.clone(),
+                                    Value::Object(map) => *map.clone(),
                                     _ => IndexMap::new(),
                                 },
                                 // See the four-line note in the shorter widths
@@ -2492,7 +2493,7 @@ impl<'de> Deserialize<'de> for Value {
                         }
                     }
                 }
-                Ok(Value::Object(obj))
+                Ok(Value::Object(Box::new(obj)))
             }
         }
 
@@ -3813,12 +3814,10 @@ impl fmt::Display for Value {
                 let inner: Vec<String> = items.iter().map(Value::py_repr).collect();
                 write!(f, "[{}]", inner.join(", "))
             }
-            Value::NamedTuple {
-                name,
-                fields,
-                items,
-            } => {
-                let inner: Vec<String> = fields
+            Value::NamedTuple { meta, items } => {
+                let name = &meta.name;
+                let inner: Vec<String> = meta
+                    .fields
                     .iter()
                     .zip(items)
                     .map(|(field, item)| format!("{field}={}", item.py_repr()))
@@ -3996,16 +3995,14 @@ pub fn py_object_key(ob: &Bound<'_, PyAny>) -> ObjectKey {
     if let Ok(t) = ob.cast::<pyo3::types::PyTuple>() {
         return ObjectKey::Tuple(t.iter().map(|item| py_object_key(&item)).collect());
     }
-    ObjectKey::Other {
-        display: ob
-            .str()
+    ObjectKey::other(
+        ob.str()
             .and_then(|s| s.extract::<String>())
             .unwrap_or_default(),
-        repr: ob
-            .repr()
+        ob.repr()
             .and_then(|s| s.extract::<String>())
             .unwrap_or_default(),
-    }
+    )
 }
 
 /// Called only after the caller has established that the value is a Python string.
@@ -4540,11 +4537,11 @@ impl<'py> FromPyObject<'_, 'py> for Value {
                 .and_then(|f| f.extract::<Vec<String>>())
             {
                 if fields.len() == items.len() {
-                    return Ok(Value::NamedTuple {
-                        name: ob.get_type().getattr("__name__")?.extract()?,
+                    return Ok(Value::named_tuple(
+                        ob.get_type().getattr("__name__")?.extract()?,
                         fields,
                         items,
-                    });
+                    ));
                 }
             }
             Ok(Value::Tuple(items))
@@ -4574,7 +4571,7 @@ impl<'py> FromPyObject<'_, 'py> for Value {
             for (k, v) in pairs {
                 m.insert(py_object_key(&k), v.extract::<Value>()?);
             }
-            Ok(Value::Object(m))
+            Ok(Value::Object(Box::new(m)))
         } else if let Some(map) = ob
             .cast::<PyDict>()
             .ok()
@@ -4613,7 +4610,7 @@ impl<'py> FromPyObject<'_, 'py> for Value {
                 Some(m)
             })
         {
-            Ok(Value::Object(map))
+            Ok(Value::Object(Box::new(map)))
         } else {
             // #2448: one of the four `datetime` types, whose
             // `DjangoJSONEncoder` spelling is not its `str()`.
@@ -5466,7 +5463,7 @@ impl Encoded {
             for (k, v) in pairs {
                 map.insert(py_object_key(&k), v.extract::<Value>().ok()?);
             }
-            Some(Value::Object(map))
+            Some(Value::Object(Box::new(map)))
         })
     }
 
@@ -6283,11 +6280,8 @@ impl<'py> IntoPyObject<'py> for Value {
                 }
                 Ok(py_list.into_any())
             }
-            Value::NamedTuple {
-                name,
-                fields,
-                items,
-            } => {
+            Value::NamedTuple { meta, items } => {
+                let NamedTupleMeta { name, fields } = *meta;
                 let args: Vec<_> = items
                     .into_iter()
                     .map(|v| v.into_pyobject(py))
@@ -6309,7 +6303,7 @@ impl<'py> IntoPyObject<'py> for Value {
             Value::DictView { items, .. } => Value::List(items).into_pyobject(py),
             Value::Object(o) => {
                 let py_dict = PyDict::new(py);
-                for (k, v) in o {
+                for (k, v) in *o {
                     // The key goes back as the Python object it came from, so
                     // a round trip through Rust does not silently restring an
                     // int-keyed dict (#2339). `ObjectKey::Other` is the one
@@ -6879,11 +6873,8 @@ pub fn value_into_handler_pyobject(py: Python<'_>, value: Value) -> PyResult<Bou
                 .collect::<PyResult<Vec<_>>>()?;
             Ok(pyo3::types::PyTuple::new(py, items)?.into_any())
         }
-        Value::NamedTuple {
-            name,
-            fields,
-            items,
-        } => {
+        Value::NamedTuple { meta, items } => {
+            let NamedTupleMeta { name, fields } = *meta;
             let args: Vec<_> = items
                 .into_iter()
                 .map(|item| value_into_handler_pyobject(py, item))
@@ -6892,7 +6883,7 @@ pub fn value_into_handler_pyobject(py: Python<'_>, value: Value) -> PyResult<Bou
         }
         Value::Object(map) => {
             let py_dict = PyDict::new(py);
-            for (key, item) in map {
+            for (key, item) in *map {
                 py_dict.set_item(
                     object_key_into_py(py, key)?,
                     value_into_handler_pyobject(py, item)?,
@@ -6916,7 +6907,7 @@ pub fn value_into_sort_row_pyobject(py: Python<'_>, value: Value) -> PyResult<Bo
     match value {
         Value::Object(map) => {
             let py_dict = PyDict::new(py);
-            for (key, item) in map {
+            for (key, item) in *map {
                 if let ObjectKey::Method(name) = key {
                     py_dict.set_item(name, uncalled_method(py)?)?;
                     continue;
@@ -6960,7 +6951,7 @@ mod tests {
             let mut m = IndexMap::new();
             m.insert(ObjectKey::Str("pk".into()), Value::Integer(1));
             m.insert(key, Value::String("cara".into()));
-            Value::Object(m)
+            Value::Object(Box::new(m))
         };
         let method = row(ObjectKey::Method("get_username".into()));
         let column = row(ObjectKey::Str("get_username".into()));
@@ -6982,7 +6973,7 @@ mod tests {
                 Value::String(name.into()),
             );
             m.insert(ObjectKey::Str("email".into()), Value::String("e".into()));
-            Value::Object(m)
+            Value::Object(Box::new(m))
         };
         let mut outer = IndexMap::new();
         outer.insert(
@@ -6993,7 +6984,7 @@ mod tests {
             ObjectKey::Str("users".into()),
             Value::List(vec![row("cara"), row("abe")]),
         );
-        let original = Value::Object(outer);
+        let original = Value::Object(Box::new(outer));
         let bytes = rmp_serde::to_vec(&original).expect("encode");
         let back: Value = rmp_serde::from_slice(&bytes).expect("decode");
         assert!(values_structurally_equal(&original, &back), "{back:?}");
@@ -7018,7 +7009,7 @@ mod tests {
                 ])]),
             ]),
         );
-        let forged = Value::Object(forged);
+        let forged = Value::Object(Box::new(forged));
         let back: Value =
             rmp_serde::from_slice(&rmp_serde::to_vec(&forged).expect("encode")).expect("decode");
         assert!(
@@ -7051,7 +7042,7 @@ mod tests {
             "__str__".into(),
             Value::String("<Claim: 2026PD000075>".to_string()),
         );
-        let obj = Value::Object(map);
+        let obj = Value::Object(Box::new(map));
         assert_eq!(obj.to_string(), "<Claim: 2026PD000075>");
     }
 
@@ -7064,7 +7055,7 @@ mod tests {
         let mut map: IndexMap<ObjectKey, Value> = IndexMap::new();
         map.insert("a".into(), Value::Integer(1));
         map.insert("b".into(), Value::Integer(2));
-        let obj = Value::Object(map);
+        let obj = Value::Object(Box::new(map));
         // Was `"[Object]"`. Django renders `str({'a': 1, 'b': 2})` (#2203),
         // in insertion order — which is why `Object` is an IndexMap.
         assert_eq!(obj.to_string(), "{'a': 1, 'b': 2}");
@@ -7077,7 +7068,7 @@ mod tests {
     fn test_display_object_str_key_non_string_falls_back() {
         let mut map: IndexMap<ObjectKey, Value> = IndexMap::new();
         map.insert("__str__".into(), Value::Missing);
-        let obj = Value::Object(map);
+        let obj = Value::Object(Box::new(map));
         // Falls back to dict repr rather than emitting the bad `__str__`.
         // The map has one entry, so this is the single-pair rendering.
         assert_eq!(obj.to_string(), "{'__str__': }");
@@ -7090,7 +7081,7 @@ mod tests {
     fn test_display_object_empty_str_key() {
         let mut map: IndexMap<ObjectKey, Value> = IndexMap::new();
         map.insert("__str__".into(), Value::String("".to_string()));
-        let obj = Value::Object(map);
+        let obj = Value::Object(Box::new(map));
         assert_eq!(obj.to_string(), "");
     }
 
@@ -7100,18 +7091,18 @@ mod tests {
     fn test_object_str_is_the_model_marker_predicate() {
         let mut plain: IndexMap<ObjectKey, Value> = IndexMap::new();
         plain.insert("a".into(), Value::Integer(1));
-        assert_eq!(Value::Object(plain.clone()).object_str(), None);
+        assert_eq!(Value::Object(Box::new(plain.clone())).object_str(), None);
 
         let mut model = plain.clone();
         model.insert("__str__".into(), Value::String("bob".to_string()));
-        assert_eq!(Value::Object(model).object_str(), Some("bob"));
+        assert_eq!(Value::Object(Box::new(model)).object_str(), Some("bob"));
 
         // A non-`String` `"__str__"` is NOT a marker: `Display` falls back to
         // dict repr for it, so the predicate must agree.
         for bad in [Value::Missing, Value::None, Value::Integer(7)] {
             let mut broken = plain.clone();
             broken.insert("__str__".into(), bad);
-            assert_eq!(Value::Object(broken).object_str(), None);
+            assert_eq!(Value::Object(Box::new(broken)).object_str(), None);
         }
 
         // Every other variant is not an object.
@@ -7138,7 +7129,10 @@ mod tests {
             "__str__".into(),
             Value::SafeString("<b>bob</b>".to_string()),
         );
-        assert_eq!(Value::Object(model).object_str(), Some("<b>bob</b>"));
+        assert_eq!(
+            Value::Object(Box::new(model)).object_str(),
+            Some("<b>bob</b>")
+        );
     }
 
     /// `model_str()` is the marker the sinks that treat a map as a MODEL (not as a dict) read: the
@@ -7152,7 +7146,7 @@ mod tests {
             for (k, v) in keys {
                 m.insert((*k).into(), v.clone());
             }
-            Value::Object(m)
+            Value::Object(Box::new(m))
         };
         let text = Value::String("bob".to_string());
         let safe = Value::SafeString("<b>bob</b>".to_string());
@@ -7270,7 +7264,7 @@ mod tests {
             Value::String(String::new()),
             Value::List(vec![Value::Integer(1), Value::String("a".to_string())]),
             Value::Tuple(vec![Value::String("a".to_string())]),
-            Value::Object(map),
+            Value::Object(Box::new(map)),
         ] {
             assert_eq!(
                 value.py_str(),

@@ -470,14 +470,14 @@ mod tests {
         ] {
             m.insert(ObjectKey::Str(k.to_string()), v);
         }
-        Value::Object(m)
+        Value::Object(Box::new(m))
     }
 
     fn plain_dict() -> Value {
         let mut m = indexmap::IndexMap::new();
         m.insert(ObjectKey::Str("a".to_string()), Value::Integer(1));
         m.insert(ObjectKey::Str("b".to_string()), s("x"));
-        Value::Object(m)
+        Value::Object(Box::new(m))
     }
 
     /// A model map is spelled as its text, like `{{ obj }}` spells it, and not
@@ -501,7 +501,10 @@ mod tests {
         ] {
             m.insert(ObjectKey::Str(k.to_string()), v);
         }
-        assert_eq!(pformat(&Value::List(vec![Value::Object(m)])), "[<b>a1</b>]");
+        assert_eq!(
+            pformat(&Value::List(vec![Value::Object(Box::new(m))])),
+            "[<b>a1</b>]"
+        );
     }
 
     /// A dict that merely carries a text `__str__` key (user data, a JSON column) is not a
@@ -511,7 +514,10 @@ mod tests {
         let mut m = indexmap::IndexMap::new();
         m.insert(ObjectKey::Str("__str__".to_string()), s("lbl"));
         m.insert(ObjectKey::Str("k1".to_string()), s("v1"));
-        assert_eq!(pformat(&Value::Object(m)), "{'__str__': 'lbl', 'k1': 'v1'}");
+        assert_eq!(
+            pformat(&Value::Object(Box::new(m))),
+            "{'__str__': 'lbl', 'k1': 'v1'}"
+        );
     }
 
     /// An ordinary dict is untouched: still the sorted map repr.
@@ -538,16 +544,16 @@ mod tests {
         d.insert(ObjectKey::Str("items".to_string()), Value::List(vec![a()]));
         d.insert(ObjectKey::Str("owner".to_string()), b());
         assert_eq!(
-            pformat(&Value::Object(d)),
+            pformat(&Value::Object(Box::new(d))),
             "{'items': [Account:a1], 'owner': Account:a2}"
         );
         let nested = Value::List(vec![Value::List(vec![Value::Tuple(vec![a()])])]);
         assert_eq!(pformat(&nested), "[[(Account:a1,)]]");
-        let named = Value::NamedTuple {
-            name: "Pair".to_string(),
-            fields: vec!["left".to_string(), "right".to_string()],
-            items: vec![a(), b()],
-        };
+        let named = Value::named_tuple(
+            "Pair".to_string(),
+            vec!["left".to_string(), "right".to_string()],
+            vec![a(), b()],
+        );
         let got = pformat(&named);
         assert!(!got.contains("SENTINEL"), "{got}");
         assert!(

@@ -1,14 +1,14 @@
 use djust_core::{values_structurally_equal, Context, Value};
 
 fn row() -> Value {
-    Value::NamedTuple {
-        name: "Row".into(),
-        fields: vec!["label".into(), "items".into()],
-        items: vec![
+    Value::named_tuple(
+        "Row".into(),
+        vec!["label".into(), "items".into()],
+        vec![
             Value::String("label".into()),
             Value::List(vec![Value::Integer(1)]),
         ],
-    }
+    )
 }
 
 #[test]

@@ -25,7 +25,7 @@ use indexmap::IndexMap;
 fn row(key: &str, raw: &str) -> Value {
     let mut m = IndexMap::new();
     m.insert(key.into(), Value::Decimal(raw.to_string()));
-    Value::Object(m)
+    Value::Object(Box::new(m))
 }
 
 /// Render with the loop cache ACTIVE, which is what production does.
@@ -102,14 +102,14 @@ fn a_decimal_does_not_share_a_cache_entry_with_the_string_of_the_same_digits() {
                 // String half: identical payload, different rendering.
                 let mut m = IndexMap::new();
                 m.insert("v".into(), Value::String("1E+1".into()));
-                Value::Object(m)
+                Value::Object(Box::new(m))
             },
             row("v", "1.5E+30"),
             {
                 // Float half: hashes to the same bytes as the Decimal above.
                 let mut m = IndexMap::new();
                 m.insert("v".into(), Value::Float(colliding_float));
-                Value::Object(m)
+                Value::Object(Box::new(m))
             },
         ]),
     );

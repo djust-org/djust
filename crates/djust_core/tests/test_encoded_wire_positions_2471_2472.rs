@@ -159,7 +159,7 @@ fn decode_parts(parts: Vec<Value>) -> Value {
         djust_core::object_key::ObjectKey::Str(tag()),
         Value::List(parts),
     );
-    let bytes = rmp_serde::to_vec(&Value::Object(map)).expect("encode forged payload");
+    let bytes = rmp_serde::to_vec(&Value::Object(Box::new(map))).expect("encode forged payload");
     rmp_serde::from_slice::<Value>(&bytes).expect("decode forged payload")
 }
 
@@ -186,7 +186,7 @@ fn parts_of(e: &Encoded) -> Vec<Value> {
         ]),
         None => Value::None,
     });
-    v.push(Value::Object(e.attrs.clone()));
+    v.push(Value::Object(Box::new(e.attrs.clone())));
     v.push(match &e.items {
         Some(items) => Value::List(items.clone()),
         None => Value::Missing,
@@ -205,7 +205,8 @@ fn parts_of(e: &Encoded) -> Vec<Value> {
                 ]),
             )]
             .into_iter()
-            .collect(),
+            .collect::<indexmap::IndexMap<_, _>>()
+            .into(),
         )
     };
     v.push(match e.eq_class {
@@ -216,7 +217,7 @@ fn parts_of(e: &Encoded) -> Vec<Value> {
         Some(djust_core::EqClass::Identity) => eq_limbs(djust_core::EQ_CLASS_IDENTITY, 0.0, 0.0),
         Some(djust_core::EqClass::Mapping) => eq_limbs(djust_core::EQ_CLASS_MAPPING, 0.0, 0.0),
         Some(djust_core::EqClass::Live) => eq_limbs(djust_core::EQ_CLASS_LIVE, 0.0, 0.0),
-        None => Value::Object(indexmap::IndexMap::new()),
+        None => Value::Object(Box::new(indexmap::IndexMap::new())),
     });
     v
 }
@@ -271,11 +272,11 @@ fn the_attribute_map_carries_every_value_shape_it_can_hold() {
         ),
         (
             "object",
-            Value::Object(attrs_of(&[("a", Value::Integer(1))])),
+            Value::Object(Box::new(attrs_of(&[("a", Value::Integer(1))]))),
         ),
         ("nested_encoded", Value::Encoded(Box::new(sample()))),
         ("empty_list", Value::List(vec![])),
-        ("empty_object", Value::Object(attrs_of(&[]))),
+        ("empty_object", Value::Object(Box::new(attrs_of(&[])))),
     ];
     let mut checked = 0;
     for (name, shape) in &shapes {
@@ -338,7 +339,7 @@ fn a_none_attribute_survives_the_round_trip_as_a_none_2484() {
     // The same value with no `Encoded` involved at all — which is what made
     // "pre-existing" a measurement rather than a claim, and now makes
     // "closed for the whole codec" one.
-    let plain = Value::Object(attrs_of(&[("a", Value::None)]));
+    let plain = Value::Object(Box::new(attrs_of(&[("a", Value::None)])));
     let bytes = rmp_serde::to_vec(&plain).expect("encode");
     match rmp_serde::from_slice::<Value>(&bytes).expect("decode") {
         Value::Object(map) => assert!(
@@ -440,7 +441,7 @@ fn every_variant_is_structurally_equal_to_its_own_clone() {
         ("Tuple", Value::Tuple(vec![Value::Integer(1)])),
         (
             "Object",
-            Value::Object(attrs_of(&[("a", Value::Integer(1))])),
+            Value::Object(Box::new(attrs_of(&[("a", Value::Integer(1))]))),
         ),
         (
             "DictView",
@@ -597,7 +598,7 @@ fn a_malformed_item_slot_reads_as_absent_rather_than_guessed() {
         Value::String("['a']".to_string()),
         Value::Integer(3),
         Value::Bool(true),
-        Value::Object(attrs_of(&[("a", Value::Integer(1))])),
+        Value::Object(Box::new(attrs_of(&[("a", Value::Integer(1))]))),
     ] {
         let mut parts = parts_of(&e);
         parts[9] = bad.clone();
@@ -935,8 +936,8 @@ fn the_older_widths_still_read_with_the_documented_fallbacks() {
                 );
                 assert!(
                     djust_core::values_structurally_equal(
-                        &Value::Object(back.attrs.clone()),
-                        &Value::Object(e.attrs.clone()),
+                        &Value::Object(Box::new(back.attrs.clone())),
+                        &Value::Object(Box::new(e.attrs.clone())),
                     ),
                     "a 9-element read must keep the attributes",
                 );

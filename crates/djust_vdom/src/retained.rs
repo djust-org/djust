@@ -5,7 +5,6 @@
 //! `djust_core::retained` for what that does and does not include.
 
 use crate::VNode;
-use djust_core::retained::table_bytes;
 use std::mem::size_of;
 
 /// What a tree holds, split by what holds it.
@@ -20,7 +19,7 @@ pub struct TreeBytes {
     pub node_structs: usize,
     /// Tag names.
     pub tags: usize,
-    /// Attribute tables and the names and values in them.
+    /// Attribute vectors and the names and values in them.
     pub attrs: usize,
     /// Text content.
     pub text: usize,
@@ -51,7 +50,7 @@ impl VNode {
             out.text_nodes += 1;
         }
         out.tags += self.tag.capacity();
-        out.attrs += table_bytes(self.attrs.capacity(), size_of::<(String, String)>())
+        out.attrs += self.attrs.capacity() * size_of::<(String, String)>()
             + self
                 .attrs
                 .iter()

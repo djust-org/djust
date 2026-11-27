@@ -802,14 +802,10 @@ fn hash_value(value: &djust_core::Value, hasher: &mut DefaultHasher) {
                 hash_value(item, hasher);
             }
         }
-        Value::NamedTuple {
-            name,
-            fields,
-            items,
-        } => {
+        Value::NamedTuple { meta, items } => {
             12u8.hash(hasher);
-            name.hash(hasher);
-            fields.hash(hasher);
+            meta.name.hash(hasher);
+            meta.fields.hash(hasher);
             items.len().hash(hasher);
             for item in items {
                 hash_value(item, hasher);
@@ -1725,7 +1721,7 @@ fn hash_plain<H: Hasher>(value: &djust_core::Value, h: &mut H) -> bool {
         Value::Object(map) => {
             10u8.hash(h);
             map.len().hash(h);
-            for (key, item) in map {
+            for (key, item) in map.iter() {
                 match key {
                     ObjectKey::Str(s) => {
                         0u8.hash(h);
@@ -1761,7 +1757,7 @@ fn hash_plain_sabotaged<H: Hasher>(value: &djust_core::Value, h: &mut H) -> bool
         Value::Object(map) => {
             10u8.hash(h);
             map.len().hash(h);
-            for (key, item) in map {
+            for (key, item) in map.iter() {
                 match key {
                     ObjectKey::Str(s) => s.hash(h),
                     _ => return hash_plain(value, h),
@@ -1841,7 +1837,7 @@ mod item_store_one_walk_4325 {
             Value::String(String::new()),
             Value::String("a\u{0}b".into()),
             Value::List(vec![]),
-            Value::Object(row),
+            Value::Object(Box::new(row)),
         ]
     }
 
@@ -1859,7 +1855,7 @@ mod item_store_one_walk_4325 {
         // Not plain data: refused by both.
         let mut map = IndexMap::new();
         map.insert(ObjectKey::Str("m".into()), Value::ModelName("app.M".into()));
-        let model = Value::Object(map);
+        let model = Value::Object(Box::new(map));
         assert_eq!(store.item_hash(&model), two_walks(&store, &model));
     }
 

@@ -27,7 +27,7 @@ fn make_items(n: usize) -> Vec<Value> {
             m.insert("id".into(), Value::Integer(i as i64));
             m.insert("name".into(), Value::String(format!("item-{i}")));
             m.insert("detail".into(), Value::String(format!("detail-{i}")));
-            Value::Object(m)
+            Value::Object(Box::new(m))
         })
         .collect()
 }
