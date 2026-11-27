@@ -12,6 +12,7 @@ import time
 
 from djust import state
 from djust.decorators import event_handler
+from djust.presence import anonymous_presence_id
 from djust.tenants import TenantMixin, TenantInfo, TenantAwareMemoryBackend
 from djust_shared.views import BaseViewWithNavbar
 
@@ -108,7 +109,9 @@ class TenantDemoView(TenantMixin, BaseViewWithNavbar):
 
         # Set up presence for this tenant
         self._presence_backend = TenantAwareMemoryBackend(tenant_id=tenant_id)
-        session_id = request.session.session_key or "demo-user"
+        # Presence ids are visible to the room: never the raw session key.
+        session_key = request.session.session_key
+        session_id = anonymous_presence_id(session_key) if session_key else "demo-user"
         self._presence_backend.join(
             presence_key="tenant-demo",
             user_id=session_id,

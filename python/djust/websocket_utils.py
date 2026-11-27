@@ -428,11 +428,44 @@ async def _validate_event_security(
     # wrong UX for "you can't do this here, but you can navigate
     # elsewhere." Send the error frame and let the client decide.
     #
-    # Fail-closed on developer-code exceptions: if get_object() or
-    # has_object_permission() raise anything other than PermissionDenied
-    # (e.g., AttributeError in the developer's body), treat as denial.
-    # Security code should not fail-open when the auth predicate crashes.
-    if owner_request is None:
+    # The check runs on the owner AND on every view the event belongs to
+    # (:func:`_views_holding_event`): a component's view, an embedded
+    # child's parents and the page view. An event on a component re-renders
+    # its view, so it is authorized as an event on that view is; on HTTP the
+    # page view's post() runs its own object check before any component or
+    # embedded child is routed to, and the live transports apply the same
+    # rule.
+    for holder in _views_holding_event(owner_instance, root_view):
+        holder_request = (
+            owner_request if holder is owner_instance else getattr(holder, "request", None)
+        )
+        if await _object_permission_refused(ws, holder, holder_request, handler, event_name):
+            return None
+
+    return handler
+
+
+async def _object_permission_refused(
+    ws: Any,
+    holder: object,
+    request: Any,
+    handler: Callable[..., Any],
+    event_name: str,
+) -> bool:
+    """Run the per-event object-permission check of ``holder`` for ``handler``.
+
+    Returns ``True`` after sending the ``permission_denied`` error frame when
+    the check refuses the event, ``False`` when it passes (or ``holder`` has
+    no object lifecycle).
+
+    Fail-closed on developer-code exceptions: if get_object() or
+    has_object_permission() raise anything other than PermissionDenied
+    (e.g., AttributeError in the developer's body), treat as denial.
+    Security code should not fail-open when the auth predicate crashes.
+    """
+    from .auth.core import _has_custom_get_object, check_object_permission_for_event
+
+    if request is None:
         # #1380: when a view overrides get_object() but `request` was
         # never stamped on the instance (e.g., a sticky child whose
         # parent could not propagate the request through a read-only-
@@ -440,73 +473,67 @@ async def _validate_event_security(
         # skip the per-event object-permission check. Fail closed instead.
         # Views that did not opt into the object-permission lifecycle
         # (no get_object override) keep the original no-op semantics.
-        from .auth.core import _has_custom_get_object
-
-        if _has_custom_get_object(owner_instance):
+        if _has_custom_get_object(holder):
             logger.warning(
                 "Per-event object-permission check skipped on %s: "
                 "owner_request is None (child view did not receive a "
                 "request handle from parent). Failing closed.",
-                type(owner_instance).__name__,
+                type(holder).__name__,
             )
             await ws.send_error(
                 "Access denied for this object.",
                 code="permission_denied",
             )
-            return None
+            return True
         # No custom get_object → no object-permission lifecycle → fall
         # through silently (preserves the existing no-op contract).
-    else:
-        from .auth.core import _has_custom_get_object, check_object_permission_for_event
+        return False
 
-        try:
-            # Wrap in sync_to_async to mirror the mount path
-            # (websocket.py _mount_page). check_object_permission calls the
-            # developer's sync get_object(), which per the canonical ADR-017
-            # pattern does a sync ORM read; calling it bare from this async def
-            # raised SynchronousOnlyOperation, which the fail-closed catch below
-            # mistranslated into a spurious "Access denied" on the first event
-            # of every URL-bound LiveView (#1638).
-            #
-            # A view that does not override get_object() has no object
-            # lifecycle: the check returns at once, with no database access,
-            # so it runs inline and saves a thread hop per event (#3095).
-            #
-            # ``check_object_permission_for_event`` is the full check unless the view
-            # lets this read-only handler reuse the object it authorized (#3967). It
-            # runs in the thread too: the view's hook may read the request's user.
-            if _has_custom_get_object(owner_instance):
-                await sync_to_async(check_object_permission_for_event)(
-                    owner_instance, owner_request, handler
-                )
-            else:
-                check_object_permission_for_event(owner_instance, owner_request, handler)
-        except PermissionDenied:
-            await ws.send_error(
-                "Access denied for this object.",
-                code="permission_denied",
-            )
-            return None
-        except Exception as exc:  # noqa: BLE001 — fail-closed by design
-            from ._exposure_diagnostics import log_failure_for
+    try:
+        # Wrap in sync_to_async to mirror the mount path
+        # (websocket.py _mount_page). check_object_permission calls the
+        # developer's sync get_object(), which per the canonical ADR-017
+        # pattern does a sync ORM read; calling it bare from this async def
+        # raised SynchronousOnlyOperation, which the fail-closed catch below
+        # mistranslated into a spurious "Access denied" on the first event
+        # of every URL-bound LiveView (#1638).
+        #
+        # A view that does not override get_object() has no object
+        # lifecycle: the check returns at once, with no database access,
+        # so it runs inline and saves a thread hop per event (#3095).
+        #
+        # ``check_object_permission_for_event`` is the full check unless the view
+        # lets this read-only handler reuse the object it authorized (#3967). It
+        # runs in the thread too: the view's hook may read the request's user.
+        if _has_custom_get_object(holder):
+            await sync_to_async(check_object_permission_for_event)(holder, request, handler)
+        else:
+            check_object_permission_for_event(holder, request, handler)
+    except PermissionDenied:
+        await ws.send_error(
+            "Access denied for this object.",
+            code="permission_denied",
+        )
+        return True
+    except Exception as exc:  # noqa: BLE001 — fail-closed by design
+        from ._exposure_diagnostics import log_failure_for
 
-            log_failure_for(
-                logger,
-                (owner_instance,),
-                exc,
-                "Object-permission check raised non-PermissionDenied exception "
-                "for %s on event %s; failing closed (denying)",
-                owner_instance.__class__.__name__,
-                sanitize_for_log(event_name or ""),
-                traceback=True,
-            )
-            await ws.send_error(
-                "Access denied for this object.",
-                code="permission_denied",
-            )
-            return None
-
-    return handler
+        log_failure_for(
+            logger,
+            (holder,),
+            exc,
+            "Object-permission check raised non-PermissionDenied exception "
+            "for %s on event %s; failing closed (denying)",
+            holder.__class__.__name__,
+            sanitize_for_log(event_name or ""),
+            traceback=True,
+        )
+        await ws.send_error(
+            "Access denied for this object.",
+            code="permission_denied",
+        )
+        return True
+    return False
 
 
 async def _call_handler(

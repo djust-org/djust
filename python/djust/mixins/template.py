@@ -1097,10 +1097,10 @@ class TemplateMixin:
 
             html = render_html(self._rust_view, self.get_template())
 
-        # Record dj-model auto-allowlist from the TEMPLATE SOURCE (CWE-915
-        # mass-assignment guard). Derived from the Rust template engine's parsed
-        # AST (Text-node literals only) — immune to rendered-output poisoning;
-        # see ModelBindingMixin._record_dj_model_fields_from_rust.
+        # Record the dj-model auto-allowlist (CWE-915 mass-assignment guard):
+        # the template's dj-model bindings (template text only) that this
+        # view's current state renders; see
+        # ModelBindingMixin._record_dj_model_fields_from_rust.
         self._record_dj_model_fields_from_rust(self._rust_view)
 
         # Inject handler metadata for client-side decorators
@@ -2109,10 +2109,9 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
                 from .._render_provenance import render_html
 
                 liveview_html = render_html(self._rust_view, self._full_template)
-            # Record dj-model auto-allowlist from the TEMPLATE SOURCE (CWE-915
-            # mass-assignment guard). Derived from the Rust template AST
-            # (Text-node literals) — reflects exactly the developer-exposed
-            # static bindings; immune to rendered-output poisoning.
+            # Record the dj-model auto-allowlist (CWE-915 mass-assignment
+            # guard): the template's dj-model bindings (template text only)
+            # that this view's current state renders.
             self._record_dj_model_fields_from_rust(self._rust_view)
 
             # #1737: normalize the rendered dj-root so the initial-GET output
@@ -2565,14 +2564,14 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
 
         pending_owned = isinstance(html, RenderedDiffHTML)
 
-        # Record dj-model auto-allowlist from the TEMPLATE SOURCE (CWE-915
-        # mass-assignment guard). This is the dominant render path — HTTP-GET
-        # baseline, every WS mount, and every WS event re-render all funnel
-        # through here — so the allowlist tracks the currently-exposed static
-        # bindings on every render. Derived from the Rust template AST
-        # (Text-node literals only via ``dj_model_fields()``), which reflects any
-        # ``update_template`` done above for dynamic templates; immune to
-        # rendered-output poisoning (text nodes, interpolated attrs, ``|safe``).
+        # Record the dj-model auto-allowlist (CWE-915 mass-assignment guard).
+        # This is the dominant render path — HTTP-GET baseline, every WS mount,
+        # and every WS event re-render all funnel through here — so the
+        # allowlist tracks, on every render, the template's dj-model bindings
+        # (template text only, reflecting any ``update_template`` above) that
+        # the current state renders: a binding in an untaken ``{% if %}``
+        # branch is not writable, and rendered data (text nodes, interpolated
+        # attrs, ``|safe``) cannot add one.
         if not pending_owned:
             self._record_dj_model_fields_from_rust(self._rust_view)
 

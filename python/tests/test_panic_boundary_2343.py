@@ -181,6 +181,7 @@ class TestGuardCoversTheRenderSurface:
             "extract_printed_item_key_reads_py",
             "extract_own_reads_py",
             "dj_model_fields_from_template",
+            "writable_dj_model_fields",
             "compute_template_hash",
             # Both #2477/#2489 predicates. They CONVERT A USER VALUE — the
             # shallow one runs every `FromPyObject` arm probe and the gate; the

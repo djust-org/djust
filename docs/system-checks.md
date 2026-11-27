@@ -2,7 +2,7 @@
 
 <!-- BEGIN GENERATED check-count: do not edit by hand; edit docs/checks/<ID>.md and run make generated-docs -->
 
-Quick reference for all 131 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
+Quick reference for all 132 djust system checks — IDs, severities, suppression patterns, and known false positive conditions.
 
 <!-- END GENERATED check-count -->
 
@@ -140,6 +140,7 @@ Run checks with: `python manage.py check --deploy` or `python manage.py djust_ch
 | T027 | Templates | Warning | An explicit-exposure view's template reads a name the view holds as an attribute but does not supply (renders blank, no error), or an `X_count` that 1.x generated from a supplied `X` |
 | T028 | Templates | Retired | Retired in 2.0 with the legacy parameter policy (#4205); strict findings are djust.T020 / T021. Never emitted; the ID is not reused |
 | T029 | Templates | Warning | Python code emits a `data-*` event argument (strict handlers receive only `dj-value-*`) |
+| T030 | Templates | Warning | '`dj-model` inside a custom block tag body is not writable unless listed in `allowed_model_fields`' |
 | Q001 | Quality | Info | print() statement found |
 | Q002 | Quality | Warning | f-string in logger call |
 | Q003 | Quality | Info | console.log without djustDebug guard |
@@ -1322,6 +1323,13 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
 - **What it detects**: a string literal or f-string in a `LiveView`, `LiveComponent` or `Component` class, or in a template-tag module, that builds an element with a `dj-*` event binding and a `data-*` attribute naming an argument of the bound handler. A strict handler never receives `data-*` arguments. Markup assembled by concatenation across literals, built by helper functions outside the scanned classes and libraries, or with dynamic attribute names is not seen.
 - **Fix**: emit `dj-value-<name>` instead (`format_html('... dj-value-item-id="{}"', value)`). A `data-*` attribute that only styles or scripts the element can stay.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["T029"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.T029"]`
+
+### T030 — `dj-model` inside a custom block tag body
+- **Severity**: Warning
+- **Method**: Template scan (each template file's tags, in order).
+- **What it detects**: a `dj-model="<field>"` binding in the body of a block tag other than Django's control-flow and structural tags (`if`, `for`, `with`, `block`, `autoescape`, `spaceless`, `partialdef` and the locale/time-zone scope tags; a `{% filter %}` body counts as custom, since its filters rewrite it), including one in a template that a literal `{% include %}` in such a body pulls in (reported at the include). The view's dj-model write allowlist holds only the bindings the last render emitted from template text, and the body of a custom block tag (`{% ifperm %}…{% endifperm %}`, `{% ifchanged %}`, a library block tag) never counts, because the tag decides what of its body reaches the page. A block-tag handler that declares `EMITS_BODY = True` is exempt; the built-in component tags that always emit their body (`card`, `accordion`, `tabs`, `form_group`, `app_shell` and the others listed in `djust.components.rust_handlers.EMITS_BODY_TAGS`) do. `modal`, `dropdown`, `await`, `nav_item`, `{% call %}` / `{% slot %}` and the other tags that can hide their body do not.
+- **Fix**: list the field in the view's `allowed_model_fields`, or move the input out of the tag.
+- **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["T030"]}` or `SILENCED_SYSTEM_CHECKS = ["djust.T030"]`
 
 <!-- END GENERATED check-sections:T -->
 

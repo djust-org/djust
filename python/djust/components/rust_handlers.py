@@ -3068,6 +3068,80 @@ NATIVE_BLOCK_HANDLERS = [
 #: ``test_raw_body_tags_are_exactly_the_bridged_tags_that_read_their_children``.
 RAW_BODY_TAGS = frozenset({"form_array", "split_pane", "tabs"})
 
+#: The built-in block tags whose handler always puts its rendered body into its output unchanged,
+#: so the ``dj-model`` bindings in the body count toward the view's write allowlist
+#: (``EMITS_BODY``). Every other block tag decides what of its body reaches the page (``modal``,
+#: ``dropdown``, ``await``, ``nav_item``, ``{% call %}`` / ``{% slot %}``, ...) or escapes it
+#: (``agent_step``, ``copyable_text``), and a binding in its body is listed in
+#: ``allowed_model_fields``. The raw-body tags render exactly the parts they emit and report the
+#: bindings of that render. Pinned by ``test_dj_model_emits_body_tags``.
+EMITS_BODY_TAGS = frozenset(
+    {
+        # native handlers
+        "app_shell",
+        "app_sidebar",
+        "app_header",
+        "app_content",
+        "accordion",
+        "accordion_item",
+        "sidebar",
+        "sidebar_item",
+        "nav_menu",
+        "toolbar",
+        "toolbar_overflow",
+        "filter_bar",
+        "page_header",
+        "page_header_actions",
+        # bridged Django tags
+        "alert",
+        "announcement_bar",
+        "aspect_ratio",
+        "callout",
+        "card",
+        "collapsible",
+        "command_palette",
+        "context_menu",
+        "cookie_consent",
+        "dashboard_grid",
+        "dj_label",
+        "error_boundary",
+        "expandable_text",
+        "fieldset",
+        "form_group",
+        "hover_card",
+        "infinite_scroll",
+        "input_addon",
+        "input_group",
+        "loading_overlay",
+        "modal_description",
+        "page_alert",
+        "popconfirm",
+        "popover",
+        "resizable_panel",
+        "scroll_area",
+        "sheet",
+        "sticky_header",
+        "tab",
+        "timeline",
+        "timeline_item",
+        "tooltip",
+        "wizard",
+        # raw-body tags
+        "form_array",
+        "split_pane",
+        "tabs",
+    }
+)
+
+
+def _declare_emits_body(handler: object) -> None:
+    """Mark a block-tag handler as one that always emits its body (``EMITS_BODY``, read by the
+    Rust registry when the handler is registered). Handlers are plain objects of many classes, so
+    the attribute is set through an ``Any`` view of the handler."""
+    declared: Any = handler
+    declared.EMITS_BODY = True
+
+
 #: Separator tokens of a raw-body tag (``{% pane %}`` inside ``{% split_pane %}``). For template path
 #: extraction the segments are one body rendered with the same context, so the separator is dropped.
 RAW_BODY_SEGMENT_TAGS: Mapping[str, str] = MappingProxyType({"split_pane": "pane"})
@@ -3169,6 +3243,8 @@ def register_with_rust_engine() -> None:
             unregister_block_tag_handler(name)
         if kind != "raw":
             unregister_raw_block_tag_handler(name)
+        if name in EMITS_BODY_TAGS:
+            _declare_emits_body(handler)
         if kind == "tag":
             register_tag_handler(name, handler)
         elif kind == "block":
@@ -3190,6 +3266,8 @@ def register_with_rust_engine() -> None:
     for tag_name, end_tag, handler in NATIVE_BLOCK_HANDLERS:
         unregister_tag_handler(tag_name)
         unregister_raw_block_tag_handler(tag_name)
+        if tag_name in EMITS_BODY_TAGS:
+            _declare_emits_body(handler)
         register_block_tag_handler(
             tag_name,
             end_tag,

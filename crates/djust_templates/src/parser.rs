@@ -3572,7 +3572,7 @@ fn collect_dj_model_fields_depth<L: crate::inheritance::TemplateLoader>(
 /// never attacker-controlled, so even a benign developer-prose false-positive
 /// (e.g. the bytes `dj-model="x"` shown as documentation) is harmless — it can
 /// only widen the allowlist with a field the developer themselves typed.
-fn scan_dj_model_in_text(text: &str, fields: &mut HashSet<String>) {
+pub(crate) fn scan_dj_model_in_text(text: &str, fields: &mut HashSet<String>) {
     const ATTR: &str = "dj-model";
     let bytes = text.as_bytes();
     let mut search_from = 0usize;
@@ -3640,6 +3640,99 @@ pub fn extract_dj_model_fields<L: crate::inheritance::TemplateLoader>(
     let mut out: Vec<String> = fields.into_iter().collect();
     out.sort();
     Ok(out)
+}
+
+/// [`extract_dj_model_fields`], split by whether each binding is always
+/// rendered: returns `(all, unconditional)`.
+///
+/// A binding is unconditional when the path from the template root to its
+/// `Node::Text` crosses only nodes that always render their children
+/// (`{% block %}` of the resolved tree, `{% with %}`, a literal
+/// `{% include %}`, a non-lazy source location). Anything else (`{% if %}`,
+/// `{% for %}`, custom block tags, partials, lazy sites — which include an
+/// `{% include %}` site the parser wraps as one — ...) makes it conditional. A caller grants unconditional bindings outright and grants a
+/// conditional one only when a render shows it reached the output.
+pub fn extract_dj_model_field_split<L: crate::inheritance::TemplateLoader>(
+    source: &str,
+    loader: Option<&L>,
+) -> Result<(Vec<String>, Vec<String>)> {
+    let tokens = crate::lexer::tokenize(source)?;
+    let nodes = parse(&tokens)?;
+    let mut all: HashSet<String> = HashSet::new();
+    let mut unconditional: HashSet<String> = HashSet::new();
+    split_dj_model_fields_depth(&nodes, loader, &mut all, &mut unconditional, false, 0);
+    let mut all: Vec<String> = all.into_iter().collect();
+    all.sort();
+    let mut unconditional: Vec<String> = unconditional.into_iter().collect();
+    unconditional.sort();
+    Ok((all, unconditional))
+}
+
+fn split_dj_model_fields_depth<L: crate::inheritance::TemplateLoader>(
+    nodes: &[Node],
+    loader: Option<&L>,
+    all: &mut HashSet<String>,
+    unconditional: &mut HashSet<String>,
+    conditional: bool,
+    depth: usize,
+) {
+    for node in nodes {
+        match node {
+            Node::Text(text) => {
+                let mut found = HashSet::new();
+                scan_dj_model_in_text(text, &mut found);
+                if !conditional {
+                    unconditional.extend(found.iter().cloned());
+                }
+                all.extend(found);
+            }
+            // A raw-block body is source its handler renders itself: never
+            // unconditional, granted only when a handler declaring
+            // `EMITS_BODY` reports it from its render.
+            Node::RawBlockCustomTag { body, .. } => scan_dj_model_in_text(body, all),
+            Node::Include { template, .. } => {
+                if depth >= MAX_INCLUDE_DEPTH {
+                    continue;
+                }
+                if let Some(loader) = loader {
+                    let name = template.trim_matches(|c| c == '"' || c == '\'');
+                    if !name.is_empty() {
+                        if let Ok(included) = loader.load_template(name) {
+                            split_dj_model_fields_depth(
+                                &included,
+                                Some(loader),
+                                all,
+                                unconditional,
+                                conditional,
+                                depth + 1,
+                            );
+                        }
+                    }
+                }
+            }
+            _ => {
+                let transparent = match node {
+                    Node::Block { .. } | Node::With { .. } => true,
+                    Node::Located {
+                        lazy_site,
+                        lazy_text,
+                        ..
+                    } => lazy_site.is_none() && lazy_text.is_none(),
+                    _ => false,
+                };
+                for children in node.child_lists().into_iter().flatten() {
+                    split_dj_model_fields_depth(
+                        children,
+                        loader,
+                        all,
+                        unconditional,
+                        conditional || !transparent,
+                        depth,
+                    );
+                }
+            }
+        }
+    }
 }
 
 /// Extract per-node dependency sets from a list of AST nodes.

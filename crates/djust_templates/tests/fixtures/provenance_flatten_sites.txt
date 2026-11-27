@@ -641,13 +641,14 @@ Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
 self.dj_if_id_namespace = namespace.to_string();
 let prefix = format!("{key}.");
 let key = (self.template_source.to_string(), self.template_dirs.clone());
+let key = (self.template_source.to_string(), self.template_dirs.clone());
 Ok(dict.into())
 page.rendered.html,
 let html = page.rendered.html.clone();
 .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?,
 let (start, end) = page.range.unwrap_or((0, page.rendered.html.len()));
 return Ok((rendered.html[start..end].to_owned(), spans, origins));
-Ok((result.html, spans, result.origins))
+(result.html, spans, result.origins)
 patches.map(|bytes| PyBytes::new(py, &bytes).into()),
 rendered.html
 rendered.html

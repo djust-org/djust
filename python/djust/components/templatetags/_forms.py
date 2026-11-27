@@ -612,6 +612,9 @@ def render_popconfirm(kw: Any, content: Any) -> SafeString:
 
 
 class PopconfirmNode(template.Node):
+    #: Always emits its rendered body (see ``djust_components.EMITS_BODY`` marking).
+    EMITS_BODY = True
+
     def __init__(self, nodelist: Any, kwargs: Any) -> None:
         self.nodelist = nodelist
         self.kwargs = kwargs

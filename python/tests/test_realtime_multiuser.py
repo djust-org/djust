@@ -21,6 +21,7 @@ from djust.presence import (
     PRESENCE_TIMEOUT,
     PresenceManager,
     PresenceMixin,
+    anonymous_presence_id,
 )
 
 
@@ -213,7 +214,7 @@ class TestPresenceTracking:
         assert view.presence_count() == 1
 
     def test_anonymous_user_tracked_by_session(self):
-        """Anonymous clients are tracked by session key, not user id."""
+        """Anonymous clients are tracked by an opaque id derived from the session."""
         Cls = _make_view_class("doc:anon")
         anon = FakeAnonymousUser()
         v = Cls.__new__(Cls)
@@ -223,7 +224,9 @@ class TestPresenceTracking:
 
         v.track_presence()
         assert v.presence_count() == 1
-        assert v.list_presences()[0]["id"] == "anon_abc123"
+        presence_id = v.list_presences()[0]["id"]
+        assert presence_id == anonymous_presence_id("abc123")
+        assert "abc123" not in presence_id
 
     def test_partial_leave_updates_others(self):
         """After one client leaves, remaining clients see reduced count."""

@@ -111,6 +111,7 @@ from weakref import WeakValueDictionary
 import logging
 import importlib
 import threading
+from contextlib import contextmanager
 from typing import Any, Callable, Dict, FrozenSet, Iterable, Iterator, List, Optional, Set, Tuple
 
 from django.utils.functional import Promise
@@ -1601,6 +1602,10 @@ class LibraryTagHandler:
     """The generic inline handler: a ``simple_tag``, an ``inclusion_tag``, or
     a raw ``@register.tag`` that builds its node from its own token."""
 
+    #: Whether the handler always emits its body, so its ``dj-model`` bindings count
+    #: (``block_tag_handler_emits_body``). Built-in tags set it; see ``rust_handlers.EMITS_BODY_TAGS``.
+    EMITS_BODY: bool = False
+
     #: Share the render's ``RenderContext`` (#3044). True only for djust's own
     #: tags in :data:`_DJUST_TAGS_BRIDGED`; see :data:`_render_scope`.
     shares_render_context = False
@@ -2035,6 +2040,10 @@ class LibraryRawBlockTagHandler:
     point, a LiveView page 500s exactly as Django's does.
     """
 
+    #: Whether the handler always emits its body, so its ``dj-model`` bindings count
+    #: (``block_tag_handler_emits_body``). Built-in tags set it; see ``rust_handlers.EMITS_BODY_TAGS``.
+    EMITS_BODY: bool = False
+
     #: Share the render's ``RenderContext`` (#3044). True only for djust's own
     #: tags in :data:`_DJUST_TAGS_BRIDGED`; see :data:`_render_scope`.
     shares_render_context = False
@@ -2087,6 +2096,25 @@ class LibraryRawBlockTagHandler:
     #: landed together.
     WANTS_AUTOESCAPE = True
 
+    @contextmanager
+    def _recording_dj_model(self) -> Iterator[None]:
+        """A handler declaring ``EMITS_BODY`` (it renders exactly the parts of its body it emits)
+        reports the template-text ``dj-model`` bindings of its render to the view render recording
+        them. Any other raw-block body never counts."""
+        if not getattr(self, "EMITS_BODY", False):
+            yield
+            return
+        from djust._rust import dj_model_recording_active, record_dj_model_bindings
+
+        if not dj_model_recording_active():
+            yield
+            return
+        from ._dj_model_bindings import record_bindings
+
+        with record_bindings() as fields:
+            yield
+        record_dj_model_bindings(sorted(fields))
+
     def render(  # type: ignore[override]
         self, args: List[str], body: str, context: Dict[str, Any], autoescape: bool = True
     ) -> Tuple[Any, Dict[str, Any]]:
@@ -2103,8 +2131,9 @@ class LibraryRawBlockTagHandler:
             ctx.template = _stub_template_with(string_if_invalid, debug)
             # The same as `_render_node` (#3044, #1646).
             _share_render_context(ctx, self.shares_render_context)
-            with floor_scope(ctx):
-                output = self._compile(list(args), body).render(ctx)
+            with self._recording_dj_model():
+                with floor_scope(ctx):
+                    output = self._compile(list(args), body).render(ctx)
             after = ctx.dicts[-1]
             bindings = {
                 key: value

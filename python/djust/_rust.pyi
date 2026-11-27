@@ -16,6 +16,7 @@ from typing import (
     Literal,
     NoReturn,
     Optional,
+    Set,
     Tuple,
     overload,
 )
@@ -195,9 +196,13 @@ def render_template_with_dirs(
     compiled_template: CompiledTemplate | None = None,
     assignments: Dict[str, Any] | None = None,
     uncached_template_dirs: List[str] | None = None,
+    dj_model_bindings: Set[str] | None = None,
 ) -> str:
     """
     Render a template with support for {% include %} tags.
+
+    ``dj_model_bindings``, when given, receives the ``dj-model`` fields this
+    render emitted from template text (``djust._dj_model_bindings.suspend_recording``).
 
     Extends render_template to support template inheritance and includes
     by providing template directories for the Rust renderer to search.
@@ -978,6 +983,24 @@ def register_block_tag_handler(tag_name: str, end_tag: str, handler: Any) -> Non
     """
     ...
 
+def dj_model_recording_active() -> bool:
+    """Whether a view render on this thread is recording its dj-model bindings."""
+    ...
+
+def record_dj_model_bindings(fields: List[str]) -> None:
+    """Add the template-text dj-model bindings a raw-block handler declaring
+    ``EMITS_BODY`` rendered to the active recording (no-op without one)."""
+    ...
+
+def block_tag_handler_emits_body(tag_name: str) -> bool:
+    """Whether the block (or raw-block) tag handler for ``tag_name`` declared ``EMITS_BODY``.
+
+    Such a handler always emits its rendered body, so ``dj-model`` bindings
+    in the body count toward the view's write allowlist. False for an
+    unknown tag.
+    """
+    ...
+
 def has_block_tag_handler(tag_name: str) -> bool:
     """
     Check if a block tag handler is registered for the given tag name.
@@ -1336,6 +1359,21 @@ class RustLiveView:
         """
         ...
 
+    def writable_dj_model_fields(self, cache: bool = False) -> List[str]:
+        """
+        The dj-model fields a client may write for this view's current state:
+        the static bindings of :meth:`dj_model_fields` that the state renders.
+
+        Bindings on always-rendered paths are granted outright; a binding in an
+        ``{% if %}``/``{% for %}`` branch, a custom block tag, an include or a
+        lazy site is granted only when a bindings-only render of the current
+        state emits it from template text (inline custom tags are not executed
+        and no render cache changes). Rendered data never adds a field. In
+        authenticated partial-root mode, the committed page's
+        provenance-checked fields. ``cache`` as for :meth:`dj_model_fields`.
+        """
+        ...
+
     def clear_fragment_cache(self) -> None:
         """
         Clear the partial-render fragment cache, forcing the next render to
@@ -1538,6 +1576,9 @@ __all__ = [
     # Block tag handlers
     "register_block_tag_handler",
     "has_block_tag_handler",
+    "block_tag_handler_emits_body",
+    "dj_model_recording_active",
+    "record_dj_model_bindings",
     "unregister_block_tag_handler",
     "clear_block_tag_handlers",
     # Assign tag handlers (context-mutating)
