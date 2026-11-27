@@ -3133,6 +3133,15 @@ EMITS_BODY_TAGS = frozenset(
     }
 )
 
+
+def _declare_emits_body(handler: object) -> None:
+    """Mark a block-tag handler as one that always emits its body (``EMITS_BODY``, read by the
+    Rust registry when the handler is registered). Handlers are plain objects of many classes, so
+    the attribute is set through an ``Any`` view of the handler."""
+    declared: Any = handler
+    declared.EMITS_BODY = True
+
+
 #: Separator tokens of a raw-body tag (``{% pane %}`` inside ``{% split_pane %}``). For template path
 #: extraction the segments are one body rendered with the same context, so the separator is dropped.
 RAW_BODY_SEGMENT_TAGS: Mapping[str, str] = MappingProxyType({"split_pane": "pane"})
@@ -3235,7 +3244,7 @@ def register_with_rust_engine() -> None:
         if kind != "raw":
             unregister_raw_block_tag_handler(name)
         if name in EMITS_BODY_TAGS:
-            handler.EMITS_BODY = True
+            _declare_emits_body(handler)
         if kind == "tag":
             register_tag_handler(name, handler)
         elif kind == "block":
@@ -3258,7 +3267,7 @@ def register_with_rust_engine() -> None:
         unregister_tag_handler(tag_name)
         unregister_raw_block_tag_handler(tag_name)
         if tag_name in EMITS_BODY_TAGS:
-            handler.EMITS_BODY = True
+            _declare_emits_body(handler)
         register_block_tag_handler(
             tag_name,
             end_tag,

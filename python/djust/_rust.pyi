@@ -16,6 +16,7 @@ from typing import (
     Literal,
     NoReturn,
     Optional,
+    Set,
     Tuple,
     overload,
 )
@@ -195,9 +196,13 @@ def render_template_with_dirs(
     compiled_template: CompiledTemplate | None = None,
     assignments: Dict[str, Any] | None = None,
     uncached_template_dirs: List[str] | None = None,
+    dj_model_bindings: Set[str] | None = None,
 ) -> str:
     """
     Render a template with support for {% include %} tags.
+
+    ``dj_model_bindings``, when given, receives the ``dj-model`` fields this
+    render emitted from template text (``djust._dj_model_bindings.suspend_recording``).
 
     Extends render_template to support template inheritance and includes
     by providing template directories for the Rust renderer to search.

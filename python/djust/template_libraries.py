@@ -1602,6 +1602,10 @@ class LibraryTagHandler:
     """The generic inline handler: a ``simple_tag``, an ``inclusion_tag``, or
     a raw ``@register.tag`` that builds its node from its own token."""
 
+    #: Whether the handler always emits its body, so its ``dj-model`` bindings count
+    #: (``block_tag_handler_emits_body``). Built-in tags set it; see ``rust_handlers.EMITS_BODY_TAGS``.
+    EMITS_BODY: bool = False
+
     #: Share the render's ``RenderContext`` (#3044). True only for djust's own
     #: tags in :data:`_DJUST_TAGS_BRIDGED`; see :data:`_render_scope`.
     shares_render_context = False
@@ -2035,6 +2039,10 @@ class LibraryRawBlockTagHandler:
     the ``RETURNS_BINDINGS`` exception channel (#2547) — parity is the
     point, a LiveView page 500s exactly as Django's does.
     """
+
+    #: Whether the handler always emits its body, so its ``dj-model`` bindings count
+    #: (``block_tag_handler_emits_body``). Built-in tags set it; see ``rust_handlers.EMITS_BODY_TAGS``.
+    EMITS_BODY: bool = False
 
     #: Share the render's ``RenderContext`` (#3044). True only for djust's own
     #: tags in :data:`_DJUST_TAGS_BRIDGED`; see :data:`_render_scope`.
