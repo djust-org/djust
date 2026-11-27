@@ -789,7 +789,7 @@ class TemplateMixin:
             self, preloaded_context: Optional[Dict[str, Any]] = None
         ) -> bool: ...
 
-        def _record_dj_model_fields_from_rust(self, rust_view: Any) -> None: ...
+        def _record_dj_model_fields_from_rust(self, rust_view: Any, rendered_html: Any) -> None: ...
 
         def _reset_temporary_assigns(self) -> None: ...
 
@@ -1100,8 +1100,9 @@ class TemplateMixin:
         # Record dj-model auto-allowlist from the TEMPLATE SOURCE (CWE-915
         # mass-assignment guard). Derived from the Rust template engine's parsed
         # AST (Text-node literals only) — immune to rendered-output poisoning;
-        # see ModelBindingMixin._record_dj_model_fields_from_rust.
-        self._record_dj_model_fields_from_rust(self._rust_view)
+        # see ModelBindingMixin._record_dj_model_fields_from_rust. Narrowed to
+        # the bindings this render emitted (an untaken {% if %} grants none).
+        self._record_dj_model_fields_from_rust(self._rust_view, html)
 
         # Inject handler metadata for client-side decorators
         html = self._inject_handler_metadata(html, request=request)
@@ -2103,7 +2104,7 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
                 if request is None:
                     self._rust_view.commit_authenticated_page()
                     self._pending_authenticated_page = False
-                    self._record_dj_model_fields_from_rust(self._rust_view)
+                    self._record_dj_model_fields_from_rust(self._rust_view, rendered_page)
                 return rendered_page
             with library_render_scope():
                 from .._render_provenance import render_html
@@ -2112,8 +2113,9 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
             # Record dj-model auto-allowlist from the TEMPLATE SOURCE (CWE-915
             # mass-assignment guard). Derived from the Rust template AST
             # (Text-node literals) — reflects exactly the developer-exposed
-            # static bindings; immune to rendered-output poisoning.
-            self._record_dj_model_fields_from_rust(self._rust_view)
+            # static bindings; immune to rendered-output poisoning — narrowed to
+            # the bindings present in this render's output.
+            self._record_dj_model_fields_from_rust(self._rust_view, liveview_html)
 
             # #1737: normalize the rendered dj-root so the initial-GET output
             # is structurally identical to the first WS frame. The WS path
@@ -2573,8 +2575,12 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
         # (Text-node literals only via ``dj_model_fields()``), which reflects any
         # ``update_template`` done above for dynamic templates; immune to
         # rendered-output poisoning (text nodes, interpolated attrs, ``|safe``).
+        # The static set is narrowed to the bindings in this render's output,
+        # so a binding inside an {% if %} branch not rendered for this instance
+        # is not writable. A pending owned diff records at commit
+        # (``_child_rendering``), from the same prepared output.
         if not pending_owned:
-            self._record_dj_model_fields_from_rust(self._rust_view)
+            self._record_dj_model_fields_from_rust(self._rust_view, html)
 
         # Capture per-phase Rust timing (render, parse, diff, serialize)
         self._rust_render_timing = self._rust_view.get_render_timing()

@@ -46,12 +46,14 @@ class TestModelBindingMixin:
         # real collection path (ModelBindingMixin._record_dj_model_fields_from_source,
         # backed by the Rust template walker). RestrictedView tests below use
         # the explicit allowed_model_fields path instead.
-        self.view._record_dj_model_fields_from_source(
+        source = (
             '<input dj-model="search_query">'
             '<input dj-model="count">'
             '<input dj-model="price">'
             '<input dj-model="active">'
         )
+        # A static template renders as itself.
+        self.view._record_dj_model_fields_from_source(source, rendered_html=source)
 
     def test_update_string_field(self):
         self.view.update_model(field="search_query", value="hello")

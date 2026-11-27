@@ -1014,6 +1014,61 @@ fn scoped_model_fields(html: &str, spans: &[(usize, usize)], scope: &Handle) -> 
     fields.into_iter().collect()
 }
 
+/// The `dj-model` values bound by elements of a rendered page, as the HTML5
+/// tree builder sees them.
+///
+/// The dj-model write allowlist of a view is the template's static bindings
+/// narrowed to the ones this render actually emitted: a binding inside an
+/// `{% if %}` branch that was not taken is not in the output, so it is not
+/// writable. Only element attributes count; text, comments and escaped values
+/// cannot create one. Embedded child views (`dj-view` wrappers) are skipped:
+/// each child keeps its own allowlist. `<template>` contents are walked.
+pub fn rendered_model_fields(html: &str) -> Vec<String> {
+    use html5ever::tendril::TendrilSink;
+
+    let bytes = html.as_bytes();
+    if !bytes
+        .windows(8)
+        .any(|window| window.eq_ignore_ascii_case(b"dj-model"))
+    {
+        return Vec::new();
+    }
+    let dom = html5ever::parse_document(RcDom::default(), Default::default()).one(html);
+    let mut fields = std::collections::BTreeSet::new();
+    let mut nodes = vec![dom.document.clone()];
+    while let Some(node) = nodes.pop() {
+        if let NodeData::Element {
+            attrs,
+            template_contents,
+            ..
+        } = &node.data
+        {
+            let attrs = attrs.borrow();
+            if has_attr(&attrs, "dj-view")
+                && (has_attr(&attrs, "data-djust-embedded")
+                    || has_attr(&attrs, "dj-lazy")
+                    || has_attr(&attrs, "data-djust-target")
+                    || has_attr(&attrs, "dj-sticky-root"))
+            {
+                continue;
+            }
+            if let Some(field) = attrs
+                .iter()
+                .find(|a| a.name.ns.is_empty() && &*a.name.local == "dj-model")
+                .map(|a| a.value.to_string())
+                .filter(|s| !s.is_empty())
+            {
+                fields.insert(field);
+            }
+            if let Some(contents) = template_contents.borrow().as_ref() {
+                nodes.push(contents.clone());
+            }
+        }
+        nodes.extend(node.children.borrow().iter().cloned());
+    }
+    fields.into_iter().collect()
+}
+
 /// Return authored bindings from a rootless fragment, rejecting any page-view
 /// candidate (including untrusted ones) rather than treating it as a fragment.
 /// The supplied spans must already be filtered by B/P attribute liveness.
@@ -1423,6 +1478,30 @@ pub fn validate_root_fragment(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn rendered_model_fields_reads_only_element_attributes() {
+        let html = concat!(
+            "<div dj-root><input dj-model=\"name\">",
+            "<p>dj-model=&quot;is_staff&quot; dj-model=is_staff</p>",
+            "<!-- <input dj-model=\"hidden\"> -->",
+            "<textarea>&lt;input dj-model=\"secret\"&gt;</textarea>",
+            "<table><tr><td><SELECT DJ-MODEL='choice'></SELECT></td></tr></table>",
+            "<template><input dj-model=\"row\"></template></div>",
+        );
+        assert_eq!(rendered_model_fields(html), vec!["choice", "name", "row"]);
+    }
+
+    #[test]
+    fn rendered_model_fields_skips_embedded_child_views() {
+        let html = concat!(
+            "<div dj-root><input dj-model=\"own\">",
+            "<div dj-view data-djust-embedded=\"c1\"><input dj-model=\"child\"></div>",
+            "<div dj-view dj-sticky-root><input dj-model=\"sticky\"></div></div>",
+        );
+        assert_eq!(rendered_model_fields(html), vec!["own"]);
+        assert!(rendered_model_fields("<div>no bindings</div>").is_empty());
+    }
     use super::*;
     const TAG: &str = "<div dj-view=\"app.Child\" dj-lazy=\"visible\"></div>";
     #[test]
