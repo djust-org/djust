@@ -26,7 +26,7 @@ Example Usage:
     response = handle_exception(exception, error_type="event", event_name="click")
 """
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .attribute_guard import (
     safe_setattr,
@@ -86,6 +86,9 @@ __all__ = [
     "get_max_age",
     "DEFAULT_MAX_AGE",
 ]
+
+if TYPE_CHECKING:  # static-analysis only; the runtime import stays lazy (see _MOVED)
+    from .._exposure_snapshots import DEFAULT_MAX_AGE, get_max_age
 
 #: Names served from the module that now owns them. Lazy: that module imports
 #: the exposure contract, which this package must not load at import time.

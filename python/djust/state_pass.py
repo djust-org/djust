@@ -33,7 +33,7 @@ original functions over a generated corpus.
 
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta
+import datetime as _dt
 from decimal import Decimal
 from math import copysign as _copysign
 from typing import Any, Hashable, List, Optional, Tuple
@@ -87,7 +87,9 @@ _PLAIN_SCALARS = frozenset((str, int, float, bool, type(None)))
 # Exact leaf types ``normalize_django_value`` returns unchanged (outside the
 # session round trip, which this module never serves). Exact types only: a
 # subclass may override anything the conversion consults.
-_PASSTHROUGH_LEAVES = frozenset((Decimal, datetime, date, time, timedelta, set, frozenset))
+_PASSTHROUGH_LEAVES = frozenset(
+    (Decimal, _dt.datetime, _dt.date, _dt.time, _dt.timedelta, set, frozenset)
+)
 
 # A path is a linked tuple ``(parent, is_dict, key)`` rooted at the top-level
 # prefix string, spelled out only when a ``SafeString`` is found. Spelling it

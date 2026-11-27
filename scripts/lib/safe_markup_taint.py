@@ -414,8 +414,6 @@ URL_ATTRIBUTES = frozenset(
 )
 #: Elements whose body is not HTML text: entities are not decoded there, the text is code.
 RAW_TEXT_ELEMENTS = frozenset({"script", "style"})
-#: The positions of :meth:`_Module._html_context` where the text is run or parsed again.
-_CODE_CONTEXTS = frozenset({"handler", "script", "style", "srcdoc"})
 #: ``<script type=...>`` values that make the element a JSON data block: the browser never runs it,
 #: and an HTML escaper leaves no ``<`` to close it with (the reader decodes the entities itself).
 DATA_BLOCK_TYPES = frozenset({"application/json", "application/ld+json"})
