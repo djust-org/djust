@@ -139,7 +139,7 @@ def test_invalid_mode_falls_back_to_debug_and_logs_once(settings, caplog):
     """S1: a typo in a dev-only setting must not take every production render down."""
     settings.DJUST_UNSUPPLIED_NAMES = "erorr"
     settings.DEBUG = False
-    _exposure_unsupplied._INVALID_MODE_LOGGED = False
+    _exposure_unsupplied._INVALID_MODES_LOGGED.clear()
     with caplog.at_level(logging.ERROR, logger=LOGGER):
         _render(Holds)
         _render(Holds)
