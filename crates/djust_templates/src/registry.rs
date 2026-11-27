@@ -417,6 +417,44 @@ fn read_binds_only_as_var(handler: &Bound<'_, PyAny>) -> PyResult<bool> {
     handler.getattr("BINDS_ONLY_AS_VAR")?.is_truthy()
 }
 
+/// The handler's "I read only my operands" declaration (#4315).
+///
+/// The partial renderer gives every inline tag the `"*"` dependency: it
+/// re-renders on every partial render, because a handler is handed the whole
+/// context and may read any name in it. A handler that sets
+/// `READS_ONLY_ARGS = True` promises that its output is a function of its
+/// resolved operands alone, plus the context names it lists in `ALSO_READS`
+/// (`{% url %}` reads `request`). `extract_per_node_deps` then gives a use
+/// that binds nothing those operands' root names, so the tag is reused while
+/// they are unchanged.
+///
+/// `Some(extra names)` when declared, `None` (the safe historical reading)
+/// when absent or falsy. A wrong declaration serves stale HTML.
+fn read_reads_only_args(handler: &Bound<'_, PyAny>) -> PyResult<Option<Vec<String>>> {
+    if !handler.hasattr("READS_ONLY_ARGS")? || !handler.getattr("READS_ONLY_ARGS")?.is_truthy()? {
+        return Ok(None);
+    }
+    if !handler.hasattr("ALSO_READS")? {
+        return Ok(Some(Vec::new()));
+    }
+    let also = handler.getattr("ALSO_READS")?;
+    if also.is_none() {
+        return Ok(Some(Vec::new()));
+    }
+    if also.is_instance_of::<pyo3::types::PyString>() {
+        return Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+            "ALSO_READS must be a collection of context names, not a str",
+        ));
+    }
+    let mut names: Vec<String> = also
+        .try_iter()?
+        .map(|name| name.and_then(|name| name.extract::<String>()))
+        .collect::<PyResult<_>>()?;
+    names.sort();
+    names.dedup();
+    Ok(Some(names))
+}
+
 /// The handler's opt-in "hand me the `{% autoescape %}` policy" declaration
 /// (#2556).
 ///
@@ -558,6 +596,8 @@ struct TagHandlerEntry {
     accepts_as_var: bool,
     /// See [`read_binds_only_as_var`] (#4124).
     binds_only_as_var: bool,
+    /// See [`read_reads_only_args`] (#4315).
+    reads_only_args: Option<Vec<String>>,
     /// See [`read_wants_autoescape`] (#2556).
     wants_autoescape: bool,
     /// See [`read_wants_typed_args`] (#3756).
@@ -761,6 +801,7 @@ pub fn register_tag_handler(py: Python<'_>, name: String, handler: Py<PyAny>) ->
     let returns_bindings = read_returns_bindings(handler_ref)?;
     let accepts_as_var = read_accepts_as_var(handler_ref)?;
     let binds_only_as_var = read_binds_only_as_var(handler_ref)?;
+    let reads_only_args = read_reads_only_args(handler_ref)?;
     let wants_autoescape = read_wants_autoescape(handler_ref)?;
     let wants_typed_args = read_wants_typed_args(handler_ref)?;
     let typed_standins_only = read_typed_standins_only(handler_ref)?;
@@ -789,6 +830,7 @@ pub fn register_tag_handler(py: Python<'_>, name: String, handler: Py<PyAny>) ->
             returns_bindings,
             accepts_as_var,
             binds_only_as_var,
+            reads_only_args,
             wants_autoescape,
             wants_typed_args,
             typed_standins_only,
@@ -1443,6 +1485,17 @@ pub fn tag_handler_binds_only_as_var(name: &str) -> bool {
         .ok()
         .and_then(|registry| registry.get(name).map(|entry| entry.binds_only_as_var))
         .unwrap_or(false)
+}
+
+/// Internal Rust API — the context names the inline handler for `name` reads
+/// besides its operands, when it declared `READS_ONLY_ARGS` (#4315). `None`
+/// for an unregistered name or a handler that did not declare it.
+pub fn tag_handler_reads_only_args(name: &str) -> Option<Vec<String>> {
+    TAG_HANDLERS.read().ok().and_then(|registry| {
+        registry
+            .get(name)
+            .and_then(|entry| entry.reads_only_args.clone())
+    })
 }
 
 /// Internal Rust API — did the inline handler for `name` declare

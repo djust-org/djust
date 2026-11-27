@@ -4,7 +4,7 @@
  * window.djust.hooks at init time and after each VDOM morph.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { JSDOM } from 'jsdom';
 import fs from 'fs';
 
@@ -181,6 +181,30 @@ describe('colocated hooks under a strict nonce CSP', () => {
         expect(scriptEl.dataset.djustHookRegistered).toBe('1');
         // The runner script is removed once it has run.
         expect(dom.window.document.head.querySelectorAll('script').length).toBe(0);
+    });
+
+    it('a morph that drops the nonce and sentinel does not re-run the same body (#4322)', () => {
+        const dom = createStrictDom(
+            '<script type="djust/hook" data-hook="Chart" nonce="abc123">' +
+            'hook.mounted = function() { return 7; };' +
+            '</script>'
+        );
+        dom.window.djust.extractColocatedHooks(dom.window.document);
+        const scriptEl = dom.window.document.querySelector('script[type="djust/hook"]');
+        const registered = dom.window.djust.hooks.Chart;
+        // What a socket render's morph does to the node: the server's HTML
+        // carries neither attribute.
+        scriptEl.removeAttribute('nonce');
+        scriptEl.nonce = '';
+        scriptEl.removeAttribute('data-djust-hook-registered');
+        dom.window.djust.extractColocatedHooks(dom.window.document);
+        expect(scriptEl.hasAttribute('data-djust-hook-registered')).toBe(false);
+        expect(dom.window.djust.hooks.Chart).toBe(registered);
+        // A changed body is new code: it is registered again (and, without a
+        // nonce under this CSP, refused).
+        scriptEl.textContent = 'hook.mounted = function() { return 8; };';
+        dom.window.djust.extractColocatedHooks(dom.window.document);
+        expect(scriptEl.dataset.djustHookRegistered).toBe('error');
     });
 
     it('without a nonce the eval path is used (and fails under the CSP)', () => {

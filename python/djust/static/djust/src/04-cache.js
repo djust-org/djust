@@ -28,6 +28,7 @@ const _pendingEventNames = new Map();    // ref -> event name for pending events
 const _pendingTriggerEls = new Map();    // ref -> trigger element for loading state
 const _pendingEventResolvers = new Map(); // ref -> resolve() for Promise-based sendEvent (#1315)
 const _pendingEventOwners = new Map();   // ref -> transport instance
+const _pendingEventOutcomes = new Map(); // ref -> settle(outcome) for pushEvent's outcome (#4322)
 const _pendingAsyncBatches = new Map();  // opaque server batch -> originating control
 const _tickBuffer = [];                  // server-initiated render frames held during pending events
 const _tickBufferOwners = new WeakMap();
@@ -91,7 +92,26 @@ function registerEventRequest(transport, eventName, triggerElement) {
     transport.lastEventName = eventName;
     transport.lastTriggerElement = triggerElement;
     const promise = new Promise(resolve => _pendingEventResolvers.set(ref, resolve));
+    // #4322: how the request ended, for a hook's pushEvent(..., {outcome: true}):
+    // {status, reply, error}. Rides on the promise, so every transport's
+    // sendEvent hands it out unchanged.
+    promise.outcome = new Promise(settle => _pendingEventOutcomes.set(ref, settle));
     return { ref, promise };
+}
+
+/**
+ * The outcome (#4322) of a request settled by an error frame: rejected by the
+ * handler's parameter contract, rate limited, or any other server error.
+ */
+function eventErrorOutcome(data) {
+    const error = {
+        message: typeof data.error === 'string' ? data.error : null,
+        code: typeof data.code === 'string' ? data.code : null,
+        validation_details: data.validation_details || null,
+    };
+    const status = error.code === 'rate_limited' ? 'rate_limited'
+        : error.validation_details ? 'rejected' : 'error';
+    return { status, error };
 }
 
 /** Every async_pending carries its batch token (#4309); false when none is held. */
@@ -131,6 +151,8 @@ function acknowledgeEventRequest(transport, data) {
         data.async_pending = false;
     }
     const resolve = _pendingEventResolvers.get(ref);
+    const settle = _pendingEventOutcomes.get(ref);
+    _pendingEventOutcomes.delete(ref);
     _pendingEventRefs.delete(ref);
     _pendingEventNames.delete(ref);
     _pendingTriggerEls.delete(ref);
@@ -141,16 +163,28 @@ function acknowledgeEventRequest(transport, data) {
     transport.lastEventName = latest == null ? null : _pendingEventNames.get(latest);
     transport.lastTriggerElement = latest == null ? null : _pendingTriggerEls.get(latest);
     if (resolve) resolve(data.cancelled ? null : data);
+    if (settle) {
+        settle(data.cancelled
+            ? { status: data.status || 'cancelled', reply: data.reply || null, error: data.error || null }
+            // A refused turn (permission, login, flash) still acknowledges.
+            : data.source === 'refusal'
+                ? { status: 'error', reply: data, error: { message: null, code: 'refused', validation_details: null } }
+                : { status: 'ok', reply: data, error: null });
+    }
     return { eventName, trigger };
 }
 
-/** Cancel this transport's requests, never those of a replacement connection. */
-function cancelEventRequests(transport, ref = null) {
+/**
+ * Cancel this transport's requests, never those of a replacement connection.
+ * `why` (#4322) is the outcome they settle with: {status, error, reply};
+ * `cancelled` when omitted.
+ */
+function cancelEventRequests(transport, ref = null, why = null) {
     const refs = ref == null
         ? [..._pendingEventOwners].filter(([, owner]) => owner === transport).map(([key]) => key)
         : [ref];
     for (const key of refs) {
-        const event = acknowledgeEventRequest(transport, { ref: key, cancelled: true });
+        const event = acknowledgeEventRequest(transport, { ...why, ref: key, cancelled: true });
         if (event?.eventName) globalLoadingManager.stopLoading(event.eventName, event.trigger);
     }
     if (ref == null) {
