@@ -845,30 +845,6 @@
       "version": "1.0.104"
     },
     {
-      "bom-ref": "rust:pkg:cargo/bincode@2.0.1",
-      "licenses": [
-        {
-          "expression": "MIT"
-        }
-      ],
-      "name": "bincode",
-      "purl": "pkg:cargo/bincode@2.0.1",
-      "type": "library",
-      "version": "2.0.1"
-    },
-    {
-      "bom-ref": "rust:pkg:cargo/bincode_derive@2.0.1",
-      "licenses": [
-        {
-          "expression": "MIT"
-        }
-      ],
-      "name": "bincode_derive",
-      "purl": "pkg:cargo/bincode_derive@2.0.1",
-      "type": "library",
-      "version": "2.0.1"
-    },
-    {
       "bom-ref": "rust:pkg:cargo/bitflags@2.11.1",
       "licenses": [
         {
@@ -2099,18 +2075,6 @@
       "version": "0.2.6"
     },
     {
-      "bom-ref": "rust:pkg:cargo/unty@0.0.4",
-      "licenses": [
-        {
-          "expression": "MIT OR Apache-2.0"
-        }
-      ],
-      "name": "unty",
-      "purl": "pkg:cargo/unty@0.0.4",
-      "type": "library",
-      "version": "0.0.4"
-    },
-    {
       "bom-ref": "rust:pkg:cargo/uuid@1.29.0",
       "licenses": [
         {
@@ -2133,18 +2097,6 @@
       "purl": "pkg:cargo/valuable@0.1.1",
       "type": "library",
       "version": "0.1.1"
-    },
-    {
-      "bom-ref": "rust:pkg:cargo/virtue@0.0.18",
-      "licenses": [
-        {
-          "expression": "MIT"
-        }
-      ],
-      "name": "virtue",
-      "purl": "pkg:cargo/virtue@0.0.18",
-      "type": "library",
-      "version": "0.0.18"
     },
     {
       "bom-ref": "rust:pkg:cargo/wasi@0.11.1+wasi-snapshot-preview1",
@@ -2577,7 +2529,7 @@
       "bom-ref": "root:djust",
       "name": "djust",
       "type": "application",
-      "version": "1.3.3"
+      "version": "1.3.4"
     },
     "properties": [
       {

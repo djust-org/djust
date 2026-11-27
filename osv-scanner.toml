@@ -8,6 +8,11 @@
 # reason = "Not reachable: … (#NNNN)"
 
 [[IgnoredVulns]]
-id = "RUSTSEC-2025-0141"
-ignoreUntil = 2026-12-31
-reason = "bincode 2.0.1 (direct dependency of crates/djust_live) is flagged unmaintained, not vulnerable. Same policy as .cargo/audit.toml: unmaintained advisories warn, they do not block. Review by the ignoreUntil date."
+id = "RUSTSEC-2026-0543"
+ignoreUntil = 2027-03-31
+reason = "chrono is flagged unmaintained (informational, no CVSS, no affected functions, no fixed version), not vulnerable. 2.0 replaces it with jiff (#4222); the 1.3 line takes security fixes only, so it keeps chrono and accepts the notice (#4219)."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0555"
+ignoreUntil = 2027-03-31
+reason = "chrono-tz is flagged unmaintained (informational, no CVSS, no affected functions, no fixed version), not vulnerable. 2.0 replaces it with jiff (#4222); the 1.3 line takes security fixes only, so it keeps chrono-tz and accepts the notice (#4219)."

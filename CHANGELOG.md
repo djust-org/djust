@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.4] - 2026-11-26
+
+### Security
+
+- **The unused `bincode` dependency is gone, and with it RUSTSEC-2025-0141 (#4219).**
+  `crates/djust_live` declared `bincode = "2.0"` but no code used it. The weekly scan of
+  `djust.cdx.json` at v1.3.3 matched the advisory (bincode is unmaintained). The dependency,
+  its lockfile entries, its SBOM components and the advisory's ignore entry in
+  `osv-scanner.toml` are removed. Nothing else changes.
+- **`chrono` and `chrono-tz` unmaintained notices accepted on 1.3 (RUSTSEC-2026-0543, RUSTSEC-2026-0555).**
+  Both are informational (no known vulnerability, no fixed version). 2.0 replaces them with `jiff`
+  (#4222); 1.3 takes security fixes only, so `osv-scanner.toml` accepts the notices until 2027-03-31.
+
+### Added
+
+- **`djust.V026`: a warning for a plain component instance in a view's class body (#4045).**
+  A plain `Component` (`Badge`, `StatusDot`, the `djust.components.components` classes)
+  declared in the class body (`badge = Badge("new")`), directly or through a mixin or base, is
+  created once and shared by every user of that view in the process, so a handler that changes
+  it changes it for everyone. `manage.py check` now reports it, with a fix hint to create the
+  component in `mount()`. A `LiveComponent` declared at class level and a component created in
+  `mount()` are not reported. Runtime behaviour is unchanged. The components guide,
+  `docs/system-checks.md` and the error-code guide describe the hazard. Cases in
+  `python/djust/tests/test_check_v026_shared_component_4045.py`.
+
 ## [1.3.3] - 2026-11-11
 
 ### Added
