@@ -31,6 +31,11 @@ It runs as a Django management command and operates in six modes:
 6. **`--a11y` mode** — scan templates for accessibility problems
    (Y001–Y006). Every finding is a warning: the scan never fails in
    normal mode, and fails under `--strict` when any finding exists.
+7. **`--a11y --url <url>` mode** — load rendered pages in headless
+   Chromium and run [axe-core](https://github.com/dequelabs/axe-core) over
+   them: contrast, landmarks, heading order and names that exist only
+   after render. Needs the optional `djust[a11y]` extra; `--strict` fails
+   on serious or critical violations.
 
 The configuration-level static checks (A0xx codes) also run via Django's
 normal check pipeline (`manage.py check --tag djust`) — `djust_audit`
@@ -88,6 +93,14 @@ python manage.py djust_audit --ast \
 
 # AST scan — Python only (skip templates)
 python manage.py djust_audit --ast --ast-no-templates
+
+# Rendered-page accessibility pass (needs pip install 'djust[a11y]')
+python manage.py djust_audit --a11y --url http://localhost:8000/ --url http://localhost:8000/about/
+
+# ... over every route the views in permissions.yaml are served at, failing CI
+# on serious or critical violations
+python manage.py djust_audit --a11y --base-url http://localhost:8000 \
+    --permissions permissions.yaml --strict --json > a11y-rendered.json
 ```
 
 ## CLI flags
@@ -102,7 +115,7 @@ python manage.py djust_audit --ast --ast-no-templates
 | `--dump-permissions` | switch | Print a starter `permissions.yaml` and exit. |
 | `--live <url>` | str | Switch to runtime probe mode. Fetches the URL. |
 | `--paths <path> [...]` | list | Extra paths/URLs to inspect in `--live` mode. |
-| `--header 'Name: Value'` | repeatable | Extra HTTP header for `--live` requests (e.g. staging basic auth). |
+| `--header 'Name: Value'` | repeatable | Extra HTTP header for `--live` and `--a11y --url` requests (e.g. staging basic auth, a session cookie). |
 | `--no-websocket-probe` | switch | Skip the CSWSH handshake check. |
 | `--skip-path-probes` | switch | Skip `/.git/`, `/.env`, `/__debug__/` probes (for WAF-protected environments). |
 | `--ast` | switch | Run the X001–X008 security scanner and X101–X106 UI rules. |
@@ -112,6 +125,8 @@ python manage.py djust_audit --ast --ast-no-templates
 | `--ast-no-ui` | switch | Skip X1xx UI rules, retaining the X0xx security scan; no UI cache write. |
 | `--ast-no-ui-cache` | switch | Run the scan without writing `.djust/audit-ui.json`. |
 | `--a11y` | switch | Run the accessibility (Y001–Y006) template audit. |
+| `--url <url>` | repeatable | With `--a11y`: run the rendered-page pass (axe-core) over this page instead of the template scan. A relative URL joins `--base-url`. |
+| `--base-url <url>` | str | With `--a11y`: origin of a running server. Without `--url`, audits a route of each view declared in `--permissions` (default `./permissions.yaml`). |
 
 ## Modes explained
 
@@ -416,6 +431,67 @@ with owner-only mode `0600` (also used for a newly created `.gitignore`).
 shouldn't exfiltrate local files or follow hostile redirects to non-HTTP
 schemes.
 
+### `--a11y --url`: rendered-page accessibility pass
+
+The `--a11y` template scan reads template *text*, so it cannot see text
+and non-text contrast (WCAG 1.4.3, 1.4.11), landmarks, heading order, or an
+accessible name that only exists once the page has rendered. The rendered
+pass loads each page in headless Chromium, waits for it to settle (the
+`load` event, then up to 5 s for the network to go quiet so a LiveView can
+mount) and runs [axe-core](https://github.com/dequelabs/axe-core) over the
+DOM. One crawl replaces a hand-written axe test per screen.
+
+```bash
+pip install 'djust[a11y]'
+playwright install chromium        # once per machine
+
+python manage.py djust_audit --a11y --url http://localhost:8000/
+```
+
+**Which pages.** Each `--url` (repeatable) is audited. With no `--url`,
+`--base-url` names a running server and the pass audits one route for
+every view the permissions document declares (`--permissions`, default
+`./permissions.yaml`): djust walks the URLconf, takes the first route of
+each declared view that needs no URL argument, and joins it to
+`--base-url`. A declared view with no such route (only
+`items/<int:pk>/`, say) or no route at all is listed under "Not audited";
+pass its URL with `--url` instead. A login-gated page is audited as the
+browser sees it: pass a session cookie with
+`--header 'Cookie: sessionid=...'`, or the redirect target is what gets
+audited (the report shows the redirect).
+
+**Output.** The terminal report lists each page's violations, most severe
+first, with axe's rule id, the impact, up to five offending nodes and a
+link to the rule. `--json` emits
+`{"axe_version": ..., "pages": [...], "a11y_rendered_findings": [...],
+"summary": {...}, "skipped_routes": [...]}`; each finding carries
+`id`, `impact`, `help`, `help_url`, `tags`, `url` and every node's
+`target`, `html` and `failure_summary`.
+
+**Exit codes.** The pass keeps the warning-only contract of `--a11y`:
+
+| Result | Normal mode | `--strict` |
+|--------|-------------|------------|
+| No violations | 0 | 0 |
+| Only `minor` / `moderate` violations | 0 | 0 |
+| A `serious` or `critical` violation | 0 | 1 |
+| A page not audited (unreachable, HTTP 4xx/5xx, timeout) | 1 | 1 |
+| `djust[a11y]` not installed, Chromium missing, no `--url` and no permissions document | 2 | 2 |
+
+A page that could not be audited fails in both modes, as an unreachable
+target does for `--live`: a gate must not pass on a page it never saw.
+
+#### Dependencies
+
+Nothing in djust's core install. The `djust[a11y]` extra brings
+Playwright (the browser driver djust's own browser tests use) and
+`axe-playwright-python`, which ships axe-core's `axe.min.js` (axe-core
+4.14.0 in 0.1.9). djust reads that file from the installed package and
+injects it into each page itself, so nothing is fetched at audit time, and
+the page's Content-Security-Policy is bypassed for the injection only.
+Without the extra, `--a11y --url` exits 2 and names the extra to install;
+importing djust and every other audit mode never import Playwright.
+
 ## CI integration
 
 A typical CI job runs the gating modes:
@@ -480,9 +556,9 @@ jobs:
 |-----------|---------|
 | 0 | Success — no findings in strict mode, or no errors in non-strict mode. |
 | 1 | At least one finding at error (or warning, in `--strict` mode). |
-| 2 | Invalid input — missing permissions file, bad YAML, bad `--header` format. |
+| 2 | Invalid input — missing permissions file, bad YAML, bad `--header` format, `--a11y --url` without the `djust[a11y]` extra. |
 
-Default mode and `--permissions` exit non-zero only under `--strict`: without it, even error-severity permissions deviations exit 0. `--live` and `--ast` exit 1 on any error-severity finding even without `--strict`. `--a11y` exits 1 only under `--strict`.
+Default mode and `--permissions` exit non-zero only under `--strict`: without it, even error-severity permissions deviations exit 0. `--live` and `--ast` exit 1 on any error-severity finding even without `--strict`. `--a11y` exits 1 only under `--strict`. `--a11y --url` exits 1 under `--strict` on a serious or critical axe-core violation, and in either mode when a page could not be audited; a missing `djust[a11y]` extra exits 2.
 
 X1xx UI findings are warnings: they fail `--ast` only under `--strict`.
 

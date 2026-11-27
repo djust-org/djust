@@ -406,7 +406,8 @@ class Command(BaseCommand):
             action="store_true",
             help=(
                 "Exit non-zero on any --permissions finding (including "
-                "undeclared views). Intended for CI."
+                "undeclared views), any --a11y template finding, or a serious "
+                "or critical --a11y --url violation. Intended for CI."
             ),
         )
         parser.add_argument(
@@ -451,7 +452,7 @@ class Command(BaseCommand):
             dest="live_headers",
             default=[],
             help=(
-                "Extra HTTP header to send with --live requests, in "
+                "Extra HTTP header to send with --live and --a11y --url requests, in "
                 "'Name: Value' format. Repeatable. Use for staging "
                 "environments behind basic auth or bearer tokens."
             ),
@@ -528,7 +529,31 @@ class Command(BaseCommand):
                 "svgs with no name, and colour-only legends. Emits "
                 "stable Y001-Y006 finding codes. All findings are warnings: "
                 "normal mode always exits 0; --strict exits 1 if any "
-                "finding exists."
+                "finding exists. With --url or --base-url, runs the "
+                "rendered-page pass (axe-core in headless Chromium) instead."
+            ),
+        )
+        parser.add_argument(
+            "--url",
+            action="append",
+            dest="a11y_urls",
+            default=[],
+            help=(
+                "With --a11y: audit this rendered page with axe-core (#3700). "
+                "Repeatable. Needs the optional extra: pip install 'djust[a11y]'. "
+                "--strict exits 1 on a serious or critical violation."
+            ),
+        )
+        parser.add_argument(
+            "--base-url",
+            type=str,
+            dest="a11y_base_url",
+            default=None,
+            help=(
+                "With --a11y: origin of a running server (e.g. "
+                "http://localhost:8000). Without --url, the rendered pass "
+                "audits each route of the views declared in --permissions "
+                "(default ./permissions.yaml); relative --url values join it."
             ),
         )
 
@@ -558,8 +583,14 @@ class Command(BaseCommand):
         # --a11y: accessibility (Y0xx) audit (#1523). Runs the Y-check
         # template scan independently of LiveView introspection.
         if a11y_mode:
-            self._run_a11y_audit(options)
+            if options.get("a11y_urls") or options.get("a11y_base_url"):
+                self._run_a11y_rendered_audit(options)
+            else:
+                self._run_a11y_audit(options)
             return None
+        if options.get("a11y_urls") or options.get("a11y_base_url"):
+            self.stderr.write(self.style.ERROR("--url / --base-url need --a11y"))
+            raise SystemExit(2)
 
         audits = self._collect_audits(app_label, verbose)
 
@@ -743,6 +774,123 @@ class Command(BaseCommand):
         if strict and findings:
             raise SystemExit(1)
         return
+
+    def _run_a11y_rendered_audit(self, options: dict[str, Any]) -> None:
+        """Run the rendered-page accessibility pass (axe-core, #3700).
+
+        Pages come from ``--url`` (repeatable) or, when none is given, from
+        the routes of the views ``--permissions`` declares, joined to
+        ``--base-url``. Exit codes follow :func:`djust.audit_a11y.exit_code`:
+        normal mode is warning-only, ``--strict`` fails on a serious or
+        critical violation, and a page that could not be audited fails
+        either way. A missing ``djust[a11y]`` extra or bad input exits 2.
+        """
+        from djust import audit_a11y
+
+        json_output = options.get("json_output", False)
+        strict = options.get("strict", False)
+        base_url = options.get("a11y_base_url")
+        notes: list[str] = []
+
+        headers: Dict[str, str] = {}
+        for line in options.get("live_headers") or []:
+            if ":" not in line:
+                self.stderr.write(
+                    self.style.ERROR(f"--header value must be 'Name: Value' — got {line!r}")
+                )
+                raise SystemExit(2)
+            name, _, value = line.partition(":")
+            headers[name.strip()] = value.strip()
+
+        try:
+            if options.get("a11y_urls"):
+                urls = audit_a11y.resolve_urls(options["a11y_urls"], base_url)
+            else:
+                # The rendered pass runs only with --url or --base-url.
+                urls, notes = audit_a11y.urls_from_permissions_file(
+                    options.get("permissions_path") or "permissions.yaml", base_url or ""
+                )
+                if not urls:
+                    raise audit_a11y.A11yRouteError(
+                        "no route without URL arguments for the declared views"
+                        + "".join("\n  " + n for n in notes)
+                    )
+            report = audit_a11y.run_rendered_audit(urls, extra_headers=headers or None)
+        except (audit_a11y.A11yExtraMissing, audit_a11y.A11yRouteError) as exc:
+            self.stderr.write(self.style.ERROR(str(exc)))
+            raise SystemExit(2) from exc
+
+        if json_output:
+            payload = report.to_dict()
+            payload["skipped_routes"] = notes
+            self.stdout.write(json.dumps(payload, indent=2))
+        else:
+            self._output_a11y_rendered_pretty(report, notes, strict)
+
+        code = audit_a11y.exit_code(report, strict)
+        if code:
+            raise SystemExit(code)
+
+    def _output_a11y_rendered_pretty(self, report: Any, notes: list[str], strict: bool) -> None:
+        """Pretty-print a :class:`~djust.audit_a11y.RenderedA11yReport`."""
+        from djust.audit_a11y import IMPACT_ORDER, MAX_NODES_SHOWN
+
+        line = "=" * 50
+        version = f" (axe-core {report.axe_version})" if report.axe_version else ""
+        self.stdout.write("")
+        self.stdout.write(self.style.MIGRATE_HEADING(line))
+        self.stdout.write(
+            self.style.MIGRATE_HEADING(f"  djust_audit --a11y rendered-page report{version}")
+        )
+        self.stdout.write(self.style.MIGRATE_HEADING(line))
+        self.stdout.write(f"  Pages: {len(report.pages)}")
+        self.stdout.write("")
+        for page in report.pages:
+            self.stdout.write(self.style.MIGRATE_LABEL(f"  {page.url}"))
+            if page.final_url and page.final_url != page.url:
+                self.stdout.write(f"      (redirected to {page.final_url})")
+            if page.error:
+                self.stdout.write(self.style.ERROR(f"  [ERROR] page not audited: {page.error}"))
+                continue
+            if not page.violations:
+                self.stdout.write(self.style.SUCCESS("  No axe-core violations."))
+            for v in page.violations:
+                style = self.style.ERROR if strict and v.failing else self.style.WARNING
+                self.stdout.write(
+                    style(
+                        f"  [{v.impact or 'unknown'}] {v.rule_id}: {v.help} ({len(v.nodes)} node(s))"
+                    )
+                )
+                for node in v.nodes[:MAX_NODES_SHOWN]:
+                    self.stdout.write(f"      at {' '.join(node['target'])}")
+                if len(v.nodes) > MAX_NODES_SHOWN:
+                    self.stdout.write(f"      ... and {len(v.nodes) - MAX_NODES_SHOWN} more")
+                if v.help_url:
+                    self.stdout.write(f"      see:  {v.help_url}")
+            self.stdout.write("")
+        if notes:
+            self.stdout.write(self.style.WARNING("  Not audited:"))
+            for note in notes:
+                self.stdout.write(f"      {note}")
+            self.stdout.write("")
+
+        self.stdout.write(self.style.MIGRATE_HEADING("-" * 50))
+        counts = report.impact_counts()
+        per_impact = ", ".join(
+            f"{impact}: {counts[impact]}" for impact in reversed(IMPACT_ORDER) if counts[impact]
+        )
+        summary = f"  Summary: {len(report.violations)} violation(s)"
+        if per_impact:
+            summary += f" — {per_impact}"
+        if report.page_errors:
+            summary += f"; {len(report.page_errors)} page(s) not audited"
+        self.stdout.write(summary)
+        if report.failing:
+            verdict = "fail" if strict else "would fail"
+            self.stdout.write(
+                f"  {len(report.failing)} serious/critical violation(s) {verdict} --strict."
+            )
+        self.stdout.write("")
 
     @staticmethod
     def _a11y_findings_to_json(findings: Any) -> dict[str, Any]:
