@@ -426,6 +426,34 @@ def test_a_matching_digest_is_answered_with_path_addressed_patches_and_no_versio
     assert answer_kind(again) == "patches"
 
 
+def test_each_render_is_fingerprinted_once_and_a_stale_baseline_skips_the_shape(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from djust import _render_digest as rd
+
+    canonicalize = Mock(wraps=rd.canonical_html)
+    content_hash = Mock(wraps=rd.hashlib.sha256)
+    shape_lookup = Mock(wraps=rd._memoized_shape)
+    monkeypatch.setattr(rd, "canonical_html", canonicalize)
+    monkeypatch.setattr(rd, "hashlib", SimpleNamespace(sha256=content_hash))
+    monkeypatch.setattr(rd, "_memoized_shape", shape_lookup)
+
+    def check_calls(roots, shapes):
+        assert canonicalize.call_count == content_hash.call_count == roots
+        assert shape_lookup.call_count == shapes
+        for probe in (canonicalize, content_hash, shape_lookup):
+            probe.reset_mock()
+
+    client, token = _open("/m/counter/")
+    check_calls(1, 1)
+    assert answer_kind(_send(client, "/m/counter/", "increment", token)) == "patches"
+    check_calls(2, 2)
+    stale = _send(client, "/m/counter/", "increment", token)
+    assert "html" in stale
+    check_calls(2, 1)
+
+
 def test_a_render_that_changes_nothing_is_an_empty_patch_list_with_the_same_digest(renders):
     user = get_user_model().objects.create_user("quiet-user", password="pw")
     client = Client()
@@ -469,13 +497,13 @@ def test_switched_off_no_render_token_is_computed(renders, where, monkeypatch):
     from djust import _render_digest
 
     calls: list[int] = []
-    real = _render_digest.render_token
+    real = _render_digest._sign_render
 
     def counting(*args, **kwargs):
         calls.append(1)
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(_render_digest, "render_token", counting)
+    monkeypatch.setattr(_render_digest, "_sign_render", counting)
     url = "/p/opted-out/" if where == "view" else "/m/counter/"
     overrides = {"LIVEVIEW_CONFIG": {"http_fallback_patches": False}} if where == "setting" else {}
     with override_settings(**overrides):
@@ -921,10 +949,15 @@ def test_a_child_the_template_source_does_not_show_still_selects_the_whole_page(
 ):
     """An ``{% include %}`` can bring a child in: found after the render, not before."""
     from djust import _http_fallback_baseline
+    from djust._render_digest import render_shape
 
     monkeypatch.setattr(_http_fallback_baseline, "_embeds_views", lambda view: False)
     # Even a digest that matches: a page holding another view is not patched.
-    monkeypatch.setattr(_http_fallback_baseline, "tokens_match", lambda *args: True)
+    monkeypatch.setattr(
+        _http_fallback_baseline,
+        "matching_baseline_shape",
+        lambda *args: render_shape("<div></div>"),
+    )
     client, digest = _open("/p/outer/")
     plain, _ = _open("/p/outer/")
     answer, count = _counted(renders, client, "/p/outer/", "increment", digest)

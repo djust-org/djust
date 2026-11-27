@@ -55,7 +55,7 @@ import threading
 import zlib
 from collections import OrderedDict
 from html import unescape
-from typing import Any
+from typing import Any, NamedTuple
 
 from django.utils.crypto import salted_hmac
 
@@ -197,17 +197,35 @@ def canonical_html(html: str, request: Any) -> str:
     return _CSRF_TOKEN.sub(replace, html)
 
 
-def render_digest(view: Any, request: Any, html: Any) -> str | None:
-    """The digest of the rendered root ``html`` for this request, or ``None``."""
+class _SignedRender(NamedTuple):
+    """Request-local signing result, with the canonical text and its SHA-256."""
+
+    canonical: str
+    content_hash: bytes
+    digest: str
+
+    def shape(self) -> RenderShape | None:
+        return _memoized_shape(self.canonical, self.content_hash)
+
+
+def _sign_render(view: Any, request: Any, html: Any) -> _SignedRender | None:
     if not isinstance(html, str):
         return None
     binding = digest_binding(view, request)
     if binding is None:
         return None
-    content = hashlib.sha256(canonical_html(html, request).encode("utf-8")).hexdigest()
-    message = json.dumps([*binding, content], separators=(",", ":"))
+    canonical = canonical_html(html, request)
+    content_hash = hashlib.sha256(canonical.encode("utf-8")).digest()
+    message = json.dumps([*binding, content_hash.hex()], separators=(",", ":"))
     tag = salted_hmac(_SALT, message, algorithm="sha256").digest()[:_TAG_BYTES]
-    return base64.urlsafe_b64encode(tag).decode("ascii").rstrip("=")
+    digest = base64.urlsafe_b64encode(tag).decode("ascii").rstrip("=")
+    return _SignedRender(canonical, content_hash, digest)
+
+
+def render_digest(view: Any, request: Any, html: Any) -> str | None:
+    """The digest of the rendered root ``html`` for this request, or ``None``."""
+    signed = _sign_render(view, request, html)
+    return signed.digest if signed is not None else None
 
 
 def _is_dj_if_comment(text: str) -> bool:
@@ -329,12 +347,9 @@ def dom_shape(html: Any) -> str | None:
     return None if found is None else found.shape
 
 
-#: :func:`render_shape` results by a digest of the HTML walked. The walk is a
-#: pure function of its input and costs about 0.2 ms per KB in Python, and the
-#: same HTML is walked again and again: a fallback turn walks its baseline twice
-#: (``prepare_baseline``, then ``tokens_match``), the next turn's baseline is the
-#: answer this turn walked, and repeated GETs of one page render the same root.
-#: A hit costs one hash of the HTML. Callers treat the result as read-only.
+#: Shape results for equal root text, shared across requests. A signed render
+#: uses its existing SHA-256 as the key. Only the shape is shared; the MAC
+#: depends on the caller, route and view and is computed for each render.
 _SHAPE_MEMO_SIZE = 256
 _shape_memo: OrderedDict[bytes, RenderShape | None] = OrderedDict()
 _shape_memo_lock = threading.Lock()
@@ -344,12 +359,17 @@ _MISSING: Any = object()
 def render_shape(html: Any) -> RenderShape | None:
     """:func:`dom_shape`'s walk, with the client-owned regions it passes (#4283).
 
-    ``None`` when the shape is ``None``. Memoized by a 160-bit digest of
+    ``None`` when the shape is ``None``. Memoized by the SHA-256 of
     ``html`` (:data:`_shape_memo`).
     """
     if not isinstance(html, str):
         return None
-    key = hashlib.blake2b(html.encode("utf-8", "surrogatepass"), digest_size=20).digest()
+    key = hashlib.sha256(html.encode("utf-8", "surrogatepass")).digest()
+    return _memoized_shape(html, key)
+
+
+def _memoized_shape(html: str, key: bytes) -> RenderShape | None:
+    """The shape of ``html``, given its SHA-256 so a signed render can reuse it."""
     with _shape_memo_lock:
         found = _shape_memo.get(key, _MISSING)
         if found is not _MISSING:
@@ -423,8 +443,8 @@ def _walk_shape(html: str) -> RenderShape | None:
                     out.append(">")
             continue
         attrs = match.group("attrs")
-        pairs = _counted_attrs(attrs)
-        if _is_client_owned(pairs):
+        pairs = _counted_attrs(attrs) if attrs else None
+        if pairs and _is_client_owned(pairs):
             client_owned = True
         if not stack:
             # The root element itself: its own attributes are not part of the
@@ -433,7 +453,7 @@ def _walk_shape(html: str) -> RenderShape | None:
             counts.append(0)
             if attrs.rstrip().endswith("/") or tag in _VOID:
                 return None
-            if _is_opaque(pairs):
+            if pairs and _is_opaque(pairs):
                 client_owned = True  # a root the client owns entirely
             continue
         void = attrs.rstrip().endswith("/") or tag in _VOID
@@ -455,7 +475,7 @@ def _walk_shape(html: str) -> RenderShape | None:
             continue
         path = (paths[-1] if paths else ()) + (counts[-1],)
         counts[-1] += 1
-        out.append(_element_piece(tag, pairs))
+        out.append(_element_piece(tag, pairs) if pairs else "<" + tag)
         if void:
             out.append(">")
             continue
@@ -463,7 +483,7 @@ def _walk_shape(html: str) -> RenderShape | None:
         counts.append(0)
         paths.append(path)
         after_start_of = tag
-        if _is_opaque(pairs):
+        if pairs and _is_opaque(pairs):
             # Hashed as an element; its children are the client's.
             opaque_paths.append(path)
             opaque_depth = len(stack)
@@ -500,17 +520,47 @@ def answer_shape(request: Any, html: Any) -> RenderShape | None:
 _UNSET: Any = object()
 
 
+def _token(digest: str, found: RenderShape | None) -> str | None:
+    return digest + "." + found.shape if found is not None and found.shape else None
+
+
 def render_token(view: Any, request: Any, html: Any, found: Any = _UNSET) -> str | None:
-    """``<digest>.<shape>`` for the rendered root ``html``: what the page GET
-    and every fallback answer carry, or ``None`` when either half is missing.
-    ``found`` is :func:`answer_shape`'s result, when the caller has it."""
-    digest = render_digest(view, request, html)
-    if found is _UNSET:
-        found = answer_shape(request, html)
-    shape = None if found is None else found.shape
-    if not digest or not shape:
+    """``<digest>.<shape>`` for the rendered root ``html``, or ``None`` if either is missing.
+
+    ``found`` is :func:`answer_shape`'s result, when the caller has it.
+    """
+    signed = _sign_render(view, request, html)
+    if signed is None:
         return None
-    return digest + "." + shape
+    return _token(signed.digest, signed.shape() if found is _UNSET else found)
+
+
+def answer_token_and_shape(
+    view: Any, request: Any, html: Any
+) -> tuple[str | None, RenderShape | None]:
+    """The answer's token and the shape used to protect its client-owned regions."""
+    signed = _sign_render(view, request, html)
+    if signed is None:
+        # The handler may have cleared the session. Opaque-region checks still
+        # need the answer's shape even when it cannot carry a new token.
+        return None, answer_shape(request, html)
+    found = signed.shape()
+    return _token(signed.digest, found), found
+
+
+def _digest_matches(expected: str, supplied: tuple[str, str]) -> bool:
+    return hmac.compare_digest(expected.encode("ascii"), supplied[0].encode("ascii"))
+
+
+def matching_baseline_shape(
+    view: Any, request: Any, html: Any, supplied: tuple[str, str]
+) -> RenderShape | None:
+    """The server's baseline shape if both halves of the echoed token match."""
+    signed = _sign_render(view, request, html)
+    if signed is None or not _digest_matches(signed.digest, supplied):
+        return None
+    found = signed.shape()
+    return found if found is not None and found.shape == supplied[1] else None
 
 
 def supplied_token(request: Any) -> tuple[str, str] | None:
@@ -542,10 +592,9 @@ def tokens_match(
     """
     if not expected_digest or supplied is None or not isinstance(html, str):
         return False
-    digest, shape = supplied
-    if not hmac.compare_digest(expected_digest.encode("ascii"), digest.encode("ascii")):
+    if not _digest_matches(expected_digest, supplied):
         return False
-    return dom_shape(canonical_html(html, request)) == shape
+    return dom_shape(canonical_html(html, request)) == supplied[1]
 
 
 def path_addressed(patches: list[Any]) -> list[Any]:

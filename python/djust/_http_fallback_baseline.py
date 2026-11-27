@@ -66,13 +66,7 @@ import copy
 import logging
 from typing import Any
 
-from ._render_digest import (
-    canonical_html,
-    render_digest,
-    render_shape,
-    supplied_token,
-    tokens_match,
-)
+from ._render_digest import matching_baseline_shape, render_shape, supplied_token
 
 logger = logging.getLogger(__name__)
 
@@ -210,13 +204,10 @@ def prepare_baseline(view: Any, request: Any) -> bool:
         with baseline._processor_context(request):
             baseline._prepare_child_ids()
             html, _, _ = render_view_with_diff(baseline, request)
-        found = render_shape(canonical_html(html, request)) if isinstance(html, str) else None
-        if (
-            found is not None
-            and not _holds_other_views(baseline)
-            and not found.client_owned
-            and tokens_match(html, request, render_digest(view, request, html), supplied)
-        ):
+        if not isinstance(html, str) or _holds_other_views(baseline):
+            return False
+        found = matching_baseline_shape(view, request, html, supplied)
+        if found is not None and not found.client_owned:
             renderer = getattr(baseline, "_rust_view", None)
             if renderer is not None:
                 # The renderer only: the compiled template and the baseline

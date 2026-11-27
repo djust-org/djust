@@ -568,6 +568,26 @@ def test_the_walk_records_the_path_of_each_ignored_element():
     assert not found.client_owned
 
 
+def test_tags_without_attributes_skip_attribute_parsing(monkeypatch):
+    parsed = []
+    count_attrs = _render_digest._counted_attrs
+
+    def record(attrs):
+        parsed.append(attrs)
+        return count_attrs(attrs)
+
+    monkeypatch.setattr(_render_digest, "_counted_attrs", record)
+    html = (
+        '<main><b>before</b><br><section dj-update="ignore"><i>hidden</i></section>'
+        "<ul dj-virtual></ul></main>"
+    )
+    found = _render_digest._walk_shape(html)
+    assert parsed == [' dj-update="ignore"', " dj-virtual"]
+    assert found.shape == "f5632cb060fd1448"
+    assert found.opaque_paths == [(2,)]
+    assert found.client_owned
+
+
 @pytest.mark.parametrize(
     "markup",
     [

@@ -1,0 +1,1 @@
+- HTTP page loads and fallback updates reuse the rendered root's canonical HTML and content hash for digest signing and DOM shape checks. A stale digest skips the baseline shape lookup, and the first shape walk skips attribute parsing for tags without attributes.

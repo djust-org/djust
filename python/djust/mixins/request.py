@@ -2406,17 +2406,12 @@ class RequestMixin:
             # delivers; the client echoes it with its next fallback POST.
             # Skipped when the patches are off for this view or project (#4114).
             from .._http_fallback_baseline import patches_enabled
-            from .._render_digest import answer_shape
 
-            # One walk of the answer, for its token and the touch check below
-            # (None when the patches are off: the touch check then picks the
-            # whole page).
-            answer_patches = patches_enabled(self)
-            answer_found = answer_shape(request, html) if answer_patches else None
-            if answer_patches:
-                from .._render_digest import ANSWER_FIELD, render_token
+            answer_found = None
+            if patches_enabled(self):
+                from .._render_digest import ANSWER_FIELD, answer_token_and_shape
 
-                answer_digest = render_token(self, request, html, answer_found)
+                answer_digest, answer_found = answer_token_and_shape(self, request, html)
                 if answer_digest:
                     response_fields[ANSWER_FIELD] = answer_digest
 
