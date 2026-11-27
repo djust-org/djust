@@ -122,6 +122,41 @@ def test_markers_in_scripts_comments_and_text_do_not_preload():
     assert _preloads(out) == []
 
 
+@override_settings(DEBUG=False)
+def test_template_and_noscript_content_is_not_preloaded():
+    out = _render(
+        '<div dj-view="a.V"><template><ul dj-flip></ul></template>'
+        '<noscript><dialog dj-dialog="open"></dialog></noscript></div>'
+    )
+    assert _preloads(out) == []
+
+
+def test_attribute_names_match_in_any_case():
+    assert chunks_in_markup('<a href="/x" DJ-PREFETCH>x</a><UL Dj-Flip></UL>') == {
+        "prefetch",
+        "flip",
+    }
+
+
+@pytest.mark.parametrize(
+    "page",
+    [
+        '<div dj-view="a.V"><p>Rows inserted, role="button" kept.</p>'
+        '<span class="rte-toolbar" role="button">x</span><div class="combobox-option"></div></div>',
+        "<div>" + "<p class=card>text</p>" * 200 + "</div>",
+    ],
+)
+def test_a_featureless_page_skips_the_tag_scan(monkeypatch, page):
+    import djust._client_chunks as cc
+
+    class _NoScan:
+        def finditer(self, *_a: Any) -> Any:
+            raise AssertionError("tag scan ran on a page with no marker")
+
+    monkeypatch.setattr(cc, "_TAG_RE", _NoScan())
+    assert chunks_in_markup(_mask_document_text(page)) == frozenset()
+
+
 def test_no_head_no_preload():
     out = _View()._inject_client_script('<div dj-view="a.V"><ul dj-flip></ul></div>')
     assert _preloads(out) == []
@@ -208,12 +243,22 @@ def _core_assets() -> List[str]:
 def test_generate_sw_precaches_the_injected_core_and_every_chunk():
     assets = _core_assets()
     assert assets[0] == f"/static/djust/client-core.min.js{V}"
-    chunk_assets = [f"/static/djust/chunks/{n}.min.js{V}" for n in CLIENT_CHUNKS]
-    assert assets[1 : 1 + len(CLIENT_CHUNKS)] == chunk_assets
+    # Every chunk but the DEBUG-only error overlay.
+    prod = [n for n in CLIENT_CHUNKS if n != "error-overlay"]
+    chunk_assets = [f"/static/djust/chunks/{n}.min.js{V}" for n in prod]
+    assert assets[1:] == chunk_assets
     # The same URLs the page requests.
     out = _render('<div dj-view="a.V"></div>')
     assert f'src="{assets[0]}"' in out.replace("&amp;", "&")
-    assert sorted(_chunk_map(out).values()) == sorted(chunk_assets)
+    page_chunks = _chunk_map(out)
+    assert [page_chunks[n] for n in prod] == chunk_assets
+
+
+@override_settings(DEBUG=True, LIVEVIEW_CONFIG={"debug_panel": False})
+def test_generate_sw_precaches_the_error_overlay_under_debug():
+    assets = _core_assets()
+    assert assets[0] == f"/static/djust/client-core.js{V}"
+    assert f"/static/djust/chunks/error-overlay.js{V}" in assets
 
 
 @override_settings(DEBUG=False)

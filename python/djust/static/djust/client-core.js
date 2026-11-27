@@ -14004,6 +14004,17 @@ if (!window.djust._sw) {
 if (!window.djust.resetViewport) window.djust.resetViewport = function () {};
 if (!window.djust.teardownInfiniteScroll) window.djust.teardownInfiniteScroll = function () {};
 
+// The last element focused outside any dialog, tracked from the start (#4320).
+// keyboard-nav returns focus there when a modal closes; when that chunk loads
+// after a patch rendered the first modal, showModal() has already moved focus
+// into the dialog, so the opener is known only from here. 51-keyboard-nav.js
+// seeds its own tracker with it.
+let _djustOutsideFocus = null;
+document.addEventListener('focusin', function (e) {
+    const el = e.target;
+    if (el && el.closest && !el.closest('[role="dialog"], .dj-modal')) _djustOutsideFocus = el;
+}, true);
+
 // Called by each chunk after its code has run (see build-client.sh).
 const _DJUST_CHUNK_READY = {
     'uploads': function () {
@@ -14071,6 +14082,7 @@ function _djustExposeChunkScope() {
         slotIdFor: slotIdFor,
         slotFrameFields: slotFrameFields,
         _destroyDetachedHooks: _destroyDetachedHooks,
+        get _djustOutsideFocus() { return _djustOutsideFocus; },
     });
 }
 

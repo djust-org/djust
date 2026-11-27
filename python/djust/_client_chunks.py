@@ -104,6 +104,11 @@ def client_bundle_urls() -> Tuple[str, Dict[str, str]]:
 _TAG_RE = re.compile(r"<([a-zA-Z][\w-]*)([^<>]*)>")
 _CLASS_RE = re.compile(r"""\sclass\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))""", re.I)
 _ROLE_RE = re.compile(r"""\srole\s*=\s*["']?(dialog|tablist)(?=["'\s/]|$)""", re.I)
+# Inert markup the client never scans: <template> content is not in the
+# document tree, and <noscript> content is text when scripts run.
+_INERT_RE = re.compile(
+    r"<(template|noscript)(?=[\s/>])[^<>]*>.*?(?:</\1[^<>]*>|\Z)", re.DOTALL | re.IGNORECASE
+)
 
 
 def _attr(*names: str) -> "re.Pattern[str]":
@@ -118,6 +123,11 @@ def _classes(attrs: str) -> FrozenSet[str]:
     return frozenset((m.group(1) or m.group(2) or m.group(3) or "").split())
 
 
+def _words(words: Iterable[str]) -> str:
+    """A regex for any of ``words`` as a whole class token / attribute name."""
+    return r"(?<![\w-])(?:" + "|".join(re.escape(w) for w in words) + r")(?![\w-])"
+
+
 _COMPONENT_CLASSES = frozenset(
     "rich-select combobox dj-theme-toggle popover-wrapper dj-popconfirm-wrapper collapsible "
     "ctx-wrapper code-block-copy dropzone kanban rte multi-select split-pane".split()
@@ -126,8 +136,8 @@ _KEYBOARD_CLASSES = frozenset("dj-modal dj-accordion dj-dropdown dj-dropdown-men
 
 _UPLOAD = _attr("dj-upload", "dj-upload-drop")
 _VIRTUAL = _attr("dj-virtual")
-_CURSOR = re.compile(r"""\sdj-hook\s*=\s*["']?CursorOverlay(?=["'\s/]|$)""")
-_TUTORIAL = re.compile(r"""\sid\s*=\s*["']?dj-tutorial-bubble(?=["'\s/]|$)""")
+_CURSOR = re.compile(r"""\s(?i:dj-hook)\s*=\s*["']?CursorOverlay(?=["'\s/]|$)""")
+_TUTORIAL = re.compile(r"""\s(?i:id)\s*=\s*["']?dj-tutorial-bubble(?=["'\s/]|$)""")
 _FLIP = _attr("dj-flip")
 _TRANSITIONS = _attr("dj-transition", "dj-remove", "dj-transition-group")
 _VIEWPORT = _attr("dj-viewport-top", "dj-viewport-bottom")
@@ -135,34 +145,55 @@ _PREFETCH = _attr("dj-prefetch")
 _TRACK_STATIC = _attr("dj-track-static")
 _DIALOG = _attr("dj-dialog")
 
-# name -> (substrings that must occur in the page, test on (tag name, attrs)).
+# name -> (pre-check regex source: the marker as a whole word anywhere in the
+# page, test on (lower-cased tag name, attrs)). The pre-checks are joined into
+# one compiled alternation; only the chunks it names get the tag scan.
 _Matcher = Callable[[str, str], bool]
-_MARKERS: Dict[str, Tuple[Tuple[str, ...], _Matcher]] = {
-    "uploads": (("dj-upload",), lambda tag, attrs: bool(_UPLOAD.search(attrs))),
-    "virtual-list": (("dj-virtual",), lambda tag, attrs: bool(_VIRTUAL.search(attrs))),
-    "cursor-overlay": (("CursorOverlay",), lambda tag, attrs: bool(_CURSOR.search(attrs))),
-    "tutorial": (("dj-tutorial-bubble",), lambda tag, attrs: bool(_TUTORIAL.search(attrs))),
+_MARKERS: Dict[str, Tuple[str, _Matcher]] = {
+    "uploads": (
+        _words(["dj-upload", "dj-upload-drop"]),
+        lambda tag, attrs: bool(_UPLOAD.search(attrs)),
+    ),
+    "virtual-list": (_words(["dj-virtual"]), lambda tag, attrs: bool(_VIRTUAL.search(attrs))),
+    "cursor-overlay": (r"(?-i:CursorOverlay)", lambda tag, attrs: bool(_CURSOR.search(attrs))),
+    "tutorial": (_words(["dj-tutorial-bubble"]), lambda tag, attrs: bool(_TUTORIAL.search(attrs))),
     "component-behaviors": (
-        tuple(sorted(_COMPONENT_CLASSES)),
+        _words(sorted(_COMPONENT_CLASSES)),
         lambda tag, attrs: bool(_classes(attrs) & _COMPONENT_CLASSES),
     ),
     "keyboard-nav": (
-        ("role=", "dj-modal", "dj-accordion", "dj-dropdown"),
+        r"""role\s*=\s*["']?(?:dialog|tablist)(?![\w-])|""" + _words(sorted(_KEYBOARD_CLASSES)),
         lambda tag, attrs: bool(_ROLE_RE.search(attrs) or _classes(attrs) & _KEYBOARD_CLASSES),
     ),
-    "flip": (("dj-flip",), lambda tag, attrs: bool(_FLIP.search(attrs))),
+    "flip": (_words(["dj-flip"]), lambda tag, attrs: bool(_FLIP.search(attrs))),
     "transitions": (
-        ("dj-transition", "dj-remove"),
+        _words(["dj-transition", "dj-remove", "dj-transition-group"]),
         lambda tag, attrs: bool(_TRANSITIONS.search(attrs)),
     ),
-    "infinite-scroll": (("dj-viewport-",), lambda tag, attrs: bool(_VIEWPORT.search(attrs))),
+    "infinite-scroll": (
+        _words(["dj-viewport-top", "dj-viewport-bottom"]),
+        lambda tag, attrs: bool(_VIEWPORT.search(attrs)),
+    ),
     "prefetch": (
-        ("dj-prefetch",),
+        _words(["dj-prefetch"]),
         lambda tag, attrs: tag == "a" and bool(_PREFETCH.search(attrs)),
     ),
-    "track-static": (("dj-track-static",), lambda tag, attrs: bool(_TRACK_STATIC.search(attrs))),
-    "dialog": (("dj-dialog",), lambda tag, attrs: tag == "dialog" and bool(_DIALOG.search(attrs))),
+    "track-static": (
+        _words(["dj-track-static"]),
+        lambda tag, attrs: bool(_TRACK_STATIC.search(attrs)),
+    ),
+    "dialog": (
+        _words(["dj-dialog"]),
+        lambda tag, attrs: tag == "dialog" and bool(_DIALOG.search(attrs)),
+    ),
 }
+
+_GROUP = {name: "c%d" % i for i, name in enumerate(_MARKERS)}
+_NAME_BY_GROUP = {group: name for name, group in _GROUP.items()}
+_PRECHECK_RE = re.compile(
+    "|".join("(?P<%s>%s)" % (_GROUP[name], src) for name, (src, _) in _MARKERS.items()),
+    re.IGNORECASE,
+)
 
 
 def chunks_in_markup(masked: str) -> FrozenSet[str]:
@@ -170,16 +201,22 @@ def chunks_in_markup(masked: str) -> FrozenSet[str]:
 
     ``masked`` is the page with raw-text regions (scripts, styles, comments,
     title, textarea) masked, as post_processing's ``_mask_document_text``
-    returns it, so a marker quoted in a script or a code sample is not a hit.
-    A page that mentions none of the markers costs one substring test each.
+    returns it, so a marker quoted in a script or a code sample is not a hit;
+    ``<template>`` and ``<noscript>`` content is skipped here too. One compiled
+    pre-check over the page (each marker as a whole word, attribute names
+    case-insensitive) picks the candidate chunks; a page that names none of the
+    markers costs that one regex search and no tag scan.
     """
-    candidates = [
-        name for name, (needles, _) in _MARKERS.items() if any(n in masked for n in needles)
-    ]
+    candidates = set()
+    for m in _PRECHECK_RE.finditer(masked):
+        candidates.add(_NAME_BY_GROUP[m.lastgroup or ""])
+        if len(candidates) == len(_MARKERS):
+            break
     if not candidates:
         return frozenset()
+    markup = _INERT_RE.sub(" ", masked)
     found = set()
-    for m in _TAG_RE.finditer(masked):
+    for m in _TAG_RE.finditer(markup):
         tag = m.group(1).lower()
         attrs = m.group(2)
         for name in candidates:

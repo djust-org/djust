@@ -57,7 +57,7 @@ function staticLoader(hold = []) {
     };
 }
 
-function page(body, { bundle = 'client-core.js', chunkMap = null, extraHead = '', swController = false, hold = [] } = {}) {
+function page(body, { bundle = 'client-core.js', chunkMap = null, extraHead = '', swController = false, hold = [], setup = null } = {}) {
     const loader = staticLoader(hold);
     const mapAttr = chunkMap
         ? ` data-djust-chunks="${JSON.stringify(chunkMap).replace(/"/g, '&quot;')}"`
@@ -73,6 +73,7 @@ function page(body, { bundle = 'client-core.js', chunkMap = null, extraHead = ''
         pretendToBeVisual: true,
         beforeParse(window) {
             window.IntersectionObserver = class { observe() {} unobserve() {} disconnect() {} };
+            if (setup) setup(window);
             if (swController) {
                 Object.defineProperty(window.navigator, 'serviceWorker', {
                     value: { controller: { postMessage() {} }, addEventListener() {} },
@@ -407,6 +408,56 @@ describe('core bundle: the slice-2 chunks (#4320)', () => {
         window.djust.reinitAfterDOMUpdate(tab);
         await until(() => window.document.getElementById('dlg').hasAttribute('open'), 'opened dialog');
         expect(chunkRequests(loader)).toEqual(['/static/djust/chunks/dialog.js']);
+    });
+
+    it('the first modal a patch renders returns focus to its opener when keyboard-nav lands late', async () => {
+        // JSDOM has no showModal(); this one moves focus into the dialog as browsers do.
+        const setup = (w) => {
+            w.HTMLDialogElement.prototype.showModal = function () {
+                this.setAttribute('open', '');
+                const first = this.querySelector('button');
+                if (first) first.focus();
+            };
+        };
+        const { window, loader } = page(
+            '<div dj-view="app.V"><button id="opener">open</button><div id="tab"></div></div>',
+            { hold: ['keyboard-nav'], setup });
+        await until(() => window.djustInitialized, 'init');
+        // dj-dialog is already loaded (another dialog used it, or an explicit load).
+        await window.djust.loadClientChunk('dialog');
+        const doc = window.document;
+        doc.getElementById('opener').focus();
+        const tab = doc.getElementById('tab');
+        tab.innerHTML = '<dialog id="dlg" class="dj-modal" dj-dialog="open"><button id="inside">ok</button></dialog>';
+        window.djust.reinitAfterDOMUpdate(tab);
+        // showModal() takes focus before keyboard-nav exists to see the opener.
+        await until(() => doc.activeElement && doc.activeElement.id === 'inside', 'focus in dialog');
+        await until(() => chunkRequests(loader).includes('/static/djust/chunks/keyboard-nav.js'), 'keyboard-nav request');
+        loader.release('keyboard-nav');
+        await until(() => !!window.djust.keyboardNav && window.djust.keyboardNav._dialogStack.length === 1,
+            'keyboard-nav tracks the dialog');
+        tab.innerHTML = '';
+        await until(() => doc.activeElement && doc.activeElement.id === 'opener', 'focus back on the opener');
+    });
+
+    it('a dj-remove element a patch inserts is removed at once before transitions loads, then deferred', async () => {
+        const { window, loader } = page('<div dj-view="app.V"><ul id="list"></ul></div>', { hold: ['transitions'] });
+        await until(() => window.djustInitialized, 'init');
+        const list = window.document.getElementById('list');
+        list.innerHTML = '<li id="a" dj-remove="fade-out">a</li>';
+        window.djust.reinitAfterDOMUpdate(list);
+        await until(() => chunkRequests(loader).length === 1, 'transitions request');
+        // No dj-remove module yet: a removal goes through, nothing throws.
+        expect(window.djust.maybeDeferRemoval).toBeUndefined();
+        list.innerHTML = '';
+        expect(window.document.getElementById('a')).toBeNull();
+        loader.release('transitions');
+        await until(() => typeof window.djust.maybeDeferRemoval === 'function', 'transitions chunk');
+        list.innerHTML = '<li id="b" dj-remove="fade-out">b</li>';
+        const b = window.document.getElementById('b');
+        expect(window.djust.maybeDeferRemoval(b)).toBe(true);
+        expect(b.isConnected).toBe(true);
+        expect(chunkRequests(loader)).toEqual(['/static/djust/chunks/transitions.js']);
     });
 
     it('registering a service worker brings the prefetch chunk once the worker controls the page', async () => {

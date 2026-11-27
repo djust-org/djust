@@ -137,7 +137,11 @@ class Command(BaseCommand):
         from djust._client_chunks import client_bundle_urls, static_url as _static
 
         bundle_url, chunk_urls = client_bundle_urls()
-        assets = [bundle_url, *chunk_urls.values()]
+        # The error overlay loads only under DEBUG (window.DEBUG_MODE).
+        assets = [
+            bundle_url,
+            *(url for name, url in chunk_urls.items() if name != "error-overlay" or settings.DEBUG),
+        ]
         from djust.config import debug_panel_enabled
 
         if debug_panel_enabled():

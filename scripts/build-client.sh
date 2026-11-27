@@ -153,7 +153,7 @@ CHUNK_SPECS=(
     "service-worker|33-sw-registration.js|"
     # #4320, slice 2: the remaining dj-* and DEBUG-triggered feature modules.
     "component-behaviors|53-component-behaviors.js|"
-    "keyboard-nav|51-keyboard-nav.js|"
+    "keyboard-nav|51-keyboard-nav.js|_djustOutsideFocus"
     "error-overlay|36-error-overlay.js|"
     "dj-style|54-dj-style.js|"
     "flip|44-dj-flip.js|"

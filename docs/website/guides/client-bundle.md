@@ -146,7 +146,11 @@ your static files, as it already does for the client.
 injects (`client-core.min.js`, or `client.min.js` with `client_bundle:
 "full"`; the readable files under `DEBUG`) and every chunk, at the exact URLs
 the page requests (the `static()` name plus the `?v=` version query), so an
-offline page finds the core and any chunk it needs in the cache.
+offline page finds the core and any chunk it needs in the cache. The DEBUG-only
+`error-overlay` chunk is left out unless `DEBUG` is on. The command resolves
+all of this (`DEBUG`, `DJUST_CLIENT_JS_MINIFIED`, `client_bundle` and the
+`ManifestStaticFilesStorage` hashed names) from the settings it runs with, so
+run it with your production settings, after `collectstatic`.
 
 ## The full bundle
 

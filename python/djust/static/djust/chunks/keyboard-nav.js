@@ -2,6 +2,7 @@
 // Loaded by the core bundle (client-core.js) when the page needs it.
 ;(function () {
 if (!window.djust || typeof window.djust._chunkShouldRun !== 'function' || !window.djust._chunkShouldRun('keyboard-nav')) return;
+const __djScope = window.djust._chunkScope;
 // ============================================================================
 // keyboard-nav — keyboard interaction for djust-native components (#1522)
 // ============================================================================
@@ -51,7 +52,12 @@ if (!window.djust || typeof window.djust._chunkShouldRun !== 'function' || !wind
     // The last element focused outside any dialog. A native <dialog> may
     // already hold focus when the presence observer sees it (showModal()
     // moves focus in), so this, not activeElement, is where focus returns.
+    // Seeded from the core's tracker (13c-chunk-loader.js, #4320): loaded as a
+    // chunk after a patch rendered the first modal, this module starts after
+    // the opener lost focus to the dialog. (No `x ? y : z` here: the chunk
+    // build reads `name :` as an object key and would not rewrite it.)
     let _lastOutsideFocus = null;
+    if (typeof __djScope._djustOutsideFocus !== 'undefined') _lastOutsideFocus = __djScope._djustOutsideFocus;
 
     // -----------------------------------------------------------------------
     // Helpers
