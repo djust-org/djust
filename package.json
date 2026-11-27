@@ -23,7 +23,7 @@
     "happy-dom": "^21.0.4",
     "jsdom": "^31.0.1",
     "magic-string": "^1.4.5",
-    "terser": "^5.51.2",
+    "terser": "^5.51.4",
     "vitest": "^5.0.5"
   },
   "overrides": {
