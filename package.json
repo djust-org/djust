@@ -17,11 +17,13 @@
     "@vitest/istanbul-lib-instrument": "^2.0.0",
     "@vitest/istanbul-lib-source-maps": "^2.0.0",
     "@vitest/ui": "^5.0.5",
+    "chart.js": "4.5.1",
     "eslint": "^10.15.0",
     "eslint-plugin-security": "^4.2.1",
     "happy-dom": "^21.0.4",
     "jsdom": "^31.0.1",
     "magic-string": "^1.4.5",
+    "quill": "2.0.3",
     "terser": "^5.51.2",
     "vitest": "^5.0.5"
   },

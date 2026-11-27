@@ -394,6 +394,11 @@ def djust_client_config(context: Context) -> Any:
     attribute. See ``test_tag_output_is_escaped``.
     """
     request = context.get("request") if context is not None else None
+    if request is None and context is not None:
+        # #4322: a LiveView's own template context names the view, not the
+        # request; the route-map script still needs the request's CSP nonce,
+        # as {% colocated_hook %} reads it.
+        request = getattr(_context_view(context), "request", None)
     return _client_config_html(request)
 
 

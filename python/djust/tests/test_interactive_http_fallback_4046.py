@@ -1466,7 +1466,9 @@ async def test_a_selection_that_is_not_an_item_is_a_refused_event_on_the_socket(
     menu = ids(mount["html"])[0]
     try:
         frame = await ws_event(comm, "select", {"component_id": menu, "value": "nope"})
-        # The refusal, not the unexpected-error answer of a raising handler.
+        # The refusal, not the unexpected-error answer of a raising handler;
+        # it echoes the event's ref so the client settles that event (#4322).
+        assert frame.pop("ref", None) is not None, frame
         assert frame == {"type": "error", "error": "Event rejected"}, frame
         frame = await ws_event(comm, "select", {"component_id": menu, "value": "edit"})
         assert frame["type"] != "error" and picked(frame["html"]) == "edit|"
@@ -1520,6 +1522,7 @@ async def test_an_explicit_view_never_gets_the_refusal_detail_on_the_socket_in_d
             frame = await ws_event(comm, "select", {"component_id": menu, "value": "nope"})
         finally:
             await comm.disconnect()
+    assert frame.pop("ref", None) is not None, frame  # #4322
     assert frame == {"type": "error", "error": "Event rejected"}, frame
     assert REFUSAL_DETAIL in _logged(caplog)  # the detail is in the server log
 

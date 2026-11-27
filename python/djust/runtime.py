@@ -86,6 +86,7 @@ from ._late_save import LateSaveDropped
 from ._turn_ports import RuntimeTurnPort
 from .rate_limit import ConnectionRateLimiter
 from .security import handle_exception, sanitize_for_log
+from .security.error_handling import event_error_ref
 from .serialization import fast_json_loads
 from .turns import Turn, current_turn, run_turn
 from .validation import (
@@ -4598,7 +4599,9 @@ class ViewRuntime(RuntimeTurnPort):
                 await self.transport.close(code=4403)
                 return
             try:
-                await self._dispatch_event_render(data)
+                # #4322: an error frame sent during this turn echoes its ref.
+                with event_error_ref(data.get("ref")):
+                    await self._dispatch_event_render(data)
             finally:
                 if self.view_instance is not None:
                     self.view_instance.__dict__.pop("_djust_event_request", None)
@@ -5076,12 +5079,16 @@ class ViewRuntime(RuntimeTurnPort):
             ref=event_ref,
         )
         turn._locked = True  # the flush runs inside the event's event_context
-        await run_turn(
-            turn,
-            lambda _turn: self._dispatch_single_event_body(
-                target_view, event_name, params, event_ref
-            ),
-        )
+        # #4322: the replay runs inside the CURRENT event's turn, whose ref its
+        # error frames must not carry; its own ref was settled when it was
+        # queued (the noop acknowledgement), so its errors carry none.
+        with event_error_ref(None):
+            await run_turn(
+                turn,
+                lambda _turn: self._dispatch_single_event_body(
+                    target_view, event_name, params, event_ref
+                ),
+            )
 
     @_runtime_diagnostic_scope
     async def _dispatch_single_event_body(
