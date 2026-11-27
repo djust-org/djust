@@ -595,11 +595,15 @@ class DjustTemplate:
             # (an inclusion tag's own template) inherits it and a LiveView
             # render, which never comes through here, sees the fallback.
             from ..template_libraries import rendering_with_backend
+            from .._dj_model_bindings import suspend_recording
 
-            with rendering_with_backend(
-                self.backend,
-                use_l10n=getattr(context, "use_l10n", None),
-                use_tz=getattr(context, "use_tz", None),
+            with (
+                suspend_recording() as dj_model_bindings,
+                rendering_with_backend(
+                    self.backend,
+                    use_l10n=getattr(context, "use_l10n", None),
+                    use_tz=getattr(context, "use_tz", None),
+                ),
             ):
                 html = self.backend._render_fn_with_dirs(
                     resolved_template,
@@ -623,6 +627,7 @@ class DjustTemplate:
                         if isinstance(context, Context)
                         else getattr(self.backend, "autoescape", True)
                     ),
+                    dj_model_bindings=dj_model_bindings,
                 )
 
             # In DEBUG mode, inject data-dj-src attributes for template source mapping.

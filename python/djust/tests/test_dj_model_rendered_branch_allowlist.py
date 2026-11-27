@@ -15,8 +15,6 @@ from pathlib import Path
 
 import pytest
 
-from djust._rust import rendered_dj_model_fields
-
 _GATED = (
     '<div dj-root><input dj-model="search">'
     '{% if is_staff %}<input dj-model="staff_note">{% endif %}'
@@ -175,7 +173,50 @@ class TestLegitimateShapesStillBind:
 
 
 @pytest.mark.django_db
-class TestRenderedOutputOnlyNarrows:
+class TestRenderedDataNeverAddsABinding:
+    """The field is bound only in an untaken branch; the data tries to
+    re-create the binding in the output. None of it counts: only template
+    text that rendered grants a field."""
+
+    def _assert_refused(self, src, **attrs):
+        with _Templates(inj=src):
+            v = _view("inj", is_staff=False, **attrs)
+            html, _, _ = v.render_with_diff(None)
+            assert "staff_note" not in v._dj_model_fields, html
+            v.update_model(field="staff_note", value="written")
+            assert v.staff_note == ""
+            return html
+
+    def test_unquoted_interpolated_attribute(self):
+        html = self._assert_refused(
+            '<div dj-root><input dj-model="search"><span title={{ comment }}>x</span>'
+            '{% if is_staff %}<input dj-model="staff_note">{% endif %}</div>',
+            comment="x dj-model=staff_note",
+        )
+        # The payload really is an attribute of the rendered element.
+        assert "dj-model=staff_note" in html or 'dj-model="staff_note"' in html
+
+    def test_dynamic_binding_name(self):
+        self._assert_refused(
+            '<div dj-root><input dj-model="{{ comment }}">'
+            '{% if is_staff %}<input dj-model="staff_note">{% endif %}</div>',
+            comment="staff_note",
+        )
+
+    def test_safe_html(self):
+        self._assert_refused(
+            '<div dj-root><input dj-model="search">{{ comment|safe }}'
+            '{% if is_staff %}<input dj-model="staff_note">{% endif %}</div>',
+            comment='<input dj-model="staff_note">',
+        )
+
+    def test_escaped_text(self):
+        self._assert_refused(
+            '<div dj-root><input dj-model="search"><p>{{ comment }}</p>'
+            '{% if is_staff %}<input dj-model="staff_note">{% endif %}</div>',
+            comment='<input dj-model="staff_note"> dj-model="staff_note"',
+        )
+
     def test_output_cannot_add_a_field_the_template_never_binds(self):
         src = '<div dj-root><input dj-model="search">{{ comment|safe }}</div>'
         with _Templates(safe=src):
@@ -183,35 +224,135 @@ class TestRenderedOutputOnlyNarrows:
             v.render_with_diff(None)
             assert v._dj_model_fields == frozenset({"search"})
 
-    def test_text_that_looks_like_a_binding_does_not_count(self):
+
+@pytest.mark.django_db
+class TestEmbeddedChildRender:
+    """A ``{% live_render %}`` child renders through Django's engine; its
+    allowlist follows the TextNode runs that render executed."""
+
+    def _child(self, src, **attrs):
+        from djust import LiveView
+
+        names = ["search", "staff_note", "is_staff", "comment"]
+        body = {
+            "template": src,
+            "search": "",
+            "staff_note": "",
+            "is_staff": False,
+            "comment": "",
+            **attrs,
+            "get_context_data": lambda self, **kw: {n: getattr(self, n) for n in names},
+        }
+        return type("Child", (LiveView,), {"exposure_policy": "explicit", **body})()
+
+    def test_child_branch_and_injection(self):
+        from djust.websocket import render_embedded_child_html
+
         src = (
-            '<div dj-root><input dj-model="search"><p>{{ comment }}</p>'
+            '<div dj-root><input dj-model="search"><span title={{ comment }}>x</span>'
+            "{{ comment|safe }}"
             '{% if is_staff %}<input dj-model="staff_note">{% endif %}</div>'
         )
-        with _Templates(text=src):
-            v = _view("text", comment='<input dj-model="staff_note"> dj-model="staff_note"')
-            v.render_with_diff(None)
-            assert v._dj_model_fields == frozenset({"search"})
+        child = self._child(src, comment="x dj-model=staff_note")
+        render_embedded_child_html(child)
+        assert child._dj_model_fields == frozenset({"search"})
+
+        child = self._child(src, is_staff=True)
+        render_embedded_child_html(child)
+        assert child._dj_model_fields == frozenset({"search", "staff_note"})
 
 
-class TestRenderedFieldCollector:
-    def test_only_element_attributes_count(self):
-        html = (
-            '<div dj-root><input dj-model="a"><p>dj-model="b"</p>'
-            '<!-- <input dj-model="c"> --><textarea>&lt;input dj-model="d"&gt;</textarea></div>'
-        )
-        assert rendered_dj_model_fields(html) == ["a"]
+class TestTextNodeRecorder:
+    def test_scan_matches_the_template_walker(self):
+        from djust._dj_model_bindings import scan_dj_model_bindings
 
-    def test_embedded_child_views_are_skipped(self):
-        html = (
-            '<div dj-root><input dj-model="own">'
-            '<div dj-view data-djust-embedded="c"><input dj-model="child"></div></div>'
-        )
-        assert rendered_dj_model_fields(html) == ["own"]
+        assert scan_dj_model_bindings('<input dj-model="a"><i data-dj-model="b">') == ["a"]
+        assert scan_dj_model_bindings("<input dj-model='a' x dj-model=\"\">") == ["a"]
+        assert scan_dj_model_bindings("<input dj-model=a>") == []
 
-    def test_no_output_allows_nothing(self):
-        from djust.mixins.model_binding import _narrow_to_rendered
+    def test_records_only_the_text_that_rendered(self):
+        from django.template import Context, Template
 
-        assert _narrow_to_rendered(["a"], "") == frozenset()
-        assert _narrow_to_rendered(["a"], None) == frozenset()
-        assert _narrow_to_rendered([], '<input dj-model="a">') == frozenset()
+        from djust._dj_model_bindings import record_bindings
+
+        tpl = Template('<input dj-model="a">{% if f %}<input dj-model="b">{% endif %}{{ v|safe }}')
+        with record_bindings() as fields:
+            tpl.render(Context({"f": False, "v": '<input dj-model="c">'}))
+        assert fields == {"a"}
+        with record_bindings() as outer:
+            with record_bindings() as inner:
+                tpl.render(Context({"f": True}))
+        assert inner == {"a", "b"} and outer == set()
+
+
+_CHILD_SRC = (
+    '<div dj-root><input dj-model="search"><span title={{ comment }}>x</span>'
+    "{{ comment|safe }}"
+    '{% if is_staff %}{% include "part.html" %}{% endif %}</div>'
+)
+
+
+def _file_child(**attrs):
+    from djust import LiveView
+
+    names = ["search", "staff_note", "is_staff", "comment"]
+    body = {
+        "template_name": "child.html",
+        "search": "",
+        "staff_note": "",
+        "is_staff": False,
+        "comment": "",
+        **attrs,
+        "get_context_data": lambda self, **kw: {n: getattr(self, n) for n in names},
+    }
+    return type("FileChild", (LiveView,), {"exposure_policy": "explicit", **body})()
+
+
+_ENGINES = {
+    "django": "django.template.backends.django.DjangoTemplates",
+    "djust": "djust.template.backend.DjustTemplateBackend",
+}
+
+
+@pytest.fixture(params=sorted(_ENGINES))
+def rel_files(tmp_path, request):
+    """Template files for each engine (``write(name, source)``)."""
+    from django.test import override_settings
+
+    from djust.utils import clear_template_dirs_cache
+
+    root = tmp_path / "templates"
+    root.mkdir()
+
+    def write(name: str, source: str) -> None:
+        (root / name).write_text(source)
+
+    templates = [
+        {"BACKEND": _ENGINES[request.param], "DIRS": [str(root)], "APP_DIRS": False, "OPTIONS": {}}
+    ]
+    with override_settings(TEMPLATES=templates):
+        clear_template_dirs_cache()
+        try:
+            yield write
+        finally:
+            clear_template_dirs_cache()
+
+
+def test_child_allowlist_under_each_template_engine(rel_files) -> None:
+    """Django's engine and djust's own backend (which renders in Rust) agree."""
+    from djust.websocket import render_embedded_child_html
+
+    rel_files("child.html", _CHILD_SRC)
+    rel_files("part.html", '<textarea dj-model="staff_note"></textarea>')
+
+    child = _file_child(comment="x dj-model=staff_note")
+    render_embedded_child_html(child)
+    assert child._dj_model_fields == frozenset({"search"})
+
+    child = _file_child(comment='<input dj-model="staff_note">')
+    render_embedded_child_html(child)
+    assert child._dj_model_fields == frozenset({"search"})
+
+    child = _file_child(is_staff=True)
+    render_embedded_child_html(child)
+    assert child._dj_model_fields == frozenset({"search", "staff_note"})

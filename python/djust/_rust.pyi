@@ -604,16 +604,6 @@ def active_unlocalized_number_format() -> Optional[Tuple[str, str, List[int], bo
 def clear_dj_model_fields_cache() -> None:
     """Forget every cached ``RustLiveView.dj_model_fields(cache=True)`` result."""
 
-def rendered_dj_model_fields(html: str) -> List[str]:
-    """
-    The ``dj-model`` values bound by elements of rendered HTML, parsed as an
-    HTML5 tree, outside embedded child views (sorted, deduplicated). Text,
-    comments and escaped values never count. The model-binding allowlist
-    intersects this with the template's static bindings, so only branches
-    rendered for a view instance grant writes.
-    """
-    ...
-
 def dj_model_fields_from_template(
     template_source: str,
     template_dirs: Optional[List[str]] = None,
@@ -1360,6 +1350,21 @@ class RustLiveView:
         """
         ...
 
+    def writable_dj_model_fields(self, cache: bool = False) -> List[str]:
+        """
+        The dj-model fields a client may write for this view's current state:
+        the static bindings of :meth:`dj_model_fields` that the state renders.
+
+        Bindings on always-rendered paths are granted outright; a binding in an
+        ``{% if %}``/``{% for %}`` branch, a custom block tag, an include or a
+        lazy site is granted only when a bindings-only render of the current
+        state emits it from template text (inline custom tags are not executed
+        and no render cache changes). Rendered data never adds a field. In
+        authenticated partial-root mode, the committed page's
+        provenance-checked fields. ``cache`` as for :meth:`dj_model_fields`.
+        """
+        ...
+
     def clear_fragment_cache(self) -> None:
         """
         Clear the partial-render fragment cache, forcing the next render to
@@ -1612,7 +1617,6 @@ __all__ = [
     "MAX_CONVERSION_DEPTH",
     "MAX_MD_NESTING",
     "dj_model_fields_from_template",
-    "rendered_dj_model_fields",
     "clear_dj_model_fields_cache",
     "serialize_queryset",
     "serialize_context",

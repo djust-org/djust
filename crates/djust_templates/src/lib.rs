@@ -49,7 +49,7 @@ pub use parser::extract_template_variables;
 // Re-export for the dj-model mass-assignment allowlist (CWE-915, finding #3):
 // derives the bindable-field set from developer-authored template TEXT, which
 // attacker data can never reach (immune to rendered-output poisoning).
-pub use parser::{collect_dj_model_fields, extract_dj_model_fields};
+pub use parser::{collect_dj_model_fields, extract_dj_model_field_split, extract_dj_model_fields};
 
 // These regexes may be used in future template parsing improvements
 #[allow(dead_code)]
@@ -323,6 +323,26 @@ impl Template {
         template_name: Option<&str>,
     ) -> Result<String> {
         self.render_output_named_mut::<L, String>(context, loader, template_name)
+    }
+
+    /// The `dj-model` fields bound by template text that this render emits.
+    ///
+    /// A [`provenance::ModelBindings`] render: control flow, includes and
+    /// inheritance run as in a normal render, so only the `{% if %}`/`{% for %}`
+    /// branches taken for `context` contribute; inline custom tags are not
+    /// executed and rendered data never adds a field. Sorted, deduplicated.
+    pub fn render_dj_model_bindings_named<L: TemplateLoader>(
+        &self,
+        context: &mut Context,
+        loader: &L,
+        template_name: Option<&str>,
+    ) -> Result<Vec<String>> {
+        let output: provenance::ModelBindings =
+            self.render_output_named_mut(context, loader, template_name)?;
+        let mut fields = output.fields;
+        fields.sort();
+        fields.dedup();
+        Ok(fields)
     }
 
     /// Render bytes and their authored origin as one result (#3252).
