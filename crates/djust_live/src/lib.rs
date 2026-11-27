@@ -7132,6 +7132,20 @@ fn dj_model_fields_from_template(
     })
 }
 
+/// The `dj-model` values bound by elements of rendered HTML, outside embedded
+/// child views (see `djust_vdom::lazy_provenance::rendered_model_fields`).
+///
+/// The Python side intersects this with the template's static bindings
+/// ([`dj_model_fields_from_template`] / `RustLiveView.dj_model_fields`), so a
+/// field is writable only when the template binds it AND the branch that binds
+/// it was rendered for this view instance.
+#[pyfunction]
+fn rendered_dj_model_fields(py: Python<'_>, html: &str) -> PyResult<Vec<String>> {
+    guard_panic("rendered_dj_model_fields", move || {
+        Ok(py.detach(|| djust_vdom::lazy_provenance::rendered_model_fields(html)))
+    })
+}
+
 /// Compute the canonical 8-hex template-source hash from a raw source
 /// string, without instantiating a [`RustLiveViewBackend`]. Used by the
 /// Python state-backend cache-key construction in
@@ -7284,6 +7298,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(active_unlocalized_number_format, m)?)?;
     m.add_function(wrap_pyfunction!(virtual_keyed_ops_enabled, m)?)?;
     m.add_function(wrap_pyfunction!(dj_model_fields_from_template, m)?)?;
+    m.add_function(wrap_pyfunction!(rendered_dj_model_fields, m)?)?;
     m.add_function(wrap_pyfunction!(clear_dj_model_fields_cache, m)?)?;
 
     // Actor system exports
