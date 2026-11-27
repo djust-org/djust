@@ -176,6 +176,7 @@ class TestGuardCoversTheRenderSurface:
             "serialize_context_py",
             "extract_template_variables_py",
             "dj_model_fields_from_template",
+            "rendered_dj_model_fields",
             "compute_template_hash",
             # Both #2477/#2489 predicates. They CONVERT A USER VALUE — the
             # shallow one runs every `FromPyObject` arm probe and the gate; the

@@ -604,6 +604,16 @@ def active_unlocalized_number_format() -> Optional[Tuple[str, str, List[int], bo
 def clear_dj_model_fields_cache() -> None:
     """Forget every cached ``RustLiveView.dj_model_fields(cache=True)`` result."""
 
+def rendered_dj_model_fields(html: str) -> List[str]:
+    """
+    The ``dj-model`` values bound by elements of rendered HTML, parsed as an
+    HTML5 tree, outside embedded child views (sorted, deduplicated). Text,
+    comments and escaped values never count. The model-binding allowlist
+    intersects this with the template's static bindings, so only branches
+    rendered for a view instance grant writes.
+    """
+    ...
+
 def dj_model_fields_from_template(
     template_source: str,
     template_dirs: Optional[List[str]] = None,
@@ -1602,6 +1612,7 @@ __all__ = [
     "MAX_CONVERSION_DEPTH",
     "MAX_MD_NESTING",
     "dj_model_fields_from_template",
+    "rendered_dj_model_fields",
     "clear_dj_model_fields_cache",
     "serialize_queryset",
     "serialize_context",

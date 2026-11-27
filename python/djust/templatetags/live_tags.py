@@ -72,7 +72,7 @@ def djust_audio(context: Any) -> SafeString:
     )
 
 
-def _record_child_dj_model_allowlist(child: Any) -> None:
+def _record_child_dj_model_allowlist(child: Any, rendered_html: Any) -> None:
     """Populate an embedded ``{% live_render %}`` child's dj-model allowlist
     from the CHILD's own TEMPLATE SOURCE (CWE-915 mass-assignment guard).
 
@@ -83,7 +83,9 @@ def _record_child_dj_model_allowlist(child: Any) -> None:
     here. Source is preferred via ``child.get_template()`` (fully resolves
     ``{% extends %}``); falls back to the inline ``template`` / raw
     ``template_name`` source. Derivation is from the Rust template AST
-    (Text-node literals only), immune to rendered-output poisoning.
+    (Text-node literals only), immune to rendered-output poisoning, narrowed
+    to the bindings present in ``rendered_html`` (the child's own output from
+    this render), so an untaken ``{% if %}`` branch grants no writes.
     """
     if not hasattr(child, "_record_dj_model_fields_from_source"):
         return
@@ -104,7 +106,9 @@ def _record_child_dj_model_allowlist(child: Any) -> None:
                     from django.template import loader as _loader
 
                     source = _loader.get_template(template_name).template.source
-        child._record_dj_model_fields_from_source(source, get_template_dirs())
+        child._record_dj_model_fields_from_source(
+            source, get_template_dirs(), rendered_html=rendered_html
+        )
     except Exception:  # noqa: BLE001 — never let allowlist collection break a render
         # Fail closed: the child's _record_dj_model_fields_from_source already
         # resets to an empty frozenset on its own error path; guard the
@@ -1898,7 +1902,7 @@ def _render_sticky_child_html(
     # so child update_model events (gated on the child's _dj_model_fields)
     # accept its dj-model inputs — this render bypasses render_with_diff
     # (#3 Stage-11 review, #1646 parallel-path).
-    _record_child_dj_model_allowlist(child)
+    _record_child_dj_model_allowlist(child, rendered_inner)
     rendered_stamped = _stamp_view_id(rendered_inner, view_id)
     escaped_id = escape(view_id)
     if sticky_id_value is None:
@@ -2434,7 +2438,7 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
                 # child's _dj_model_fields) accept its dj-model inputs — this
                 # render bypasses render_with_diff (#3 Stage-11 review, #1646
                 # parallel-path).
-                _record_child_dj_model_allowlist(child)
+                _record_child_dj_model_allowlist(child, rendered_inner)
                 rendered_stamped = _stamp_view_id(rendered_inner, view_id)
                 # Wrap in a [dj-view] container so events route via
                 # data-djust-embedded just like the eager path.
@@ -2903,7 +2907,7 @@ def live_render(context: Context, view_path: str, **kwargs: Any) -> Any:
     # so child update_model events (gated on the child's _dj_model_fields)
     # accept its dj-model inputs — this render bypasses render_with_diff
     # (#3 Stage-11 review, #1646 parallel-path).
-    _record_child_dj_model_allowlist(child)
+    _record_child_dj_model_allowlist(child, rendered_inner)
     rendered_stamped = _stamp_view_id(rendered_inner, view_id)
     escaped_id = escape(view_id)
     return mark_safe(
