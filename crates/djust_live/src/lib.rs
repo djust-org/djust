@@ -173,6 +173,10 @@ type DjModelFieldSplit = (Vec<String>, Vec<String>);
 static DJ_MODEL_FIELD_SPLIT_CACHE: Lazy<DashMap<DjModelFieldsKey, DjModelFieldSplit>> =
     Lazy::new(DashMap::new);
 
+/// `RustLiveViewBackend::dj_model_gate`: source address and length, template
+/// directories, cache generation, answer.
+type DjModelGate = ((usize, usize), Vec<PathBuf>, u64, bool);
+
 /// A view render's dj-model frame: recording, or paused for a template with
 /// no conditional binding.
 enum DjModelRecording {
@@ -184,6 +188,20 @@ enum DjModelRecording {
 /// "records dj-model bindings" answer is recomputed after a reload.
 static DJ_MODEL_CACHE_GENERATION: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
+
+/// Whether a view render on this thread is recording its dj-model bindings
+/// and is not inside a tag whose body does not count.
+#[pyfunction]
+fn dj_model_recording_active() -> bool {
+    djust_templates::model_bindings::is_recording()
+}
+
+/// Add the template-text dj-model bindings a raw-block tag handler declaring
+/// `EMITS_BODY` rendered to the active recording (a no-op without one).
+#[pyfunction]
+fn record_dj_model_bindings(fields: Vec<String>) {
+    djust_templates::model_bindings::record_fields(fields);
+}
 
 /// Forget every cached `dj_model_fields(cache=True)` result (hot reload, a
 /// settings change, test isolation).
@@ -446,7 +464,7 @@ pub struct RustLiveViewBackend {
     /// and length (no second reference to the shared text), dirs, cache
     /// generation and the answer. A stale answer only records when not needed
     /// or grants just the unconditional bindings.
-    dj_model_gate: Option<((usize, usize), Vec<PathBuf>, u64, bool)>,
+    dj_model_gate: Option<DjModelGate>,
     /// Context keys that changed since the last render (None = full render)
     changed_keys: Option<HashSet<String>>,
     /// Maps template node index → (VDOM path, djust_id) for text-only fragments.
@@ -8376,6 +8394,8 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(active_unlocalized_number_format, m)?)?;
     m.add_function(wrap_pyfunction!(dj_model_fields_from_template, m)?)?;
     m.add_function(wrap_pyfunction!(clear_dj_model_fields_cache, m)?)?;
+    m.add_function(wrap_pyfunction!(dj_model_recording_active, m)?)?;
+    m.add_function(wrap_pyfunction!(record_dj_model_bindings, m)?)?;
 
     // Render environment (ADR-029)
     m.add_class::<RenderEnvPy>()?;

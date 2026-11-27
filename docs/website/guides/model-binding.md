@@ -194,10 +194,13 @@ The ModelBindingMixin enforces these rules:
   template-derived (`{% ifperm %}<input dj-model="note">{% endifperm %}`, a
   library block tag, `{% ifchanged %}`, an inclusion tag's template): the tag
   decides what of its body reaches the page, so list such fields in
-  `allowed_model_fields`. System check `djust.T030` warns about them. A Rust
-  block-tag handler that always emits its body unchanged may declare
-  `EMITS_BODY = True` (djust's `app_shell`, `app_sidebar`, `app_header` and
-  `app_content` do)
+  `allowed_model_fields`. System check `djust.T030` warns about them. A
+  block-tag handler that always emits its body unchanged declares
+  `EMITS_BODY = True`; the built-in component tags that do (`card`,
+  `accordion`, `tabs`, `form_group`, `fieldset`, `app_shell`, ... — the list
+  is `djust.components.rust_handlers.EMITS_BODY_TAGS`) keep working as
+  before. Tags that can hide their body (`modal`, `dropdown`, `await`,
+  `nav_item`, `{% call %}` / `{% slot %}`) do not
 - The blocked set is explicit, not a heuristic: `template_name`, `request`,
   `session`, `kwargs`, `args` and `temporary_assigns`
 

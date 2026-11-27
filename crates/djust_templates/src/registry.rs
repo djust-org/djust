@@ -1507,11 +1507,12 @@ pub fn block_handler_emits_body(name: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Whether the block tag handler registered as `tag_name` declared
-/// `EMITS_BODY` (see [`read_emits_body`]); `False` for an unknown tag.
+/// Whether the block or raw-block tag handler registered as `tag_name`
+/// declared `EMITS_BODY` (see [`read_emits_body`]); `False` for an unknown
+/// tag.
 #[pyfunction]
 pub fn block_tag_handler_emits_body(tag_name: &str) -> bool {
-    block_handler_emits_body(tag_name)
+    block_handler_emits_body(tag_name) || raw_block_handler_emits_body(tag_name)
 }
 
 /// Retain the phase-one handler with its opaque state across body rendering.
@@ -2262,6 +2263,10 @@ struct RawBlockHandlerEntry {
     /// renders on its own Django `Context`, and only `Context(autoescape=…)`
     /// can carry the surrounding `{% autoescape %}` policy into it.
     wants_autoescape: bool,
+    /// See [`read_emits_body`]: the handler renders exactly the body it
+    /// emits and reports the dj-model bindings of that render
+    /// (`record_dj_model_bindings`), so its body is not suppressed.
+    emits_body: bool,
 }
 
 /// Global registry for raw-block tag handlers (#2558). Same reader/writer
@@ -2288,6 +2293,7 @@ pub fn register_raw_block_tag_handler(
     }
     let returns_bindings = read_returns_bindings(handler_ref)?;
     let wants_autoescape = read_wants_autoescape(handler_ref)?;
+    let emits_body = read_emits_body(handler_ref)?;
     let validator = read_parse_validator(handler_ref)?;
 
     let mut registry = RAW_BLOCK_HANDLERS.write().map_err(|e| {
@@ -2301,12 +2307,23 @@ pub fn register_raw_block_tag_handler(
             validator,
             returns_bindings,
             wants_autoescape,
+            emits_body,
         },
     );
     drop(registry);
     drop(_bump); // Publish the mutation before Python finalizers can re-enter.
     drop(removed);
     Ok(())
+}
+
+/// Whether this raw-block handler declared `EMITS_BODY` (see
+/// [`read_emits_body`]). A missing tag reads as `false`.
+pub fn raw_block_handler_emits_body(name: &str) -> bool {
+    RAW_BLOCK_HANDLERS
+        .read()
+        .ok()
+        .and_then(|registry| registry.get(name).map(|entry| entry.emits_body))
+        .unwrap_or(false)
 }
 
 /// Unregister a raw-block tag handler (#2558).
