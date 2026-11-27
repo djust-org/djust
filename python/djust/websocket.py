@@ -651,19 +651,21 @@ def render_embedded_child_html(child_view: Any) -> str:
         engine = engines["django"] if "django" in engines else list(engines.all())[0]
         tmpl = engine.from_string(template_str)
         # Django's engine renders this; the template-call guard (#3880) is applied here.
-        with active_parent_view(child_view), include_guard_scope():
+        from ._dj_model_bindings import record_bindings
+
+        with active_parent_view(child_view), include_guard_scope(), record_bindings() as bindings:
             html = tmpl.render(context)
         # Record the child's dj-model auto-allowlist from ITS own TEMPLATE
         # SOURCE — child update_model events gate against the child's
         # _dj_model_fields, and this is the child's only render path (it
         # bypasses render_with_diff). Derived from the Rust template AST
-        # (Text-node literals), immune to rendered-output poisoning
-        # (#3 review #1646).
+        # (Text-node literals), narrowed to the template-text bindings this
+        # render executed, so rendered data never adds a field (#1646).
         if hasattr(child_view, "_record_dj_model_fields_from_source"):
             from .utils import get_template_dirs
 
             child_view._record_dj_model_fields_from_source(
-                template_str, get_template_dirs(), rendered_html=html
+                template_str, get_template_dirs(), rendered_bindings=bindings
             )
         return str(html)
     except Exception as e:

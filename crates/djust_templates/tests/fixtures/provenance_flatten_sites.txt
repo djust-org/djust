@@ -587,6 +587,7 @@ djust_live/src/lib.rs
 Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
 self.dj_if_id_namespace = namespace.to_string();
 let prefix = format!("{key}.");
+let key = (self.template_source.to_string(), self.template_dirs.clone());
 Ok(dict.into())
 Ok((result.html, spans, result.origins))
 return Err(e.into());
@@ -1371,6 +1372,14 @@ self.html.push_str(&child.html);
 self.append(&Self::from(text.to_owned()));
 *id = format!("{identity}/{id}");
 self.identify(&format!("loop{}", context.dj_if_loop_path()));
+&self.html
+f.write_str(&self.html)
+html: text.to_owned(),
+fn into_authored_output(self) -> djust_core::context::AuthoredOutput {
+self.html.into_authored_output()
+output.0.into()
+self.html.push_str(&child.html);
+self.html.push_str(text);
 ctx.set("flag".into(), Value::Bool(true));
 "xs".into(),
 ctx.set("extra".into(), Value::String("Δ".into()));
@@ -1450,3 +1459,13 @@ for children in node.child_lists_mut().into_iter().flatten() {
 (start, end, format!("container{index}:{hash:016x}"))
 for children in node.child_lists_mut().into_iter().flatten() {
 &std::sync::Arc::from(source),
+ctx.set((*k).into(), v.clone());
+let inc = r#"{% if staff %}{% with x=1 %}{% include "p.html" %}{% endwith %}{% endif %}"#;
+let files = [("p.html", r#"<textarea dj-model="note"></textarea>"#)];
+let ext = r#"{% extends "base.html" %}{% block b %}{% if staff %}<input dj-model="note">{% endif %}{% endblock %}"#;
+"base.html",
+let src = r#"<input dj-model="a">{% block b %}{% with x=1 %}<input dj-model="b">{% endwith %}{% endblock %}{% if f %}<input dj-model="c">{% endif %}{% for r in rs %}<input dj-model="d">{% endfor %}{% include "p.html" %}"#;
+"p.html",
+let payload = Value::String("x dj-model=note".into());
+assert!(bindings(src, &[("field", Value::String("note".into()))], &[]).is_empty());
+let html = Value::String(r#"<input dj-model="note">"#.into());

@@ -80,17 +80,17 @@ def _make_view(**attrs):
     return cls()
 
 
-def _record(view, template_source, rendered_html=None):
+def _record(view, template_source, rendered_bindings=None):
     """Populate ``view._dj_model_fields`` from a template SOURCE string via the
-    real Rust template walker (the production collection path). The allowlist
-    is derived from developer-authored template text, immune to rendered-output
-    poisoning, then narrowed to the bindings the render emitted. A template
-    without tags renders as itself, so ``rendered_html`` defaults to the
-    source."""
-    view._record_dj_model_fields_from_source(
-        template_source,
-        rendered_html=template_source if rendered_html is None else rendered_html,
-    )
+    real Rust template walker (the production collection path), narrowed to
+    the template-text bindings the render executed. A template without tags
+    renders all of its text, so ``rendered_bindings`` defaults to the text's
+    own bindings."""
+    from djust._dj_model_bindings import scan_dj_model_bindings
+
+    if rendered_bindings is None:
+        rendered_bindings = set(scan_dj_model_bindings(template_source))
+    view._record_dj_model_fields_from_source(template_source, rendered_bindings=rendered_bindings)
 
 
 class TestMassAssignmentRepro:
@@ -250,8 +250,8 @@ class TestRecordDjModelFieldsFromSource:
             v,
             "{% if flag %}<input dj-model='a'>{% endif %}"
             "{% for it in items %}<input dj-model='b'>{% endfor %}",
-            # flag true, one item: both branches rendered.
-            "<input dj-model='a'><input dj-model='b'>",
+            # flag true, one item: both runs of text rendered.
+            {"a", "b"},
         )
         assert v._dj_model_fields == frozenset({"a", "b"})
 
