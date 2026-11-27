@@ -976,8 +976,11 @@ Added in v1.0.0 (#1605). The older mechanism (`SILENCED_SYSTEM_CHECKS` / `DJUST_
   tags). The view's dj-model write allowlist holds only the bindings the last
   render emitted from template text, and the body of a custom block tag
   (`{% ifperm %}…{% endifperm %}`, `{% ifchanged %}`, a library block tag) never
-  counts, because the tag decides what of its body reaches the page. A Rust
-  block-tag handler that declares `EMITS_BODY = True` is exempt.
+  counts, because the tag decides what of its body reaches the page. A
+  block-tag handler that declares `EMITS_BODY = True` is exempt; the built-in
+  component tags that always emit their body (`card`, `accordion`, `tabs`,
+  `form_group`, `app_shell` and the others in
+  `djust.components.rust_handlers.EMITS_BODY_TAGS`) do.
 - **Fix**: list the field in the view's `allowed_model_fields`, or move the input
   out of the tag.
 - **Suppression**: `DJUST_CONFIG = {"suppress_checks": ["T030"]}`

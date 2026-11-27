@@ -172,6 +172,20 @@ enum DjModelRecording {
 static DJ_MODEL_CACHE_GENERATION: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
+/// Whether a view render on this thread is recording its dj-model bindings
+/// and is not inside a tag whose body does not count.
+#[pyfunction]
+fn dj_model_recording_active() -> bool {
+    djust_templates::model_bindings::is_recording()
+}
+
+/// Add the template-text dj-model bindings a raw-block tag handler declaring
+/// `EMITS_BODY` rendered to the active recording (a no-op without one).
+#[pyfunction]
+fn record_dj_model_bindings(fields: Vec<String>) {
+    djust_templates::model_bindings::record_fields(fields);
+}
+
 /// Forget every cached `dj_model_fields(cache=True)` result (hot reload, a
 /// settings change, test isolation).
 #[pyfunction]
@@ -7485,6 +7499,8 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(virtual_keyed_ops_enabled, m)?)?;
     m.add_function(wrap_pyfunction!(dj_model_fields_from_template, m)?)?;
     m.add_function(wrap_pyfunction!(clear_dj_model_fields_cache, m)?)?;
+    m.add_function(wrap_pyfunction!(dj_model_recording_active, m)?)?;
+    m.add_function(wrap_pyfunction!(record_dj_model_bindings, m)?)?;
 
     // Actor system exports
     m.add_class::<SessionActorHandlePy>()?;

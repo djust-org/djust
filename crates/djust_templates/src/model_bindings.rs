@@ -172,6 +172,16 @@ pub fn record_text(text: &str) {
     });
 }
 
+/// Record bindings a raw-block handler declaring `EMITS_BODY` read from the
+/// template text of its own (Django) render of its body.
+pub fn record_fields(fields: Vec<String>) {
+    with_top(|frame| {
+        if frame.suppressed == 0 {
+            frame.fields.extend(fields);
+        }
+    });
+}
+
 /// Mark the start of one top-level node of a collecting/partial render.
 pub fn begin_node() -> Option<usize> {
     with_top(|frame| frame.fields.len())

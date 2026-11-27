@@ -1458,9 +1458,10 @@ dj-model="note" is inside the body of {% ifperm %}; it is not writable unless
 listed in allowed_model_fields.'
 
 **Fix**: add the field to the view's `allowed_model_fields` (the view then
-accepts it whatever the tag renders), or move the input out of the tag. A Rust
+accepts it whatever the tag renders), or move the input out of the tag. A
 block-tag handler that always emits its body unchanged can declare
-`EMITS_BODY = True`. Suppress with `DJUST_CONFIG = {"suppress_checks": ["T030"]}`.
+`EMITS_BODY = True`; the built-in component tags that do are listed in
+`djust.components.rust_handlers.EMITS_BODY_TAGS`. Suppress with `DJUST_CONFIG = {"suppress_checks": ["T030"]}`.
 
 ---
 

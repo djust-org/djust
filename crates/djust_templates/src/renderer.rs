@@ -1702,8 +1702,10 @@ fn call_raw_block_tag(
     body: &str,
     context: &Context,
 ) -> Result<(String, Vec<SiblingBinding>)> {
-    // The body is source the handler compiles and renders itself.
-    let _bindings = crate::model_bindings::Suppress::begin();
+    // The body is source the handler compiles and renders itself; only a
+    // handler declaring `EMITS_BODY` reports the bindings of that render.
+    let _bindings = (!crate::registry::raw_block_handler_emits_body(name))
+        .then(crate::model_bindings::Suppress::begin);
     let plain: Vec<TagArg> = args.iter().map(|a| TagArg::plain(a.clone())).collect();
     // #2710: through the ONE bridge, so a deferred `block.super` is
     // materialised for the flat map Python resolves against.

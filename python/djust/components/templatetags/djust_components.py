@@ -10473,3 +10473,63 @@ def do_dashboard_grid(parser: Any, token: Any) -> template.Node:
     nodelist = parser.parse(("enddashboard_grid",))
     parser.delete_first_token()
     return DashboardGridNode(nodelist, kwargs)
+
+
+# Block-tag nodes that render only the parts of their body they emit (most emit all of it; the
+# accordion renders only the open item, ``tabs`` only the active pane). Under Django's engine the
+# dj-model bindings in their bodies count toward the view's write allowlist; every other custom
+# node's body does not (``djust._dj_model_bindings``). ``DropdownNode`` renders its body and drops
+# it while closed, so it is not one, although the Rust handler of ``dropdown`` always emits its
+# body. The Rust handlers declare it through ``rust_handlers.EMITS_BODY_TAGS``; pinned by
+# ``test_dj_model_emits_body_tags``.
+for _emits_body_node in (
+    ModalDescriptionNode,
+    CardNode,
+    AccordionNode,
+    AccordionItemNode,
+    AlertNode,
+    FormGroupNode,
+    TimelineNode,
+    TimelineItemNode,
+    TooltipNode,
+    PopoverNode,
+    CollapsibleNode,
+    SheetNode,
+    CommandPaletteNode,
+    ContextMenuNode,
+    InputGroupNode,
+    InputAddonNode,
+    DjLabelNode,
+    FieldsetNode,
+    LoadingOverlayNode,
+    AnnouncementBarNode,
+    PageHeaderActionsNode,
+    PageHeaderNode,
+    SidebarNode,
+    SidebarItemNode,
+    NavMenuNode,
+    AppShellNode,
+    AppSidebarNode,
+    AppHeaderNode,
+    AppContentNode,
+    ToolbarNode,
+    ToolbarOverflowNode,
+    FilterBarNode,
+    HoverCardNode,
+    ExpandableTextNode,
+    WizardNode,
+    InfiniteScrollNode,
+    CookieConsentNode,
+    PageAlertNode,
+    ErrorBoundaryNode,
+    ResizablePanelNode,
+    DashboardGridNode,
+    AspectRatioNode,
+    CalloutNode,
+    ScrollAreaNode,
+    StickyHeaderNode,
+    TabNode,
+    TabsNode,
+    SplitPaneNode,
+):
+    _emits_body_node.EMITS_BODY = True  # type: ignore[attr-defined]
