@@ -9,6 +9,7 @@ license.workspace = true
 crate-type = ["rlib"]
 
 [dependencies]
+djust_base = { path = "../djust_base", features = ["python"] }
 indexmap = { workspace = true }
 pyo3.workspace = true
 serde.workspace = true

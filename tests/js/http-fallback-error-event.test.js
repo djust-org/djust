@@ -14,6 +14,7 @@ async function failingEvent(response) {
     try {
         dom.window.DJUST_USE_WEBSOCKET = false;
         dom.window.eval(client);
+        dom.window.document.dispatchEvent(new dom.window.Event('DOMContentLoaded'));
         dom.window.console.error = () => {};
         dom.window.fetch = async () => response;
         const errors = [];

@@ -234,6 +234,12 @@ def _is_framework_class(cls: type) -> bool:
     )
 
 
+#: Attributes Django's ``View.setup()`` puts on every instance (``head`` is the
+#: HTTP HEAD alias of ``get``). They belong to the framework, not the application,
+#: so a template name that matches one is never "held by the view" (#4318).
+_VIEW_SETUP_ATTRS = frozenset({"head", "request", "args", "kwargs"})
+
+
 def _held_by_view(view: Any, name: str) -> bool:
     """Whether ``name`` is a public attribute the application set on the view.
 
@@ -241,7 +247,7 @@ def _held_by_view(view: Any, name: str) -> bool:
     created) and at the class bodies of the application's classes. Types only:
     no descriptor, property or value is evaluated.
     """
-    if name.startswith("_"):
+    if name.startswith("_") or name in _VIEW_SETUP_ATTRS:
         return False
     if name in vars(view) and name not in getattr(view, "_framework_attrs", ()):
         return True

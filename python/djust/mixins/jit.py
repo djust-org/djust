@@ -167,6 +167,23 @@ def _public_path(path: str) -> str:
     return path
 
 
+#: The names a ``{% for a, b in ... %}`` tag binds (``-`` trim markers allowed).
+_FOR_TARGETS = re.compile(r"\{%-?\s*for\s+(.+?)\s+in\s")
+
+
+def _for_loop_variables(content: str) -> frozenset:
+    """The names ``content``'s ``{% for %}`` tags bind as loop variables (#4318).
+
+    The extraction lists a loop variable as a root beside its iterable (the
+    JIT folds its reads onto the iterable); for the readers of
+    :meth:`JITMixin.template_paths` it is not a context name.
+    """
+    names: set[str] = set()
+    for targets in _FOR_TARGETS.findall(content):
+        names.update(part.strip() for part in targets.split(",") if part.strip())
+    return frozenset(names)
+
+
 def public_template_paths(found: Optional[dict]) -> Dict[str, List[str]]:
     """The extraction map with the JIT's internal paths taken out, for every reader
     that wants the names and paths a template reads (``template_paths``,
@@ -1412,7 +1429,8 @@ class JITMixin:
         The same extraction the JIT serializes models by: the template with its
         ``{% extends %}`` chain and static ``{% include %}`` partials, loop
         variables folded onto their iterable (``{% for c in cards %}{{ c.title }}``
-        gives ``cards: ["title"]``). A name read whole (``{{ card }}``) maps to
+        gives ``cards: ["title"]``; ``c`` itself is not listed, since it is local to
+        its block and nothing outside supplies it, #4318). A name read whole (``{{ card }}``) maps to
         an empty list. Returns ``{}`` when the template cannot be read or
         parsed.
 
@@ -1426,7 +1444,12 @@ class JITMixin:
         if not content:
             return {}
         found = public_template_paths(_cached_extract_template_variables(content))
-        return {name: paths for name, paths in found.items() if name != "*"}
+        loop_variables = _for_loop_variables(content)
+        return {
+            name: paths
+            for name, paths in found.items()
+            if name != "*" and name not in loop_variables
+        }
 
     def serialize_for_template(self, value: Any, name: str) -> Any:
         """``value`` as the plain data the template reads under ``name``.

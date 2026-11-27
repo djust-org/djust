@@ -205,12 +205,12 @@ What it does not catch:
   pause each time (`python/djust/tests/test_holder_fence_row_lock_4164.py`,
   run with `DJUST_PG_RACE_DATABASE` set). MySQL (InnoDB) takes the same
   `FOR UPDATE` path but has not been run.
-- `cached_db` writes its cache after the transaction, outside the lock, so a
-  slow cache never holds the row. The late writer's cache write can then land
-  after the newer one's, and the cache keeps the older copy until its next
-  write or expiry, while the database is right. Seen once in 600 PostgreSQL
-  rounds with the writer paused before its write; every time when the cache
-  write itself is delayed.
+- `cached_db` clears its cache entry after the transaction, outside the lock,
+  so a slow cache never holds the row. The next read refills the cache from
+  the database. Until 2.0 it wrote the merged copy there instead, and a late
+  writer's cache write could land after the newer one's and leave the older
+  copy in the cache (once in 600 PostgreSQL rounds; every time when the cache
+  write was delayed, #4324). A delete is the same in either order.
 
 ## When the page is told
 

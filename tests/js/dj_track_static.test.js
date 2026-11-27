@@ -7,7 +7,7 @@
  * we drive djust:ws-reconnected directly.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { JSDOM, VirtualConsole } from 'jsdom';
 import fs from 'fs';
 
@@ -249,6 +249,7 @@ ${headHtml}
     dom.window.EventSource = MockEventSource;
     for (const k of ['log', 'warn', 'error', 'debug', 'info']) dom.window.console[k] = () => {};
     dom.window.eval(clientCode);
+    dom.window.document.dispatchEvent(new dom.window.Event('DOMContentLoaded'));
     const sse = new dom.window.djust.LiveViewSSE();
     sse.sendMessage = () => true; // the POSTed frames are not under test here
     return { dom, sse, opened, reloads };

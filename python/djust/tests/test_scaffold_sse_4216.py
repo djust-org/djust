@@ -137,6 +137,7 @@ def test_a_scaffolded_project_serves_sse(tmp_path, variant):
     assert "mount_error" not in out, out["mount_error"]
     assert out["mount_type"] == "mount", out
     assert out["mount_has_html"] is True, out
-    assert out["event_type"] in ("patch", "html_update"), out
+    # One render frame on every wire since #3658 slice 3.
+    assert out["event_type"] == "render", out
     assert marker in out["event_answer"], out
     assert "sse_urlpatterns" in (project / APP / "urls.py").read_text()
