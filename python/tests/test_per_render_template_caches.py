@@ -240,7 +240,7 @@ def test_record_dj_model_fields_caches_only_with_debug_off(settings, debug, cach
             return ["name"]
 
     view = LiveView()
-    view._record_dj_model_fields_from_rust(FakeRustView())
+    view._record_dj_model_fields_from_rust(FakeRustView(), '<input dj-model="name">')
 
     assert seen["cache"] is cached
     assert view._dj_model_fields == frozenset({"name"})

@@ -7993,6 +7993,20 @@ fn dj_model_fields_from_template(
     })
 }
 
+/// The `dj-model` values bound by elements of rendered HTML, outside embedded
+/// child views (see `djust_vdom::lazy_provenance::rendered_model_fields`).
+///
+/// The Python side intersects this with the template's static bindings
+/// ([`dj_model_fields_from_template`] / `RustLiveView.dj_model_fields`), so a
+/// field is writable only when the template binds it AND the branch that binds
+/// it was rendered for this view instance.
+#[pyfunction]
+fn rendered_dj_model_fields(py: Python<'_>, html: &str) -> PyResult<Vec<String>> {
+    guard_panic("rendered_dj_model_fields", move || {
+        Ok(py.detach(|| djust_vdom::lazy_provenance::rendered_model_fields(html)))
+    })
+}
+
 /// Resolve parsed literal relative includes against a named template.
 #[pyfunction]
 fn resolve_relative_template_includes(source: &str, template_name: &str) -> PyResult<String> {
@@ -8180,6 +8194,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(active_number_format, m)?)?;
     m.add_function(wrap_pyfunction!(active_unlocalized_number_format, m)?)?;
     m.add_function(wrap_pyfunction!(dj_model_fields_from_template, m)?)?;
+    m.add_function(wrap_pyfunction!(rendered_dj_model_fields, m)?)?;
     m.add_function(wrap_pyfunction!(clear_dj_model_fields_cache, m)?)?;
 
     // Render environment (ADR-029)

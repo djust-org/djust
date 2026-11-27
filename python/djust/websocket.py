@@ -782,7 +782,9 @@ def render_embedded_child_html(child_view: Any) -> str:
         if hasattr(child_view, "_record_dj_model_fields_from_source"):
             from .utils import get_template_dirs
 
-            child_view._record_dj_model_fields_from_source(template_str, get_template_dirs())
+            child_view._record_dj_model_fields_from_source(
+                template_str, get_template_dirs(), rendered_html=html
+            )
         return str(html)
     except Exception:  # noqa: BLE001 — no exception detail reaches the page
         raise ExposureError("Explicit child rendering unavailable") from None

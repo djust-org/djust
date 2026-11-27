@@ -726,7 +726,7 @@ class RequestMixin:
 
         def _get_all_child_views(self) -> Dict[str, Any]: ...
 
-        def _record_dj_model_fields_from_rust(self, rust_view: Any) -> None: ...
+        def _record_dj_model_fields_from_rust(self, rust_view: Any, rendered_html: Any) -> None: ...
 
         def _assign_component_ids(self) -> None: ...
 
@@ -1120,7 +1120,7 @@ class RequestMixin:
             # the first fallback answer was the whole page. The committed
             # render is the baseline the fallback diffs against: digest it.
             html = _with_render_digest_meta(self, request, html, committed_html)
-            self._record_dj_model_fields_from_rust(self._rust_view)
+            self._record_dj_model_fields_from_rust(self._rust_view, committed_html)
             request._djust_timing["vdom_ms"] = round((time.perf_counter() - t0) * 1000, 2)
             from .._exposure_child_persistence import save_child_states
 

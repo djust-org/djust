@@ -80,12 +80,17 @@ def _make_view(**attrs):
     return cls()
 
 
-def _record(view, template_source):
+def _record(view, template_source, rendered_html=None):
     """Populate ``view._dj_model_fields`` from a template SOURCE string via the
-    real Rust template walker (the production collection path). Replaces the old
-    helper that fed RENDERED HTML — the allowlist is now derived from
-    developer-authored template text, immune to rendered-output poisoning."""
-    view._record_dj_model_fields_from_source(template_source)
+    real Rust template walker (the production collection path). The allowlist
+    is derived from developer-authored template text, immune to rendered-output
+    poisoning, then narrowed to the bindings the render emitted. A template
+    without tags renders as itself, so ``rendered_html`` defaults to the
+    source."""
+    view._record_dj_model_fields_from_source(
+        template_source,
+        rendered_html=template_source if rendered_html is None else rendered_html,
+    )
 
 
 class TestMassAssignmentRepro:
@@ -245,6 +250,8 @@ class TestRecordDjModelFieldsFromSource:
             v,
             "{% if flag %}<input dj-model='a'>{% endif %}"
             "{% for it in items %}<input dj-model='b'>{% endfor %}",
+            # flag true, one item: both branches rendered.
+            "<input dj-model='a'><input dj-model='b'>",
         )
         assert v._dj_model_fields == frozenset({"a", "b"})
 
