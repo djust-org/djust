@@ -614,6 +614,7 @@ m.insert("serialize_ms".to_string(), t.serialize_ms);
 m.insert("total_ms".to_string(), t.total_ms);
 m.insert("html_len".to_string(), t.html_len as f64);
 m.insert("fast_path".to_string(), t.fast_path);
+let key = (self.template_source.to_string(), self.template_dirs.clone());
 return Err(e.into());
 let open = format!("<{sentinel_tag} ");
 reduced_html.clone()

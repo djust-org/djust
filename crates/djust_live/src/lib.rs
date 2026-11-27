@@ -220,6 +220,20 @@ fn ensure_supervisor_started() {
     }
 }
 
+/// Whether each view's dj-model gate may share its template walk through
+/// [`DJ_MODEL_FIELD_SPLIT_CACHE`]: render caches on (`DEBUG` off), set from
+/// Python by `djust._render_caches` (#4363). Off, every new view walks again,
+/// as before, so a template edit is seen.
+static DJ_MODEL_GATE_SHARED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Let (or stop) the dj-model gate of every new view share the template walk
+/// through the `writable_dj_model_fields(cache=True)` split cache (#4363).
+#[pyfunction]
+fn set_dj_model_gate_shared(enabled: bool) {
+    DJ_MODEL_GATE_SHARED.store(enabled, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Serializable representation of RustLiveViewBackend for Redis storage
 #[derive(Serialize, Deserialize)]
 struct SerializableViewState {
@@ -1663,14 +1677,53 @@ impl RustLiveViewBackend {
                 return *answer;
             }
         }
-        let loader =
-            djust_templates::inheritance::FilesystemTemplateLoader::new(self.template_dirs.clone());
-        // A template the static walk cannot read records (fail closed: the
-        // allowlist then holds only what the render emitted).
-        let answer =
-            djust_templates::extract_dj_model_field_split(&self.template_source, Some(&loader))
-                .map(|(all, unconditional)| all.len() != unconditional.len())
-                .unwrap_or(true);
+        // Every HTTP GET and socket mount builds a new view (and a GET a
+        // second, throwaway one for the page shell), so the memo above is cold
+        // on each request. With render caches on (DEBUG off) the walk is shared
+        // through the split cache `writable_dj_model_fields(cache=True)` keeps:
+        // the same walk of the same template and directories, cleared with this
+        // generation. Otherwise each new view re-parsed the page and every
+        // include site, each running its `{% load %}` hook (#4363).
+        let shared = DJ_MODEL_GATE_SHARED.load(std::sync::atomic::Ordering::Relaxed);
+        let key = (self.template_source.to_string(), self.template_dirs.clone());
+        let hit = if shared {
+            DJ_MODEL_FIELD_SPLIT_CACHE
+                .get(&key)
+                .map(|hit| hit.value().0.len() != hit.value().1.len())
+        } else {
+            None
+        };
+        let answer = match hit {
+            Some(answer) => answer,
+            None => {
+                let loader = djust_templates::inheritance::FilesystemTemplateLoader::new(
+                    self.template_dirs.clone(),
+                );
+                match djust_templates::extract_dj_model_field_split(
+                    &self.template_source,
+                    Some(&loader),
+                ) {
+                    Ok(split) => {
+                        let answer = split.0.len() != split.1.len();
+                        // A clear during the walk (a reload) moved the generation:
+                        // this walk may be of the old templates, so it is not shared.
+                        let current =
+                            DJ_MODEL_CACHE_GENERATION.load(std::sync::atomic::Ordering::Relaxed);
+                        if shared && current == generation {
+                            if DJ_MODEL_FIELD_SPLIT_CACHE.len() >= DJ_MODEL_FIELDS_CACHE_MAX {
+                                DJ_MODEL_FIELD_SPLIT_CACHE.clear();
+                            }
+                            DJ_MODEL_FIELD_SPLIT_CACHE.insert(key, split);
+                        }
+                        answer
+                    }
+                    // A template the static walk cannot read records (fail
+                    // closed: the allowlist then holds only what the render
+                    // emitted).
+                    Err(_) => true,
+                }
+            }
+        };
         self.dj_model_gate = Some((source, self.template_dirs.clone(), generation, answer));
         answer
     }
@@ -7499,6 +7552,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(virtual_keyed_ops_enabled, m)?)?;
     m.add_function(wrap_pyfunction!(dj_model_fields_from_template, m)?)?;
     m.add_function(wrap_pyfunction!(clear_dj_model_fields_cache, m)?)?;
+    m.add_function(wrap_pyfunction!(set_dj_model_gate_shared, m)?)?;
     m.add_function(wrap_pyfunction!(dj_model_recording_active, m)?)?;
     m.add_function(wrap_pyfunction!(record_dj_model_bindings, m)?)?;
 
