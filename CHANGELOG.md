@@ -7,21 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.3.4] - 2026-11-26
+## [1.3.5] - 2026-11-27
 
 ### Security
 
 - **`dj-model` accepts only fields bound in the branch the template rendered.** The `update_model` allowlist was every static `dj-model="<field>"` binding in the template source, across all `{% if %}` branches, so a field bound only inside a branch that was not rendered for a view instance (for example `{% if user.is_staff %}<input dj-model="note">{% endif %}`) was still writable by that instance's client. A binding now counts only when its template text rendered for the current state: bindings on always-rendered paths are granted as before, and a binding inside an `{% if %}`/`{% for %}` branch, an include or a lazy site counts while the last render emitted it. The bindings are recorded during the render itself (nothing renders twice; a node or loop served from a render cache contributes what it recorded when it rendered). A binding inside the body of a custom block tag (a Rust or library block tag, `{% ifchanged %}`, `{% filter %}`, an inclusion tag's template) never counts, because the tag decides what of its body reaches the page: list such fields in `allowed_model_fields`, which is unchanged. New system check `djust.T030` warns about them (following a literal `{% include %}` in such a body), and a block-tag handler that always emits its body may declare `EMITS_BODY = True`: the built-in component tags that do (`card`, `accordion`, `tabs`, `dropdown`, `form_group`, `fieldset`, the layout tags and the others in `djust.components.rust_handlers.EMITS_BODY_TAGS`) keep working unchanged (`dropdown` and `page_header_actions` count their body while it is drawn), while `modal`, `dropdown_menu`, `await`, `nav_item`, `form_array` and `{% call %}`/`{% slot %}` bodies need `allowed_model_fields`. Embedded `{% live_render %}` children record the template text their render executed, under Django's engine and djust's own backend alike. Rendered data — an unquoted `attr={{ value }}`, a `dj-model="{{ field }}"`, `|safe` HTML — can never add a field.
 - **Events routed to a LiveComponent or an embedded child view run the page view's per-event object-permission check on the WebSocket and SSE transports.** The page view's `get_object()` / `has_object_permission()` was re-run for the page's own events but not for an event carrying `component_id` (or a child's `view_id`), although such an event re-renders the page. Every view the event belongs to (the component's view, an embedded child's parents and the page view) is now checked before the handler runs; a refusal sends the same `permission_denied` error frame a page event gets, runs no handler and renders nothing. The HTTP POST event fallback already checked the page view first and is unchanged.
 - **Presence identifies an anonymous user by an opaque id instead of the session key.** `PresenceMixin.get_presence_user_id()` used to return `anon_<session_key>` for an anonymous user, and that id is shared with every participant in the room (`list_presences()`, join/leave records, the `LiveCursorMixin` `cursor_move` broadcast and `get_cursors()`). It now returns `anon_<hmac>`: 128 bits of an HMAC-SHA256 of the session key under `SECRET_KEY` (`django.utils.crypto.salted_hmac`, dedicated salt), via the new `djust.presence.anonymous_presence_id()`. The id is still stable for the session, so tabs of one browser session still count as one presence. With `presence_unique_per_connection = True` the `anon_conn_` id is likewise an HMAC of the transport session id (`anonymous_connection_presence_id()`). An override of `get_presence_user_id()` that returns a session key, or code that matched presence ids against `anon_<session_key>`, should use `anonymous_presence_id()`.
-- **The unused `bincode` dependency is gone, and with it RUSTSEC-2025-0141 (#4219).**
-  `crates/djust_live` declared `bincode = "2.0"` but no code used it. The weekly scan of
-  `djust.cdx.json` at v1.3.3 matched the advisory (bincode is unmaintained). The dependency,
-  its lockfile entries, its SBOM components and the advisory's ignore entry in
-  `osv-scanner.toml` are removed. Nothing else changes.
-- **`chrono` and `chrono-tz` unmaintained notices accepted on 1.3 (RUSTSEC-2026-0543, RUSTSEC-2026-0555).**
-  Both are informational (no known vulnerability, no fixed version). 2.0 replaces them with `jiff`
-  (#4222); 1.3 takes security fixes only, so `osv-scanner.toml` accepts the notices until 2027-03-31.
 - **A Component's hybrid template judges a URL whose character reference the slot completes, and more URL shapes (1.3 backport of #3923, #3924).**
   `href="&#10{{ s }}"` with `6;avascript:...`, or `href="javascript&{{ s }}"` with `colon;...`,
   printed a value the browser reads as `javascript:`; the value is now decoded as printed (the
@@ -91,6 +83,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   beside them had it, so a nonce-only or `'strict-dynamic'` `script-src` refused them and the
   client never loaded unless the policy was loosened. All four now carry the nonce. Tests in
   `python/djust/tests/test_client_script_nonce.py`.
+
+## [1.3.4] - 2026-11-26
+
+### Security
+
+- **The unused `bincode` dependency is gone, and with it RUSTSEC-2025-0141 (#4219).**
+  `crates/djust_live` declared `bincode = "2.0"` but no code used it. The weekly scan of
+  `djust.cdx.json` at v1.3.3 matched the advisory (bincode is unmaintained). The dependency,
+  its lockfile entries, its SBOM components and the advisory's ignore entry in
+  `osv-scanner.toml` are removed. Nothing else changes.
+- **`chrono` and `chrono-tz` unmaintained notices accepted on 1.3 (RUSTSEC-2026-0543, RUSTSEC-2026-0555).**
+  Both are informational (no known vulnerability, no fixed version). 2.0 replaces them with `jiff`
+  (#4222); 1.3 takes security fixes only, so `osv-scanner.toml` accepts the notices until 2027-03-31.
 
 ### Added
 
