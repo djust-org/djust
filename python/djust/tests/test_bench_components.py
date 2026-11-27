@@ -21,7 +21,12 @@ SCRIPT = os.path.join(ROOT, "scripts", "bench_components.py")
 
 
 def _run(*args: str) -> subprocess.CompletedProcess:
-    env = {k: v for k, v in os.environ.items() if k != "DJANGO_SETTINGS_MODULE"}
+    # The script runs `git describe` for the results' revision: strip git's
+    # execution variables so a hook's GIT_DIR is not inherited (#3179).
+    from tests.git_env import isolated_git_env
+
+    env = isolated_git_env()
+    env.pop("DJANGO_SETTINGS_MODULE", None)
     return subprocess.run(
         [sys.executable, SCRIPT, "--quick", *args],
         capture_output=True,
