@@ -29,6 +29,7 @@ from django import template
 from django.utils.html import conditional_escape, escape, format_html, format_html_join
 from django.utils.safestring import SafeString
 
+from djust._dj_model_bindings import commit_bindings, held_bindings
 from djust._template_guards import call_method_for_template
 from djust.components._alias_deprecation import warn_alias
 from djust.components.utils import safe_url  # from where it is DEFINED, not ``._registry`` (#3820)
@@ -6350,6 +6351,7 @@ def do_theme_toggle(parser: Any, token: Any) -> template.Node:
 # ---------------------------------------------------------------------------
 
 _page_header_actions_key = "__page_header_actions__"
+_page_header_actions_bindings_key = "__page_header_actions_bindings__"
 
 
 class PageHeaderActionsNode(template.Node):
@@ -6363,11 +6365,15 @@ class PageHeaderActionsNode(template.Node):
     def render(self, context: Any) -> SafeString:
         from djust.components.rust_handlers import PageHeaderActionsHandler
 
-        content = self.nodelist.render(context)
+        with held_bindings() as body_bindings:
+            content = self.nodelist.render(context)
         if context.get(_page_header_actions_key) is None:
+            commit_bindings(body_bindings)
             return mark_safe(PageHeaderActionsHandler().render([], content, {}))
-        # Stash the rendered actions content on the context for the parent
+        # Stash the rendered actions content on the context for the parent, with its dj-model
+        # bindings: they count only for the content the parent draws.
         context[_page_header_actions_key] = content
+        context[_page_header_actions_bindings_key] = body_bindings
         return ""
 
 
@@ -6387,9 +6393,10 @@ class PageHeaderNode(template.Node):
         # stashes its content in the context.
         # The key lives only for this body (a pushed scope): a standalone
         # ``{% page_header_actions %}`` after the header must not see it.
-        with context.push(**{_page_header_actions_key: ""}):
+        with context.push(**{_page_header_actions_key: "", _page_header_actions_bindings_key: ()}):
             breadcrumb_content = self.nodelist.render(context)
             actions_html = context.get(_page_header_actions_key, "")
+            commit_bindings(context.get(_page_header_actions_bindings_key, ()))
         return mark_safe(render_page_header(kw, breadcrumb_content, actions_html))
 
 

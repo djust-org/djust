@@ -192,7 +192,7 @@ The ModelBindingMixin enforces these rules:
   `|safe` HTML, `dj-model="{{ field }}"`) never adds one
 - A binding inside the body of a **custom block tag** is never
   template-derived (`{% ifperm %}<input dj-model="note">{% endifperm %}`, a
-  library block tag, `{% ifchanged %}`, an inclusion tag's template): the tag
+  library block tag, `{% ifchanged %}`, `{% filter %}`, an inclusion tag's template): the tag
   decides what of its body reaches the page, so list such fields in
   `allowed_model_fields`. System check `djust.T030` warns about them. A
   block-tag handler that always emits its body unchanged declares
