@@ -141,8 +141,9 @@ function _collectDraftData(scope) {
     const draftData = {};
     scope.querySelectorAll('[data-draft="true"]').forEach(f => {
         // Prevent prototype pollution attacks. A file input has no value a
-        // draft could put back (setting one throws).
-        if (f.name && !UNSAFE_KEYS.includes(f.name) && f.type !== 'file') {
+        // draft could put back (setting one throws). A password is never
+        // written to browser storage (#4067).
+        if (f.name && !UNSAFE_KEYS.includes(f.name) && f.type !== 'file' && !_isSecretControl(f)) {
             if (f.type === 'checkbox') {
                 draftData[f.name] = f.checked;
             } else {
@@ -218,7 +219,7 @@ function syncDraftFields(atInit) {
         const place = _draftTargetFor(field);
         const draftKey = place && place.root.getAttribute('data-draft-key');
         if (!draftKey || !field.name || UNSAFE_KEYS.includes(field.name)) return;
-        if (field.type === 'file') return;
+        if (field.type === 'file' || _isSecretControl(field)) return;
         if (!savedByKey.has(draftKey)) {
             // A debounced save still waiting to be written is newer than storage.
             savedByKey.set(

@@ -2512,7 +2512,8 @@ function _processAutoRecover() {
         const formValues = {};
         container.querySelectorAll('input, textarea, select').forEach(function(field) {
             const name = field.name;
-            if (!name) return;
+            // A password value is never sent back in the envelope (#4067).
+            if (!name || _isSecretControl(field)) return;
             if (field.type === 'checkbox') {
                 // eslint-disable-next-line security/detect-object-injection
                 formValues[name] = field.checked;

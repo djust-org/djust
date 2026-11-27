@@ -1,10 +1,21 @@
 
+/**
+ * A password field (or one the page marks as holding a password) is never
+ * read into a draft, an auto-recover envelope or `_collectFormData`, and never
+ * written back from one (1.3 backport of #4067).
+ */
+function _isSecretControl(field) {
+    if (field.type === 'password') return true;
+    const autocomplete = (field.getAttribute('autocomplete') || '').toLowerCase();
+    return /(^|\s)(new|current)-password(\s|$)/.test(autocomplete);
+}
+
 function _collectFormData(container) {
     const data = {};
 
     const fields = container.querySelectorAll('input, textarea, select');
     fields.forEach(field => {
-        if (field.name && !UNSAFE_KEYS.includes(field.name)) {
+        if (field.name && !UNSAFE_KEYS.includes(field.name) && !_isSecretControl(field)) {
             if (field.type === 'checkbox') {
                 data[field.name] = field.checked;
             } else if (field.type === 'radio') {
@@ -40,7 +51,7 @@ function _restoreFormData(container, data) {
             field = container.querySelector(`#${name}`);
         }
 
-        if (!field) return;
+        if (!field || (field.tagName === 'INPUT' && _isSecretControl(field))) return;
 
         if (field.tagName === 'INPUT') {
             if (field.type === 'checkbox') {
