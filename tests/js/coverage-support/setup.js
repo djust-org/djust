@@ -1,5 +1,6 @@
 import { afterEach, vi } from 'vitest';
 import { collectWindowCoverage } from './collect.js';
+import { installLoadingReadyState } from '../_jsdom_ready_state.js';
 
 const state = vi.hoisted(() => ({ windows: [] }));
 
@@ -20,11 +21,14 @@ async function mockFs() {
 }
 vi.mock('node:fs', () => mockFs());
 vi.mock('fs', () => mockFs());
+// This mock replaces (does not wrap) the one in _jsdom_compat_setup.js, so it
+// must apply the same jsdom 31 readyState shim itself (#4247).
 vi.mock('jsdom', async () => {
   const actual = await vi.importActual('jsdom');
   class JSDOM extends actual.JSDOM {
     constructor(...args) {
       super(...args);
+      installLoadingReadyState(this.window);
       state.windows.push(this.window);
     }
   }
