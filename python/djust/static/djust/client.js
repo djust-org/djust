@@ -4574,14 +4574,24 @@ function _collectDraftData(scope) {
  * the key (the unwritten save if one is pending, else storage). A name the
  * page does not hold at the moment, such as a wizard's earlier step, keeps its
  * saved value until `clear_draft()` removes the draft.
+ *
+ * A stored name that belongs to a password field in `scope` is dropped: a
+ * draft saved before #4067 can hold one, and carrying it over would keep the
+ * password in browser storage for as long as the draft lives.
  */
-function _mergeDraftData(draftKey, current) {
+function _mergeDraftData(draftKey, current, scope) {
     const previous = globalDraftManager.pendingData.get(draftKey) || globalDraftManager.loadDraft(draftKey);
+    const secret = new Set();
+    if (scope && typeof scope.querySelectorAll === 'function') {
+        scope.querySelectorAll('input[name], textarea[name]').forEach(f => {
+            if (_isSecretControl(f)) secret.add(f.name);
+        });
+    }
     const merged = {};
     if (previous && typeof previous === 'object') {
         Object.keys(previous).forEach(name => {
             // eslint-disable-next-line security/detect-object-injection
-            if (!UNSAFE_KEYS.includes(name)) merged[name] = previous[name];
+            if (!UNSAFE_KEYS.includes(name) && !secret.has(name)) merged[name] = previous[name];
         });
     }
     Object.keys(current).forEach(name => {
@@ -4601,7 +4611,7 @@ function _onDraftFieldChange(event) {
     const draftKey = place.root.getAttribute('data-draft-key');
     if (!draftKey) return;
     _draftEdited.set(field, field.name);
-    globalDraftManager.saveDraft(draftKey, _mergeDraftData(draftKey, _collectDraftData(place.scope)));
+    globalDraftManager.saveDraft(draftKey, _mergeDraftData(draftKey, _collectDraftData(place.scope), place.scope));
 }
 
 function _installDraftListeners() {

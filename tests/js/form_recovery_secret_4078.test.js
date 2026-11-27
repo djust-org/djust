@@ -134,6 +134,8 @@ describe('one password predicate for every keeping path (#4078)', () => {
         // each keeping reader and writer calls the predicate itself (#4067).
         expect(Array.from(callers.keys()).sort()).toEqual([
             '06-draft-manager.js:_collectDraftData',
+            // drops stored names of password fields saved before #4067
+            '06-draft-manager.js:_mergeDraftData',
             '06-draft-manager.js:syncDraftFields',
             '07-form-data.js:_collectFormData',
             '07-form-data.js:_restoreFormData',

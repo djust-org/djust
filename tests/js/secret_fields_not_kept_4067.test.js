@@ -61,6 +61,25 @@ describe('secret fields stay out of drafts, auto-recover and _collectFormData', 
         expect(win.document.querySelector('input[name="pw"]').value).toBe('hunter2');
     });
 
+    it('a password saved by an earlier release is purged from storage on the next save', async () => {
+        // 1.3.<=3 stored data-draft password fields; the merge must not carry them over.
+        const win = draftPage({
+            data: { pw: 'old-pass', pin: 'old-pin', newpw: 'old-new', user: 'zed', step1: 'kept' },
+            timestamp: Date.now(),
+        });
+        const user = win.document.querySelector('input[name="user"]');
+        user.value = 'bob';
+        user.dispatchEvent(new win.Event('input', { bubbles: true }));
+        await new Promise(resolve => setTimeout(resolve, 650));
+        const raw = win.localStorage.getItem('djust_draft_k');
+        for (const secret of ['old-pass', 'old-pin', 'old-new', ...SECRETS]) expect(raw).not.toContain(secret);
+        const data = JSON.parse(raw).data;
+        expect(data.user).toBe('bob');
+        // A name the page does not hold right now (a wizard's earlier step) still keeps its value.
+        expect(data.step1).toBe('kept');
+        expect(Object.keys(data)).not.toContain('pw');
+    });
+
     it('the dj-auto-recover envelope carries no password value', async () => {
         const t = setup(`<div dj-auto-recover="restore_state">${FIELDS}</div>`, { restore_state: legacy() });
         t.win.djust._isReconnect = true;
