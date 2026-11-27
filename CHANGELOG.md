@@ -29,6 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and fails closed. Literal `{% cycle %}` values are branches, and `{% cycle ... as c %}` no
   longer hides its text. Regression tests in `python/djust/tests/test_hybrid_attrs_charref_join_3923.py`
   and `python/djust/tests/test_hybrid_attrs_unjudged_shapes_3924.py`.
+- **A Component's hybrid template no longer prints a URL its neutralisation could not make safe (1.3 backport of #3925).**
+  When a URL slot was refused, the value printed `#` in its place, and the `#` could itself
+  complete a character reference: `href="javascript&{{ s }}x3a;alert(1)"` with `s="#"` printed
+  `javascript&#x3a;...`. The neutralisation is now re-checked until no path is refused, and a value
+  it cannot make safe raises instead of printing. Tests in
+  `python/djust/tests/test_hybrid_attrs_plan_mutations_3925.py`.
 - **A `LiveComponent` / `BoundComponent` `template_name` file's own source follows the attribute and raw-text escaping rule (1.3 backport of #3933).**
   Only an inline `template` was hardened; a file was rendered as written, so `<a href="{{ url }}">`
   with `javascript:alert(1)`, or a marked-safe value in `title="{{ v }}"` / `<textarea>{{ v }}</textarea>`,
@@ -44,6 +50,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the new `djust_url_attr` filter (`{% load djust_attrs %}`, which turns a `javascript:` /
   `vbscript:` / `data:` URL into `#`), and a quoted `dj-click` / `dj-change` handler argument
   through `djust_handler_arg`. Tests in `python/tests/test_page_template_attrs_4157.py`.
+- **Marked-safe values are escaped in the attributes of the djust_components inclusion-tag templates (1.3 only).**
+  `{% avatar %}`, `{% badge %}`, `{% pagination %}`, `{% progress %}`, the data table, toast,
+  markdown controls and ttyd terminal templates printed a value marked safe into an attribute as it
+  was: `{% avatar src="/a.png" alt=p %}` with `p=mark_safe('x" onerror="alert(1)')` wrote an
+  `onerror` attribute. Every attribute slot now uses `|force_escape`; URL slots keep their URL
+  checks. Tests in `python/tests/test_component_template_attrs_13.py`.
 - **The HTTP API and `@server_function` endpoints answer a `PermissionDenied` with the fixed message "Permission denied" (1.3 backport of #4170).**
   The exception's text no longer reaches the caller, DEBUG included; it goes to the server log
   only, as on WebSocket and SSE. Tests in `python/djust/tests/test_api_permission_detail_4170.py`.
@@ -60,11 +72,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   POST's user and session and takes path, resolver match, slot and page query from the mount
   request; an SSE navigation or slot mount turn uses the destination page's request. Tests in
   `python/djust/tests/test_sse_reauth_mount_request_4255.py`.
-- **Password fields are kept out of drafts, the `dj-auto-recover` envelope and `_collectFormData` (1.3 backport of #4067).**
+- **Password fields are kept out of form drafts and form-state recovery (1.3 backport of #4067).**
   A `type="password"` field, or one marked `autocomplete="new-password"` / `"current-password"`,
-  is no longer saved to browser storage by the draft manager (even when marked
-  `data-draft="true"`), sent back by `dj-auto-recover`, or written to from a stored draft. Tests
-  in `tests/js/secret_fields_not_kept_4067.test.js`.
+  is no longer saved to browser storage as part of a form draft (even when marked
+  `data-draft="true"`), sent back to the server by `dj-auto-recover`, included when djust reads a
+  form's values, or filled in from a stored draft. A password that 1.3.0-1.3.3 already saved in a
+  draft is removed from browser storage the next time that form's draft is saved. Tests in
+  `tests/js/secret_fields_not_kept_4067.test.js`.
 - **Reconnect form recovery no longer keeps or re-sends password values (1.3 backport of #4078).**
   The capture taken before a reconnect mount held a password field's value, wrote it back into
   the new markup and replayed it to the server; it now uses the same password check as drafts.
