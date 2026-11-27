@@ -383,8 +383,9 @@ def _walk_shape(html: str) -> RenderShape | None:
     if _native_walk is not None:
         try:
             found = _native_walk(html, unescape)
-        except (UnicodeEncodeError, RuntimeError, ValueError, TypeError) as exc:
-            logger.debug("render_shape: native walk declined (%s); using Python", type(exc).__name__)
+        except (UnicodeEncodeError, RuntimeError, ValueError, TypeError):
+            # A lone surrogate cannot cross into Rust; the Python walk answers.
+            logger.debug("render_shape: native walk declined; using the Python walk")
         else:
             if found is None:
                 return None

@@ -486,6 +486,18 @@ def plain_digest(
     """
     ...
 
+def render_shape_walk(
+    html: str, unescape: Callable[[str], str]
+) -> Optional[Tuple[str, List[List[int]], bool]]:
+    """Native ``_render_digest`` shape walk of a rendered root (#4108).
+
+    ``(shape, opaque_paths, client_owned)``, or ``None`` for unbalanced tags.
+    *unescape* decodes character references (``html.unescape``). Use
+    ``djust._render_digest.render_shape``, which memoizes and falls back to
+    the Python walk.
+    """
+    ...
+
 def digest_rows_changed(a: bytes, b: bytes) -> Optional[List[int]]:
     """Indices whose 16-byte row digests differ, or ``None`` on a length mismatch."""
     ...
@@ -1514,6 +1526,7 @@ __all__ = [
     # Change detection (#4325)
     "plain_digest",
     "digest_rows_changed",
+    "render_shape_walk",
     "MAX_VDOM_DEPTH",
     "WALK_FLOOR_COVERS_FORMS",
     "collapse_inter_tag_whitespace",
