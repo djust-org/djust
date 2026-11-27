@@ -8,15 +8,11 @@ import re
 from typing import Any, Dict, List, cast
 
 # The client chunks and the injected bundle's URLs live in _client_chunks
-# (#4007, #4320); CLIENT_CHUNKS, _static_url and _versioned_url stay
-# importable from here.
-from .._client_chunks import (  # noqa: F401
-    CLIENT_CHUNKS,
+# (#4007, #4320).
+from .._client_chunks import (
     chunks_for_first_render,
     client_bundle_urls,
     preload_links,
-    static_url as _static_url,
-    versioned_url as _versioned_url,
 )
 
 logger = logging.getLogger(__name__)
