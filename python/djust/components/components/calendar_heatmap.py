@@ -1,7 +1,8 @@
 """Calendar Heatmap component — GitHub-style contribution heatmap."""
 
 import html
-from datetime import date, timedelta
+import datetime as _dt
+from datetime import timedelta
 from typing import Any, Optional
 
 
@@ -55,7 +56,7 @@ class CalendarHeatmap(Component):
         **kwargs: Any,
     ) -> None:
         if year is None:
-            year = date.today().year
+            year = _dt.date.today().year
         super().__init__(
             data=data,
             year=year,
@@ -109,8 +110,8 @@ class CalendarHeatmap(Component):
         step = cs + cg
 
         # Build year grid
-        start = date(self.year, 1, 1)
-        end = date(self.year, 12, 31)
+        start = _dt.date(self.year, 1, 1)
+        end = _dt.date(self.year, 12, 31)
 
         # Find max value
         vals = []

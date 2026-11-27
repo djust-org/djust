@@ -5118,9 +5118,8 @@ class ViewRuntime(RuntimeTurnPort):
         """
         if target_view is not self.view_instance:
             # #4179: an event queued on an embedded child's activity.
-            return await self._dispatch_released_child_event(
-                target_view, event_name, params, event_ref
-            )
+            await self._dispatch_released_child_event(target_view, event_name, params, event_ref)
+            return
         from .websocket import _compute_changed_keys, _resolve_skip_render, _snapshot_assigns
 
         from ._exposure_diagnostics import diagnostics_allowed, restrict_diagnostics

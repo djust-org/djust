@@ -44,9 +44,12 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import hashlib
+import logging
 import threading
 import weakref
 from typing import Any, Dict, Iterator, Optional, Set
+
+logger = logging.getLogger(__name__)
 
 
 class _Scope:
@@ -104,8 +107,8 @@ def render_ids(view: Any, phase: str = "render", *, carry_over: bool = False) ->
         if not carry_over and phase == "render" and not scope.rendered and scope.counts:
             try:
                 _carried[view] = scope.counts
-            except TypeError:
-                pass
+            except TypeError:  # not weak-referenceable: nothing to carry
+                logger.debug("view %s cannot carry component id counts", type(view).__name__)
 
 
 def note_rendered() -> None:

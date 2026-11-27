@@ -53,7 +53,7 @@ import os
 import re
 import time
 from dataclasses import dataclass
-from uuid import uuid4
+import uuid as _uuid
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -549,7 +549,7 @@ class LiveViewTestClient:
         # destroyed client's id is handed to a new client, which then collides
         # on the VDOM cache key (``mixins/rust_bridge.py:354``) against whatever
         # the process-wide state backend still holds (#2821 review).
-        self._synthetic_ws_session_id = f"testclient-{uuid4().hex}"
+        self._synthetic_ws_session_id = f"testclient-{_uuid.uuid4().hex}"
 
     def mount(
         self,
@@ -1270,7 +1270,7 @@ class LiveViewTestClient:
         instance._djust_mount_view_path = (
             f"{self.view_class.__module__}.{self.view_class.__qualname__}"
         )
-        instance._websocket_session_id = f"testclient-{uuid4().hex}"
+        instance._websocket_session_id = f"testclient-{_uuid.uuid4().hex}"
         instance._websocket_path = request.path
         instance._websocket_query_string = request.META.get("QUERY_STRING", "")
         if hasattr(instance, "_initialize_temporary_assigns"):
