@@ -134,6 +134,10 @@ def _write_templates(directory: str) -> None:
             handle.write(source)
 
 
+#: Set by --state-store / --save-interval before configure().
+_STORE_SETTINGS: Dict[str, Any] = {}
+
+
 def configure(mode: str) -> str:
     """Configure Django (DEBUG off, djust's template backend, a fresh SQLite
     file for sessions) and return the temporary directory (removed at exit)."""
@@ -188,6 +192,7 @@ def configure(mode: str) -> str:
         STATIC_URL="/static/",
         USE_TZ=True,
         LOGGING_CONFIG=None,
+        **_STORE_SETTINGS,
     )
     django.setup()
     from django.core.management import call_command
@@ -941,6 +946,15 @@ def parse_args(argv: Optional[List[str]]) -> argparse.Namespace:
         "--pyspy", metavar="DIR", help="re-run under py-spy --native; flame graph in DIR"
     )
     p.add_argument("--quick", action="store_true", help="tiny run (seconds), what the test runs")
+    p.add_argument(
+        "--state-store",
+        help="DJUST_STATE_STORE for the run (e.g. djust.state_store.DatabaseViewStateStore)",
+    )
+    p.add_argument(
+        "--save-interval",
+        type=float,
+        help="DJUST_STATE_SAVE_INTERVAL for the run (0: save before every reply)",
+    )
     args = p.parse_args(argv)
     if args.quick:
         args.rounds, args.warmup, args.pages = 2, 1, 1
@@ -991,6 +1005,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         return run_pyspy(args, raw)
     if args.profile:
         os.makedirs(args.profile, exist_ok=True)
+    if args.state_store:
+        _STORE_SETTINGS["DJUST_STATE_STORE"] = args.state_store
+    if args.save_interval is not None:
+        _STORE_SETTINGS["DJUST_STATE_SAVE_INTERVAL"] = args.save_interval
     tmp_dir = configure(args.mode)
     try:
         print(

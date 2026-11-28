@@ -46,6 +46,8 @@ To see inside them:
 ```bash
 pip install py-spy
 make benchmark-components CASES=vdom PYSPY=prof       # prof/pyspy.svg, --native frames
+make benchmark-components SUITES=turn STATE_STORE=djust.state_store.DatabaseViewStateStore
+make benchmark-components SUITES=turn SAVE_INTERVAL=0  # save before every reply
 ```
 
 Profiling slows the timed rounds; record timings from a run without it.

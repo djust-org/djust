@@ -706,11 +706,12 @@ benchmark-client-turns: ## Browser side of a turn, same 5 workloads: input-to-se
 		$${JSON:+--json $$JSON}
 
 .PHONY: benchmark-components
-benchmark-components: ## Each layer on its own: component tags, Python components, Rust render, VDOM diff, page GET + mount, one-change turns; RELEASE build. ROUNDS=30 SUITES=page,turn CASES=includes JSON=out.json COMPARE=old.json PROFILE=dir PYSPY=dir
+benchmark-components: ## Each layer on its own: component tags, Python components, Rust render, VDOM diff, page GET + mount, one-change turns; RELEASE build. ROUNDS=30 SUITES=page,turn CASES=includes JSON=out.json COMPARE=old.json PROFILE=dir PYSPY=dir STATE_STORE=path SAVE_INTERVAL=0
 	@echo "$(GREEN)Running the component benchmark (serial; release build required)...$(NC)"
 	@PYTHONPATH=python nice -n 10 $(PYTHON) scripts/bench_components.py --rounds $${ROUNDS:-30} \
 		$${SUITES:+--suites $$SUITES} $${CASES:+--cases $$CASES} $${JSON:+--json $$JSON} \
-		$${COMPARE:+--compare $$COMPARE} $${PROFILE:+--profile $$PROFILE} $${PYSPY:+--pyspy $$PYSPY}
+		$${COMPARE:+--compare $$COMPARE} $${PROFILE:+--profile $$PROFILE} $${PYSPY:+--pyspy $$PYSPY} \
+		$${STATE_STORE:+--state-store $$STATE_STORE} $${SAVE_INTERVAL:+--save-interval $$SAVE_INTERVAL}
 
 ##@ Database
 
