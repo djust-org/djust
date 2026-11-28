@@ -60,6 +60,10 @@ setting, and there is no supported way to do it.
                             writes the view later (design: save frequency).
                             Off: every turn saves before its frame, as with
                             the interval at 0.
+``snapshot_reuse``          An event turn takes the previous event turn's
+                            post-handler snapshot as its pre-handler snapshot
+                            when nothing ran on the view in between
+                            (``_snapshot_reuse``). Off: walked every turn.
 ``compact_fingerprints``    A structural fingerprint keeps a ``str`` / ``int``
                             / ``bytes`` / ``None`` leaf as the value itself and
                             a dict's items as one flat tuple, in place of a
@@ -104,6 +108,7 @@ ALL: FrozenSet[str] = frozenset(
         "digest_fingerprints",
         "native_fingerprints",
         "deferred_save",
+        "snapshot_reuse",
     }
 )
 

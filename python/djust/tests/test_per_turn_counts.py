@@ -294,22 +294,26 @@ async def test_the_theme_preset_list_is_not_in_the_state(monkeypatch):
 # --- #3999: one changed cell in a 1,000-row list ------------------------------------
 
 
-async def test_one_changed_cell_walks_the_list_three_times_not_four(monkeypatch):
-    """Two snapshot walks and one conversion walk that builds no fingerprint.
+async def test_one_changed_cell_walks_the_list_twice_not_four(monkeypatch):
+    """One snapshot walk and one conversion walk that builds no fingerprint.
 
-    The sync takes the post-event snapshot's walk of the list as its
-    fingerprint and as its "is this plain data" answer (``snapshot_fingerprints``),
-    so the only walk it makes is the conversion for Rust (``convert_for_render``).
+    The pre-handler snapshot is the previous turn's post snapshot
+    (``snapshot_reuse``: only the attributes whose objects were replaced are
+    walked again, not the list). The sync takes the post-event snapshot's walk
+    of the list as its fingerprint and as its "is this plain data" answer
+    (``snapshot_fingerprints``), so the only walk it makes is the conversion
+    for Rust (``convert_for_render``).
     """
     size = harness.nodes(make_rows(ROWS))
     now = await turn(monkeypatch, Table, "cell")
     off = await turn(monkeypatch, Table, "cell", "plain_sub_ids", "snapshot_fingerprints")
     assert now["reply"] == off["reply"] == "patch"
-    # Before and after the handler, and once to convert for Rust. The two
-    # snapshot walks are native digests (#4325): no tree, no BLAKE2b digest.
+    # After the handler, and once to convert for Rust (the second snapshot
+    # call refreshes the kept one's replaced attributes, not the list). The
+    # snapshot walk is a native digest (#4325): no tree, no BLAKE2b digest.
     assert now["snapshot_assigns.calls"] == 2
-    assert 2 * size <= now["fingerprint.snapshot.nodes"] < 2 * size + 500
-    assert 2 * size <= now["native.snapshot.nodes"] < 2 * size + 500
+    assert size <= now["fingerprint.snapshot.nodes"] < size + 500
+    assert size <= now["native.snapshot.nodes"] < size + 500
     assert now.get("fingerprint_digest.calls", 0) == 0
     assert now.get("native.sync.calls", 0) == 0
     # The conversion walks the changed row only (``list_item_deltas``, #4325).
@@ -450,12 +454,27 @@ async def test_native_fingerprints_gate_off(monkeypatch):
     # The same walks, node for node, wherever they run.
     assert now["fingerprint.snapshot.nodes"] == off["fingerprint.snapshot.nodes"]
     assert off.get("native.snapshot.calls", 0) == 0
-    assert 2 * size <= off["fingerprint.snapshot.nodes"] < 2 * size + 500
+    # One walk: the pre-handler snapshot is the kept one (``snapshot_reuse``).
+    assert size <= off["fingerprint.snapshot.nodes"] < size + 500
     assert now.get("fingerprint_digest.calls", 0) == 0
     assert off["fingerprint_digest.calls"] >= 2
     assert now["update_state_items.rows"] == off["update_state_items.rows"] == 1
     assert now["sent_keys"] == off["sent_keys"] == [[]]
     assert now["changed_keys"] == off["changed_keys"] == [["items"]]
+
+
+async def test_snapshot_reuse_gate_off(monkeypatch):
+    """The pre-handler snapshot is the previous event turn's post snapshot
+    (``_snapshot_reuse``). Off, the list is walked before the handler again:
+    twice the snapshot nodes, and the same reply and the same row sent."""
+    size = harness.nodes(make_rows(ROWS))
+    now = await turn(monkeypatch, Table, "cell")
+    off = await turn(monkeypatch, Table, "cell", "snapshot_reuse")
+    assert size <= now["native.snapshot.nodes"] < size + 500
+    assert 2 * size <= off["native.snapshot.nodes"] < 2 * size + 500
+    assert now["reply"] == off["reply"] == "patch"
+    assert now["changed_keys"] == off["changed_keys"] == [["items"]]
+    assert now["update_state_items.rows"] == off["update_state_items.rows"] == 1
 
 
 # --- #4107: a turn that changes nothing saved --------------------------------------

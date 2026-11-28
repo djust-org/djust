@@ -799,6 +799,10 @@ CHANGE_DETECTION_IGNORED: frozenset = frozenset(
         # mechanism (and made the "setting _changed_keys directly is
         # ineffective" doc claim false).
         "_changed_keys",
+        # Snapshot reuse bookkeeping (``_snapshot_reuse``): the kept snapshot
+        # and the turn counter ``run_turn`` bumps.
+        "_djust_kept_snapshot",
+        "_djust_turn_seq",
         # The handler's no-render request (#3246): consumed to False by
         # ``_resolve_skip_render``, so a first ``_skip_render`` left a key the
         # pre-handler snapshot lacked and read as a state change.

@@ -4761,6 +4761,8 @@ class ViewRuntime(RuntimeTurnPort):
         # push_event()/push_commands() without touching real state is detected as
         # a true no-op (mirrors WS handle_event websocket.py:3551-3556).
         _fw_attrs: frozenset[str] = getattr(view, "_framework_attrs", frozenset())
+        from . import _snapshot_reuse
+
         pre_assigns: Optional[Dict[str, Any]]
         pre_identity: Optional[Dict[str, int]]
         _pre_box: Dict[str, Any] = {}
@@ -4774,7 +4776,7 @@ class ViewRuntime(RuntimeTurnPort):
             _inner_handler = handler
 
             def handler(*args: Any, **kwargs: Any) -> Any:  # noqa: F811
-                _pre_box["assigns"] = _snapshot_assigns(view)
+                _pre_box["assigns"] = _snapshot_reuse.pre_snapshot(view, _snapshot_assigns)
                 _pre_box["identity"] = {
                     k: id(v) for k, v in view.__dict__.items() if k not in _fw_attrs
                 }
@@ -4785,7 +4787,7 @@ class ViewRuntime(RuntimeTurnPort):
 
             pre_assigns = pre_identity = None
         else:
-            pre_assigns = _snapshot_assigns(view)
+            pre_assigns = _snapshot_reuse.pre_snapshot(view, _snapshot_assigns)
             pre_identity = {k: id(v) for k, v in view.__dict__.items() if k not in _fw_attrs}
 
         # Call handler. On a raise, send the error frame and return early.
@@ -4853,6 +4855,10 @@ class ViewRuntime(RuntimeTurnPort):
         # there do not change the view's state. Off with the shortcut, the
         # snapshot is taken where it always was.
         early_post_assigns: Optional[Dict[str, Any]] = None
+        # The post snapshot this turn keeps for the next event's pre snapshot
+        # (``_snapshot_reuse``), with the objects it was taken from.
+        post_assigns: Optional[Dict[str, Any]] = None
+        kept_objects: Optional[Dict[str, Any]] = None
         if (
             _per_turn.on("unchanged_save_skip")
             and target_view is view
@@ -4860,6 +4866,7 @@ class ViewRuntime(RuntimeTurnPort):
             and not getattr(view, "_force_full_html", False)
         ):
             early_post_assigns = _snapshot_assigns(view)
+            kept_objects = _snapshot_reuse.covered_objects(view, early_post_assigns)
             view.__dict__["_djust_auto_changed"] = _compute_changed_keys(
                 pre_assigns, early_post_assigns
             )
@@ -4890,9 +4897,11 @@ class ViewRuntime(RuntimeTurnPort):
         # A handler can mutate a child without changing a parent declaration.
         has_explicit_children = bool(getattr(view, "_child_views", None))
         if not skip_render and not force_html:
-            post_assigns = (
-                early_post_assigns if early_post_assigns is not None else _snapshot_assigns(view)
-            )
+            if early_post_assigns is not None:
+                post_assigns = early_post_assigns
+            else:
+                post_assigns = _snapshot_assigns(view)
+                kept_objects = _snapshot_reuse.covered_objects(view, post_assigns)
             if pre_assigns == post_assigns and not has_explicit_children and not rows_written(view):
                 skip_render = True
             else:
@@ -4956,6 +4965,7 @@ class ViewRuntime(RuntimeTurnPort):
             noop_msg.update(snapshot_fields)
             # One frame: the acknowledgement and every queued effect (#3658).
             await self._send_render(noop_msg)
+            self._keep_event_snapshot(view, post_assigns, kept_objects, has_async)
             # Dispatch background work UNCONDITIONALLY after the turn (matches WS
             # handle_event websocket.py:4235, NOT the legacy SSE which gated this
             # on has_async). The captured batch includes named and legacy work
@@ -4985,6 +4995,7 @@ class ViewRuntime(RuntimeTurnPort):
             scoped_component=_scoped_component_for(view, getattr(view, "_changed_keys", None)),
             snapshot_fields=snapshot_fields,
         )
+        self._keep_event_snapshot(view, post_assigns, kept_objects, has_async)
 
         # Dispatch background work UNCONDITIONALLY after the render (WS parity,
         # websocket.py:4235): start_async / @background callbacks run off-thread
@@ -7977,6 +7988,23 @@ class ViewRuntime(RuntimeTurnPort):
         frame.pop("_timing_render_ms", None)
         frame.pop("_timing_scope", None)
         return frame
+
+    @staticmethod
+    def _keep_event_snapshot(
+        view: Any,
+        post_assigns: Optional[Dict[str, Any]],
+        objects: Optional[Dict[str, Any]],
+        has_async: bool,
+    ) -> None:
+        """Keep this event turn's post snapshot as the next one's pre snapshot
+        (``_snapshot_reuse``), or forget any: no snapshot was taken, or the turn
+        started background work that will change the view."""
+        from . import _snapshot_reuse
+
+        if post_assigns is None or objects is None or has_async:
+            _snapshot_reuse.drop(view)
+        else:
+            _snapshot_reuse.keep(view, post_assigns, objects)
 
     async def _render_scoped_component(
         self, view: Any, component: Any

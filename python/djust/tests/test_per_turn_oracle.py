@@ -849,6 +849,53 @@ class Lifecycle(_Base):
         self.items.append({"id": 99, "name": "async", "qty": 1, "active": True, "tags": []})
 
 
+class Reverting(_Base):
+    """An event turn keeps its post snapshot for the next one (``snapshot_reuse``).
+    A push between them changes a row in place and renders it, and the next
+    event puts the row's first value back: that event must render, although
+    its state equals the kept snapshot. Then two events with nothing between
+    them (the reuse), one that changes nothing (a noop), and a title change."""
+
+    exposure_policy = "explicit"
+    template = "<div dj-root><h1>{{ title }}</h1>" + TABLE + "</div>"
+    title = state("a")
+    items = state(default_factory=list)
+
+    def mount(self, request, **kwargs):
+        self.items = rows(5)
+
+    def handle_push(self, qty=0, **kwargs):
+        RAN.append("push")
+        self.items[1]["qty"] = qty
+
+    @event_handler()
+    def set_qty(self, qty: int = 0, **kwargs):
+        self.items[1]["qty"] = qty
+
+    @event_handler()
+    def retitle(self, value: str = "", **kwargs):
+        self.title = value
+
+    @event_handler()
+    def nothing(self, **kwargs):
+        pass
+
+    @event_handler()
+    def touch(self, row: int = 0, **kwargs):
+        self.items[row]["qty"] += 1
+
+
+REVERT_SCRIPT = [
+    ("event", "set_qty", {"qty": 7}),
+    ("push", "handle_push", {"qty": 9}),
+    ("event", "set_qty", {"qty": 7}),
+    ("event", "touch", {"row": 2}),
+    ("event", "nothing"),
+    ("event", "touch", {"row": 2}),
+    ("event", "retitle", {"value": "x"}),
+]
+
+
 LIFECYCLE_SCRIPT = [
     ("url", {"page": "3"}),
     ("url", {"page": "7"}),
@@ -1176,6 +1223,7 @@ WS_CASES: List[Tuple[str, type, Script]] = [
     ("late_writer", LateWriter, LATE_SCRIPT),
     ("big_late_writer", BigLateWriter, BIG_LATE_SCRIPT),
     ("held_thing", HeldThing, HELD_SCRIPT),
+    ("reverting", Reverting, REVERT_SCRIPT),
 ]
 
 
@@ -1916,6 +1964,14 @@ def _break_native_fingerprints(patch: Any) -> None:
     patch.setattr(change_detection, "_plain_digest", bool_as_int)
 
 
+def _break_snapshot_reuse(patch: Any) -> None:
+    from djust import _snapshot_reuse
+
+    # As if the checks were missing: the kept snapshot is taken as the next
+    # pre snapshot even after a push rendered another state in between.
+    patch.setattr(_snapshot_reuse, "_still_holds", lambda view, kept: True)
+
+
 def _break_snapshot_fingerprints(patch: Any) -> None:
     from djust.change_detection import ChangedKeys
     from djust.mixins import rust_bridge
@@ -2037,6 +2093,7 @@ SABOTAGE = {
         lambda: run_ws(ScalarTypes, SCALAR_SCRIPT),
     ),
     "deferred_save": (_break_deferred_save, _deferred_reconnect_run),
+    "snapshot_reuse": (_break_snapshot_reuse, lambda: run_ws(Reverting, REVERT_SCRIPT)),
 }
 
 

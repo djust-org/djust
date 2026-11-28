@@ -439,11 +439,12 @@ class TestCallSiteInventory:
         # ViewRuntime: the event spine's pre/post and noop-token, the deferred
         # twin, the bound-component route
         ("python/djust/runtime.py", "_dispatch_component_event"): 2,
-        # (three call expressions, two snapshots per turn: the post-event one is
-        # taken before the commit and reused, or taken after it; #4107)
-        ("python/djust/runtime.py", "_dispatch_event_render"): 3,
+        # (two call expressions: the post-event snapshot is taken before the
+        # commit and reused, or taken after it, #4107; the pre-event one is
+        # ``_snapshot_reuse.pre_snapshot(view, _snapshot_assigns)``, which
+        # passes the function rather than calling it)
+        ("python/djust/runtime.py", "_dispatch_event_render"): 2,
         ("python/djust/runtime.py", "_dispatch_single_event_body"): 2,
-        ("python/djust/runtime.py", "handler"): 1,
         # the SSE tick (``TestSseTick``): the pre/post pair of ``handle_tick``
         ("python/djust/runtime.py", "_tick_body"): 2,
         # the consumer: its deferred twin and the tick

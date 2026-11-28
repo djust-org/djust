@@ -36,6 +36,7 @@ import time
 import weakref
 from typing import Any, Awaitable, Callable, Dict, Mapping, Optional, Tuple
 
+from ._snapshot_reuse import bump_turn
 from .observability.timings import record_turn_timing
 
 logger = logging.getLogger(__name__)
@@ -389,6 +390,9 @@ async def run_turn(turn: Turn, body: Callable[[Turn], Awaitable[Any]]) -> Option
     """
     turn._body = body
     turn._open = True
+    if turn.view is not None:
+        # Any turn on the view invalidates a kept event snapshot (``_snapshot_reuse``).
+        bump_turn(turn.view)
     token = _current_turn.set(weakref.ref(turn))
     try:
         result = await _get_chain().entry(turn)
