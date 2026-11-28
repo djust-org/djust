@@ -1466,7 +1466,8 @@ def aliases_of(relative: str) -> Dict[str, str]:
 def resolve_target(handoff_key: Tuple[str, str, str]) -> List[Tuple[str, str, ast.AST]]:
     """The definitions a hand-off's callable names: nested in the enclosing function,
     then anywhere in the file, then (an imported name or a method) elsewhere. A name
-    with more than six candidates is not resolved."""
+    with more than eight candidates is not resolved (``save`` has seven: the
+    state stores' and the components'; every one is checked)."""
     relative, enclosing, text = handoff_key
     inner = re.sub(r"^detached\((.*)\)$", r"\1", text)
     tail = re.split(r"[.()]", inner.rstrip("()"))[-1] or ""
@@ -1485,7 +1486,7 @@ def resolve_target(handoff_key: Tuple[str, str, str]) -> List[Tuple[str, str, as
     imported = imports.get(tail)
     if imported and imported != tail:
         candidates = _definitions_named(imported)
-    return candidates if 0 < len(candidates) <= 6 else []
+    return candidates if 0 < len(candidates) <= 8 else []
 
 
 def _reached(

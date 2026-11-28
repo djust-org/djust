@@ -291,7 +291,12 @@ async def _sse(key: str, events: int = 2) -> None:
             _sse_sessions.pop(sid, None)
 
 
-STORES = [pytest.param(EXTERNAL, id="external"), pytest.param(SEALED, id="sealed")]
+DATABASE = "djust.state_store.DatabaseViewStateStore"
+STORES = [
+    pytest.param(EXTERNAL, id="external"),
+    pytest.param(SEALED, id="sealed"),
+    pytest.param(DATABASE, id="database"),
+]
 
 
 # ---------------------------------------------------------------------------
@@ -314,7 +319,12 @@ def test_the_fallback_keeps_state_and_the_session_holds_no_content(store, settin
         wanted |= {"sealed"}
         assert not MemoryStore.CALLS
     else:
-        (payload,) = MemoryStore.DATA.values()
+        if store == DATABASE:
+            from djust.models import ViewState
+
+            payload = bytes(ViewState.objects.get().payload)
+        else:
+            (payload,) = MemoryStore.DATA.values()
         assert b"STORE_HANDLER" in payload and b"STORE_PRIVATE" in payload
         # The size the per-view limit counts: the encoded state.
         assert entry["bytes"] == json.loads(payload)["state"]["bytes"]
