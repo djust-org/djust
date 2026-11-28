@@ -1455,6 +1455,19 @@ class RustLiveView:
         """
         ...
 
+    def set_defer_html(self, defer: bool) -> None:
+        """Leave the page unserialized (``""``) on a render that produced patches."""
+        ...
+
+    def html_deferred(self) -> bool:
+        """Whether the last render left its page unserialized."""
+        ...
+
+    def committed_html(self, version: int) -> Optional[str]:
+        """The page of the tree committed at ``version``; ``None`` once a later
+        render moved the view on."""
+        ...
+
     def release_baseline(self) -> None:
         """
         Drop the diff baseline (rendered tree, last HTML, render caches) and keep

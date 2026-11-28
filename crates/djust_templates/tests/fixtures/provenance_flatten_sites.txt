@@ -677,6 +677,8 @@ m.insert("serialize_ms".to_string(), t.serialize_ms);
 m.insert("total_ms".to_string(), t.total_ms);
 m.insert("html_len".to_string(), t.html_len as f64);
 m.insert("fast_path".to_string(), t.fast_path);
+self.html_deferred = false;
+self.html_deferred
 let key = (self.template_source.to_string(), self.template_dirs.clone());
 let root_spans: Vec<_> = if cutoff || output.root_channel {
 output.prefix.html = output.normal.html.clone();
@@ -694,6 +696,9 @@ parse_html_with_namespace(&rendered.html)
 .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?
 .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?
+self.html_deferred = self.defer_html && !binary && changed;
+let html = if self.html_deferred {
+self.html_deferred = false;
 (rendered.html, rendered.changed)
 (rendered.html, vec![])
 return Err(e.into());
@@ -710,6 +715,8 @@ PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
 PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
 PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string())
 Some("[]".to_string())
+self.html_deferred = self.defer_html && patches.as_deref().is_some_and(|p| p != "[]");
+let hydrated_html = if self.html_deferred {
 let prefix = format!("{key}.");
 let prefix = format!("{key}.");
 let open = format!("<{tag} ");

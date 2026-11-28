@@ -234,6 +234,13 @@ def consume_direct_child_result(parent: Any, html: str) -> tuple[str, int] | Non
     return key, end
 
 
+def rendering_has_candidates() -> bool:
+    """Whether the render in progress issued child candidates, which are
+    reconciled against its markup (so its HTML must be serialized)."""
+    current = _active.get()
+    return current is not None and bool(current.candidates or current.owned_preparing)
+
+
 def reconcile_child_render(
     *, whole_page: bool = False, owner_wrapper: bool = False
 ) -> Callable[[Callable[_P, _R]], Callable[_P, _R]]:

@@ -197,6 +197,9 @@ class TestGuardCoversTheRenderSurface:
             "commit_authenticated_page",
             "render_with_diff",
             "render_binary_diff",
+            # Serializes the committed tree a deferred patch turn left (a
+            # WebSocket recovery or a frame that needs the page).
+            "committed_html",
             # ADR-032 (#2917): parses a component's HTML and diffs it into the
             # page tree — the same parse + diff surface as `render_with_diff`.
             "patch_component_subtree",

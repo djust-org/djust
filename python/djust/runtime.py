@@ -1713,6 +1713,10 @@ class WSConsumerTransport:
         """
         return int(self._consumer._next_version_armed(html))
 
+    #: An event turn's page HTML may be left unserialized (``""``): recovery
+    #: serializes the committed tree on request (``_deferred_html``).
+    defers_recovery_html = True
+
     def build_request(self) -> Optional[Any]:
         """WS has no captured HTTP request — the runtime synthesizes from
         ``self.scope`` (carrying the authenticated user + session)."""
@@ -7678,8 +7682,14 @@ class ViewRuntime(RuntimeTurnPort):
         else:
             try:
                 from ._child_rendering import render_view_with_diff
+                from ._deferred_html import deferring_html
 
-                html, patches, version = await sync_to_async(render_view_with_diff)(view)
+                if getattr(self.transport, "defers_recovery_html", False):
+                    # Patches only: the page is serialized if a recovery asks.
+                    with deferring_html():
+                        html, patches, version = await sync_to_async(render_view_with_diff)(view)
+                else:
+                    html, patches, version = await sync_to_async(render_view_with_diff)(view)
             except Exception as exc:
                 from ._exposure_diagnostics import restrict_diagnostics
 
@@ -7734,6 +7744,12 @@ class ViewRuntime(RuntimeTurnPort):
         # RENDER_REQUESTED forces the render but keeps the diff (#4286).
         if force_html is True:
             patches = None
+        if patches is None:
+            from ._deferred_html import materialize
+
+            # A frame without patches carries the page: serialize it if the
+            # render left it for a recovery (``_deferred_html``).
+            html = materialize(view, html, version)
 
         # Stamp the transport's client-checked wire version (#1858, the #1788
         # parallel-path twin) from the RAW pre-strip render. WS → consumer-owned
@@ -7754,6 +7770,10 @@ class ViewRuntime(RuntimeTurnPort):
             PATCH_THRESHOLD = 100
             _compressed_patch_count: Optional[int] = None
             if scoped is None and patch_list and len(patch_list) > PATCH_THRESHOLD:
+                from ._deferred_html import materialize
+
+                # The size test (and the fallback) need the page itself.
+                html = materialize(view, html, version)
                 patches_size = len(patches.encode("utf-8")) if isinstance(patches, str) else 0
                 html_size = len(html.encode("utf-8")) if html else 0
                 if patches_size and html_size < patches_size * 0.7:

@@ -327,8 +327,11 @@ class RenderLog:
         original = _child_rendering.render_view_with_diff
 
         def recording(view: Any, *args: Any, **kwargs: Any) -> Any:
+            from djust._deferred_html import materialize
+
             result = original(view, *args, **kwargs)
-            self.htmls.append(result[0])
+            # A socket patch turn leaves the page unserialized (``_deferred_html``).
+            self.htmls.append(materialize(view, result[0], result[2]))
             return result
 
         monkeypatch.setattr(_child_rendering, "render_view_with_diff", recording)
