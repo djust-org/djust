@@ -1443,6 +1443,11 @@ class RustLiveView:
         """
         ...
 
+    def baseline_epoch(self) -> int:
+        """A process-unique stamp of the current diff baseline: a new value on
+        every render, commit or reset (``_snapshot_reuse``)."""
+        ...
+
     def release_baseline(self) -> None:
         """
         Drop the diff baseline (rendered tree, last HTML, render caches) and keep

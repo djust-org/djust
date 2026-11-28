@@ -15,6 +15,7 @@ import uuid
 import weakref
 import zlib
 from typing import (
+    AbstractSet,
     Any,
     Awaitable,
     Callable,
@@ -510,7 +511,9 @@ def _should_expose_timing() -> bool:
     )
 
 
-def _snapshot_assigns(view_instance: Any) -> Dict[str, Any]:
+def _snapshot_assigns(
+    view_instance: Any, only: Optional[AbstractSet[str]] = None
+) -> Dict[str, Any]:
     """Identity + structural snapshot of public assigns for change detection.
 
     Uses id() for every value plus :func:`djust.change_detection.deep_fingerprint`
@@ -535,6 +538,9 @@ def _snapshot_assigns(view_instance: Any) -> Dict[str, Any]:
     ``_sync_state_to_rust`` maps a change onto the rendered keys by comparing
     every context value against the previous render, not by name.
     ``test_exposure_invalidation.py`` pins both halves.
+
+    ``only`` limits the walk to those attribute names (``_snapshot_reuse``
+    refreshes the entries of a kept snapshot whose objects were replaced).
     """
     # #762: Filter framework-internal attrs so change detection doesn't fire
     # on attrs like ``template_name`` / ``http_method_names`` that the user
@@ -558,6 +564,8 @@ def _snapshot_assigns(view_instance: Any) -> Dict[str, Any]:
             items.append((name, bound))
     for k, v in items:
         if k in _fw_attrs or k in _static_skip or k in CHANGE_DETECTION_IGNORED:
+            continue
+        if only is not None and k not in only:
             continue
         if type(k) is not str:
             continue  # not an attribute name: nothing renders it (#4143)

@@ -412,6 +412,13 @@ fn holds_accumulating_container(node: &VNode, ids: &HashSet<String>) -> bool {
                 .any(|child| holds_accumulating_container(child, ids)))
 }
 
+static NEXT_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// A new, process-unique baseline stamp (``RustLiveView::epoch``).
+fn next_epoch() -> u64 {
+    NEXT_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 /// A LiveView component that manages state and rendering (Rust backend)
 #[pyclass(name = "RustLiveView")]
 pub struct RustLiveViewBackend {
@@ -457,6 +464,11 @@ pub struct RustLiveViewBackend {
     last_html: Option<String>,
     /// Version number incremented on each render, used for VDOM synchronization
     version: u64,
+    /// A process-unique stamp of the current diff baseline: a new value
+    /// whenever the version moves (a render, a commit, a reset), and on
+    /// construction. Python reads it to tell whether anything rendered between
+    /// two event turns (``_snapshot_reuse``). Not serialized.
+    epoch: u64,
     /// Unix timestamp when this view was last serialized (for session age tracking)
     timestamp: f64,
     /// Template directories for {% include %} tag support
@@ -612,6 +624,7 @@ impl RustLiveViewBackend {
             last_root_ns: None,
             last_html: None,
             version: 0,
+            epoch: next_epoch(),
             timestamp: 0.0, // Will be set on first serialization
             template_dirs: template_dirs
                 .unwrap_or_default()
@@ -1968,6 +1981,7 @@ impl RustLiveViewBackend {
             self.last_vdom = Some(new_vdom);
             self.last_root_ns = Some(root_ns);
             self.version += 1;
+            self.epoch = next_epoch();
             // #2999: the tree may have changed shape; the fragment→text-node
             // map is rebuilt by the next full-parse render_with_diff.
             self.fragment_text_map = None;
@@ -2129,6 +2143,7 @@ impl RustLiveViewBackend {
             let serialize_ms = t_serial.elapsed().as_secs_f64() * 1000.0;
 
             self.version += 1;
+            self.epoch = next_epoch();
             self.last_html = Some(full_html.clone());
             self.node_html_cache = Vec::new();
             self.node_child_cache = Vec::new();
@@ -2155,6 +2170,7 @@ impl RustLiveViewBackend {
         self.last_root_ns = None;
         self.last_html = None;
         self.version = 0;
+        self.epoch = next_epoch();
         self.node_html_cache = Vec::new();
         self.node_child_cache = Vec::new();
         self.changed_keys = None;
@@ -2276,6 +2292,7 @@ impl RustLiveViewBackend {
             last_root_ns: None, // Not serialized: the next render parses
             last_html: None,    // Transient cache — rebuilt on next render
             version: serializable.version,
+            epoch: next_epoch(),
             timestamp: serializable.timestamp,
             template_dirs: Vec::new(),
             safe_keys: HashSet::new(),
@@ -2326,6 +2343,11 @@ impl RustLiveViewBackend {
     /// `fragment_text_map`, `loop_render_cache`, `other`).
     fn retained_bytes(&self) -> HashMap<String, usize> {
         retained::report(self)
+    }
+
+    /// The stamp of the current diff baseline (see the ``epoch`` field).
+    fn baseline_epoch(&self) -> u64 {
+        self.epoch
     }
 
     /// Get per-phase timing from the last render_with_diff() call.
@@ -2725,6 +2747,7 @@ impl RustLiveViewBackend {
         self.changed_keys = None;
         self.loop_render_cache.clear();
         self.version = version;
+        self.epoch = next_epoch();
     }
 
     fn render_authenticated_diff(
@@ -3280,6 +3303,7 @@ impl RustLiveViewBackend {
             self.last_vdom = Some(new_vdom);
             self.last_root_ns = Some(root_ns);
             self.version += 1;
+            self.epoch = next_epoch();
 
             // Fragment→VDOM text node map for the text fast path on later renders.
             // Each plain-text fragment is matched to a VDOM text node by BYTE

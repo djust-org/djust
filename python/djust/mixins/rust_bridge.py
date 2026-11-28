@@ -548,21 +548,28 @@ def _snapshot_walks_for_sync(
     turn = turn_ref()
     if turn is None or turn is not current_turn():
         return None
-    cls = type(view)
+    if not render_runs_framework_code_only(type(view)):
+        return None
+    return walks
+
+
+def render_runs_framework_code_only(cls: type) -> bool:
+    """Whether a render of a ``cls`` view runs no application code that can
+    write to the view (see :func:`_snapshot_walks_for_sync`): every context
+    hook is the framework's own, the template is not a ``property``, there is
+    no class-level component, and no ``sync_turn_wrapper`` is configured."""
     for name, function in _framework_context_hooks().items():
         if getattr(cls, name, function) is not function:
-            return None
+            return False
     from inspect import getattr_static
 
     if isinstance(getattr_static(cls, "template", None), property):
-        return None
+        return False
     if registered_components(cls):
-        return None
+        return False
     from ..sync_turn import _wrapper
 
-    if _wrapper() is not None:
-        return None
-    return walks
+    return _wrapper() is None
 
 
 def _plain_by_snapshot(walks: Optional[Dict[int, SnapshotEntry]], key: str, value: Any) -> bool:
