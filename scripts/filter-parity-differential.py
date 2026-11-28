@@ -3613,6 +3613,11 @@ ENTRY_POINTS_NOT_SWEPT = {
         "settings would double the corpus for one boolean"
     ),
     "set_registry_namespace": "internal engine selection; covered by test_backend_registry_isolation_2709.py, not a filter semantic flag",
+    "set_dj_model_gate_shared": (
+        "a cache switch for the dj-model gate (#4363): whether a new view shares the "
+        "template walk; never changes rendered output. Covered by "
+        "python/djust/tests/test_dj_model_gate_shared_4363.py"
+    ),
     "set_virtual_keyed_ops": "a VDOM keyed-ops flag; nothing to do with template rendering",
     "register_library_loader": (
         "the `{% load %}` hook (#2547). A parse-time registry action rather than a "
