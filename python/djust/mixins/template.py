@@ -2543,17 +2543,49 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
             isinstance(renderer, HtmlRenderer)
             and getattr(self._rust_view, "potential_authenticated_partial_root", lambda: False)()
         )
-        with (
-            active_parent_view(self),
-            library_render_scope(),
-            defer_root_children(self, defer_children),
-        ):
-            result = renderer.render_with_diff(
-                request=None,
-                extract_liveview_root=False,
-                preloaded_context=None,
-            )
+        from .. import _deferred_html
+        from .._static_render import is_static_render
+
+        # A WebSocket event turn sends patches only: the page HTML is
+        # serialized on a later recovery, if one comes (``_deferred_html``).
+        # Not for a render whose HTML is read right away (extraction), a
+        # static render (no baseline to serialize later), or a renderer that
+        # is not the HTML one. An owned child diff never reaches Rust's
+        # ``render_with_diff``, so it is never deferred.
+        set_defer = getattr(self._rust_view, "set_defer_html", None)
+        defer_html = (
+            set_defer is not None
+            and _deferred_html.requested()
+            and not extract_liveview_root
+            and type(renderer) is HtmlRenderer
+            and not is_static_render(self)
+        )
+        self.__dict__.pop(_deferred_html.DEFERRED_VERSION_ATTR, None)
+        if defer_html:
+            set_defer(True)
+        try:
+            with (
+                active_parent_view(self),
+                library_render_scope(),
+                defer_root_children(self, defer_children),
+            ):
+                result = renderer.render_with_diff(
+                    request=None,
+                    extract_liveview_root=False,
+                    preloaded_context=None,
+                )
+        finally:
+            if defer_html:
+                set_defer(False)
         html, patches_json, version = result
+        if defer_html and self._rust_view.html_deferred():
+            self.__dict__[_deferred_html.DEFERRED_VERSION_ATTR] = version
+            from .._child_rendering import rendering_has_candidates
+
+            if rendering_has_candidates():
+                # Embedded children are reconciled against the markup.
+                html = _deferred_html.materialize(self, html, version)
+                result = (html, patches_json, version)
         # ``static_render`` (#3626): keep no diff baseline.
         from .._static_render import release_render_baseline
 
@@ -2638,7 +2670,11 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
 
         # Track HTML sizes for diagnostics (used by full_html_update signal)
         self._previous_html_size = getattr(self, "_current_html_size", None)
-        self._current_html_size = len(html)
+        self._current_html_size = (
+            len(html)
+            if html or _deferred_html.deferred_version(self) != version
+            else int((self._rust_render_timing or {}).get("html_len", 0))
+        )
 
         # Reset temporary assigns and streams to free memory after rendering
         self._reset_temporary_assigns()
