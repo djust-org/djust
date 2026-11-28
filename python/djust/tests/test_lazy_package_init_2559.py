@@ -130,6 +130,10 @@ ALLOWLIST_SETUP = (
             "djust.checks.upgrade",  # what a 1.3 project must change before 2.0 (V034, V035, T029)
             "djust.checks.utils",
             "djust.config",
+            # The ``ViewState`` model of the built-in database state store:
+            # Django imports every installed app's models at setup; it
+            # imports only ``django.db.models``.
+            "djust.models",
             "djust.observability",
             "djust.observability.log_handler",
             "djust.observability.registry",
@@ -144,7 +148,7 @@ ALLOWLIST_SETUP = (
         }
     )
 )
-assert len(ALLOWLIST_SETUP) == 72 + HAS_CSP_NONCE_TAG
+assert len(ALLOWLIST_SETUP) == 73 + HAS_CSP_NONCE_TAG
 
 # ``DEBUG=True`` additionally auto-enables hot reload: the file watcher only.
 # ``djust.websocket`` (and ``channels``) are deferred to a change event (#2566).
