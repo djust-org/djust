@@ -51,7 +51,9 @@ import hmac
 import json
 import re
 import string
+import threading
 import zlib
+from collections import OrderedDict
 from html import unescape
 from typing import Any
 
@@ -327,13 +329,42 @@ def dom_shape(html: Any) -> str | None:
     return None if found is None else found.shape
 
 
+#: :func:`render_shape` results by a digest of the HTML walked. The walk is a
+#: pure function of its input and costs about 0.2 ms per KB in Python, and the
+#: same HTML is walked again and again: a fallback turn walks its baseline twice
+#: (``prepare_baseline``, then ``tokens_match``), the next turn's baseline is the
+#: answer this turn walked, and repeated GETs of one page render the same root.
+#: A hit costs one hash of the HTML. Callers treat the result as read-only.
+_SHAPE_MEMO_SIZE = 256
+_shape_memo: OrderedDict[bytes, RenderShape | None] = OrderedDict()
+_shape_memo_lock = threading.Lock()
+_MISSING: Any = object()
+
+
 def render_shape(html: Any) -> RenderShape | None:
     """:func:`dom_shape`'s walk, with the client-owned regions it passes (#4283).
 
-    ``None`` when the shape is ``None``.
+    ``None`` when the shape is ``None``. Memoized by a 160-bit digest of
+    ``html`` (:data:`_shape_memo`).
     """
     if not isinstance(html, str):
         return None
+    key = hashlib.blake2b(html.encode("utf-8", "surrogatepass"), digest_size=20).digest()
+    with _shape_memo_lock:
+        found = _shape_memo.get(key, _MISSING)
+        if found is not _MISSING:
+            _shape_memo.move_to_end(key)
+            return found
+    found = _walk_shape(html)
+    with _shape_memo_lock:
+        _shape_memo[key] = found
+        if len(_shape_memo) > _SHAPE_MEMO_SIZE:
+            _shape_memo.popitem(last=False)
+    return found
+
+
+def _walk_shape(html: str) -> RenderShape | None:
+    """:func:`render_shape` without the memo."""
     out: list[str] = []
     stack: list[str] = []
     #: per open element: the number of significant children seen so far
