@@ -77,6 +77,8 @@ from django.core.exceptions import ImproperlyConfigured
 logger = logging.getLogger("djust.state_store")
 
 __all__ = [
+    "DATABASE_SETTING",
+    "DatabaseViewStateStore",
     "KEYS_SETTING",
     "SETTING",
     "STRICT_SETTING",
@@ -99,6 +101,8 @@ __all__ = [
 SETTING = "DJUST_STATE_STORE"
 #: The sealed store's keys: the first seals, every one opens.
 KEYS_SETTING = "DJUST_STATE_STORE_KEYS"
+#: The database alias :class:`DatabaseViewStateStore` uses (unset: the router's).
+DATABASE_SETTING = "DJUST_STATE_STORE_DATABASE"
 #: ``True``: an event whose state cannot be stored is refused, not served.
 STRICT_SETTING = "DJUST_STATE_STORE_STRICT"
 
@@ -177,6 +181,72 @@ class SessionViewStateStore(ViewStateStore):
 
     Naming it in ``DJUST_STATE_STORE`` is the same as naming nothing.
     """
+
+
+class DatabaseViewStateStore(ViewStateStore):
+    """The state in djust's own table (``djust_view_state``), out of the session.
+
+    The session then holds only the index entry, so the per-event session read
+    that re-authorizes a WebSocket turn stays small however large a view's
+    state is, and saving a state no longer rewrites the whole session row.
+    Needs ``python manage.py migrate``. Rows past their expiry are removed by
+    ``djust clear`` (run it on a schedule).
+
+    ``DJUST_STATE_STORE_DATABASE`` names the database alias (default: the
+    router's choice for :class:`djust.models.ViewState`).
+    """
+
+    def _rows(self) -> Any:
+        from django.conf import settings
+
+        from .models import ViewState
+
+        alias = getattr(settings, DATABASE_SETTING, None)
+        return ViewState.objects.using(alias) if alias else ViewState.objects
+
+    def load(self, key: StateKey) -> Optional[bytes]:
+        found = self._rows().filter(pk=key.id).values_list("payload", flat=True).first()
+        return bytes(found) if found is not None else None
+
+    def save(self, key: StateKey, payload: bytes, *, expires: int) -> None:
+        from .models import ViewState
+
+        from django.db import connections
+
+        rows = self._rows()
+        if connections[rows.db].features.supports_update_conflicts_with_target:
+            # One upsert statement (PostgreSQL, SQLite, MariaDB/MySQL).
+            rows.bulk_create(
+                [ViewState(key=key.id, payload=payload, expires=expires)],
+                update_conflicts=True,
+                unique_fields=["key"],
+                update_fields=["payload", "expires"],
+            )
+            return
+        if not rows.filter(pk=key.id).update(payload=payload, expires=expires):
+            rows.create(key=key.id, payload=payload, expires=expires)
+
+    def delete(self, keys: Iterable[StateKey]) -> None:
+        ids = [key.id for key in keys]
+        if ids:
+            self._rows().filter(pk__in=ids).delete()
+
+    def clear(self, *, expired_only: bool) -> int:
+        import time
+
+        rows = self._rows().all()
+        if expired_only:
+            rows = rows.filter(expires__lte=int(time.time()))
+        return int(rows.delete()[0])
+
+    def stats(self) -> Dict[str, Any]:
+        import time
+
+        rows = self._rows()
+        return {
+            "rows": rows.count(),
+            "expired": rows.filter(expires__lte=int(time.time())).count(),
+        }
 
 
 class SessionKeptStore(ViewStateStore):
