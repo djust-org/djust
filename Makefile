@@ -894,8 +894,13 @@ endif
 	@# The distribution SBOM's root version comes from pyproject.toml (ADR-040).
 	@echo "$(GREEN)Regenerating python/djust/djust.cdx.json...$(NC)"
 	@PYTHONPATH=python/djust $(PYTHON) -m assets.sbom --distribution
+	@# The HTTP-fallback replay fixture records rendered pages, which carry the
+	@# version in their static URLs: a bump leaves it stale (2.0.0rc7 main was red).
+	@echo "$(GREEN)Regenerating tests/js/fixtures/http_fallback_replay_4108.json...$(NC)"
+	@DJUST_WRITE_HTTP_FALLBACK_FIXTURE=1 $(PYTHON) -m pytest -q -p no:cacheprovider \
+		python/djust/tests/test_http_fallback_differential_4108.py::test_committed_fixture_is_current
 	@echo "$(YELLOW)Don't forget to update CHANGELOG.md!$(NC)"
-	@echo "$(YELLOW)Commit uv.lock + Cargo.lock + python/djust/djust.cdx.json alongside the manifest bump.$(NC)"
+	@echo "$(YELLOW)Commit uv.lock + Cargo.lock + python/djust/djust.cdx.json + tests/js/fixtures/http_fallback_replay_4108.json alongside the manifest bump.$(NC)"
 
 .PHONY: version-check
 version-check: ## Check current version in all files
