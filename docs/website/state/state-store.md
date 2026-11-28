@@ -46,6 +46,32 @@ fallback. It does not go through the store either, so with a store named it is
 not saved at all: each fallback request mounts that child again, and one
 WARNING per child class says so.
 
+## The built-in database store
+
+```python
+# settings.py
+DJUST_STATE_STORE = "djust.state_store.DatabaseViewStateStore"
+```
+
+Then `python manage.py migrate`: the store keeps each state as one row of
+djust's own table, `djust_view_state` (a primary key, the payload bytes and
+the expiry). The session keeps only the index entry above.
+
+This is the fastest place for a WebSocket view's state. Every event re-reads
+the session to re-authorize the user, and with the state in the session that
+read loads and decodes every saved view the browser has open. With this store
+the session stays small however large a view's state is, and saving a state
+writes one row instead of rewriting the session. Measured with
+`make benchmark-components` on a 1,000-row table, a WebSocket turn went from
+9.0 to 7.6 ms (p50, default save interval).
+
+The table is written with one upsert statement where the database supports it
+(PostgreSQL, SQLite, MariaDB) and an update-or-insert elsewhere.
+`DJUST_STATE_STORE_DATABASE` names the database alias to use; unset, Django's
+routers choose. djust deletes a row when it evicts the state or
+`djust clear` removes it, never on logout: run `djust clear` on a
+schedule to remove expired rows.
+
 ## The built-in sealed store
 
 `djust.state_store.SealedSessionViewStateStore` encrypts the state
@@ -214,6 +240,7 @@ and "Not listed" when it does not.
 |---|---|
 | `DJUST_STATE_STORE` | Dotted path of a `ViewStateStore` subclass. Unset: the session. |
 | `DJUST_STATE_STORE_KEYS` | The sealed store's keys: the first seals, every one opens. |
+| `DJUST_STATE_STORE_DATABASE` | The database store's alias. Unset: Django's routers choose. |
 | `DJUST_STATE_STORE_STRICT` | `True`: refuse an event whose state cannot be stored. Default `False`. |
 
 `DJUST_AUTOMATIC_STATE = False` (or a view's `automatic_state = False`) is

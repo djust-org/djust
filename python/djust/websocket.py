@@ -1806,6 +1806,14 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
         self._recovery_version = getattr(self, "_last_sent_version", 0)
         self._recovery_contracts: Optional[bytes] = None
         view = getattr(self, "view_instance", None)
+        # An event turn that sent patches only left the page unserialized
+        # (``html == ""``): recovery serializes the tree committed at this
+        # Rust version, if the view is still there (``_deferred_html``).
+        from ._deferred_html import deferred_version
+
+        self._recovery_deferred: Optional[int] = (
+            deferred_version(view) if not html and view is not None else None
+        )
         try:
             self._recovery_owner = weakref.ref(view) if view is not None else None
         except TypeError:
@@ -5656,6 +5664,9 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 html = getattr(self, "_recovery_html", None)
         else:
             html = getattr(self, "_recovery_html", None)
+            deferred = getattr(self, "_recovery_deferred", None)
+            if not html and deferred is not None:
+                html = await self._deferred_recovery_html(view, deferred)
 
         if not html:
             await self.send_error(
@@ -5689,6 +5700,7 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
 
         # Clear recovery state (one-time use)
         self._recovery_html = None
+        self._recovery_deferred = None
         self._recovery_contracts = None
         self._recovery_owner = None
 
@@ -5700,6 +5712,29 @@ class LiveViewConsumer(ConsumerTurnPort, AsyncWebsocketConsumer):
                 **(json.loads(contracts) if contracts is not None else {}),
             }
         )
+
+    async def _deferred_recovery_html(self, view: Any, version: int) -> Optional[str]:
+        """The page an event turn left unserialized (``_deferred_html``): the
+        tree committed at Rust ``version``, or, when a later render that armed
+        nothing (a scoped child update) moved the view on, a fresh render of
+        the view as it is now. ``None`` when neither can be had."""
+
+        from .sync_turn import sync_step
+
+        def serialize() -> Optional[str]:
+            found = view._rust_view.committed_html(version)
+            if found is not None:
+                return str(found)
+            if hasattr(view, "_sync_state_to_rust"):
+                view._sync_state_to_rust()
+            fresh_html, _patches, _version = view.render_with_diff()
+            return fresh_html or None
+
+        try:
+            return await sync_to_async(sync_step(view, "render", serialize))()
+        except Exception:  # noqa: BLE001 — the caller answers "unavailable"
+            logger.warning("[djust] request_html could not serialize the deferred page")
+            return None
 
     async def presence_event(self, event: Dict[str, Any]) -> None:
         """

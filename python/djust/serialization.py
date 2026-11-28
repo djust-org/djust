@@ -1765,6 +1765,10 @@ def build_render_sidecar(context: Dict[str, Any]) -> Dict[str, Any]:
 _SIDECAR_MAX_DEPTH = 12
 
 
+#: Exact scalar types :func:`_protect_sidecar_tree` returns as they are.
+_SIDECAR_PLAIN_SCALARS = frozenset((str, int, float, bool, type(None)))
+
+
 def _protect_sidecar_tree(
     value: Any,
     _depth: int = 0,
@@ -1800,6 +1804,9 @@ def _protect_sidecar_tree(
     under-protect it. Keying on `(id, depth)` bounds the work at
     `objects x _SIDECAR_MAX_DEPTH` while keeping every result honest.
     """
+    if type(value) in _SIDECAR_PLAIN_SCALARS:
+        # Nothing to wrap and nothing under it; most leaves of a context are these.
+        return value
     protected = _protect_sidecar_value(value)
     # A proxy is terminal: it enforces the floor on its own attribute access
     # and iteration, so there is nothing under it for this pass to reach.

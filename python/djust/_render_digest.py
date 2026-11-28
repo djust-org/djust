@@ -49,13 +49,18 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import re
 import string
+import threading
 import zlib
+from collections import OrderedDict
 from html import unescape
 from typing import Any
 
 from django.utils.crypto import salted_hmac
+
+logger = logging.getLogger(__name__)
 
 #: Request header the client echoes the digest in.
 HEADER = "X-Djust-Render-Digest"
@@ -327,13 +332,70 @@ def dom_shape(html: Any) -> str | None:
     return None if found is None else found.shape
 
 
+#: :func:`render_shape` results by a digest of the HTML walked. The walk is a
+#: pure function of its input and costs about 0.2 ms per KB in Python, and the
+#: same HTML is walked again and again: a fallback turn walks its baseline twice
+#: (``prepare_baseline``, then ``tokens_match``), the next turn's baseline is the
+#: answer this turn walked, and repeated GETs of one page render the same root.
+#: A hit costs one hash of the HTML. Callers treat the result as read-only.
+_SHAPE_MEMO_SIZE = 256
+_shape_memo: OrderedDict[bytes, RenderShape | None] = OrderedDict()
+_shape_memo_lock = threading.Lock()
+_MISSING: Any = object()
+
+
 def render_shape(html: Any) -> RenderShape | None:
     """:func:`dom_shape`'s walk, with the client-owned regions it passes (#4283).
 
-    ``None`` when the shape is ``None``.
+    ``None`` when the shape is ``None``. Memoized by a 160-bit digest of
+    ``html`` (:data:`_shape_memo`).
     """
     if not isinstance(html, str):
         return None
+    key = hashlib.blake2b(html.encode("utf-8", "surrogatepass"), digest_size=20).digest()
+    with _shape_memo_lock:
+        found = _shape_memo.get(key, _MISSING)
+        if found is not _MISSING:
+            _shape_memo.move_to_end(key)
+            return found
+    found = _walk_shape(html)
+    with _shape_memo_lock:
+        _shape_memo[key] = found
+        if len(_shape_memo) > _SHAPE_MEMO_SIZE:
+            _shape_memo.popitem(last=False)
+    return found
+
+
+try:  # the native walk; absent from a Python-only build
+    from djust._rust import render_shape_walk as _native_walk
+except ImportError:  # pragma: no cover - the extension ships in every wheel
+    _native_walk = None
+
+
+def _walk_shape(html: str) -> RenderShape | None:
+    """:func:`render_shape` without the memo.
+
+    The Rust walk (``crates/djust_live/src/render_shape.rs``) is the same walk
+    at about a twentieth of the cost. :func:`_py_walk_shape` stays as the
+    reference it is tested against and answers where it cannot: no extension,
+    or text Rust cannot hold (a lone surrogate).
+    """
+    if _native_walk is not None:
+        try:
+            found = _native_walk(html, unescape)
+        except (UnicodeEncodeError, RuntimeError, ValueError, TypeError):
+            # A lone surrogate cannot cross into Rust; the Python walk answers.
+            logger.debug("render_shape: native walk declined; using the Python walk")
+        else:
+            if found is None:
+                return None
+            shape, opaque_paths, client_owned = found
+            return RenderShape(shape, [tuple(p) for p in opaque_paths], client_owned)
+    return _py_walk_shape(html)
+
+
+def _py_walk_shape(html: str) -> RenderShape | None:
+    """The walk in Python: the reference for the native one."""
     out: list[str] = []
     stack: list[str] = []
     #: per open element: the number of significant children seen so far

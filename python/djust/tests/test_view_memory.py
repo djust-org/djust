@@ -119,9 +119,12 @@ async def test_the_tree_is_most_of_a_static_page():
     counter = await measured(scenarios.Counter, ("inc", None))
     assert report["rust.vdom"] > 0.5 * report["total"]
     assert state_part(report) < state_part(counter) + KB
-    # Three more copies of the page text, each about one page long.
-    for owner in ("rust.last_html", "rust.node_html_cache", "py.recovery_html"):
+    # Two more copies of the page text, each about one page long. The
+    # recovery HTML is not one: a patch turn leaves it unserialized until a
+    # client asks for it (``_deferred_html``).
+    for owner in ("rust.last_html", "rust.node_html_cache"):
         assert 0.9 < report[owner] / report["page_bytes"] < 1.1, owner
+    assert report["py.recovery_html"] == 0
 
 
 async def test_the_tree_and_the_state_copy_are_most_of_a_list_page():
@@ -252,8 +255,8 @@ CEILING_MARKUP_100KB = 2_000_000
 #: is the application's data, not what the framework adds, so the ceiling is
 #: held by its two framework parts instead, which do not move with the
 #: interpreter: the Rust side (``retained_bytes()``, the same everywhere) and
-#: the Python side less the state (a few fixed-size framework objects and the
-#: recovery HTML, measured as CPython 3.12 sizes them).
+#: the Python side less the state (a few fixed-size framework objects,
+#: measured as CPython 3.12 sizes them).
 CEILING_TABLE_100KB = 3_000_000
 CEILING_TABLE_100KB_RUST = 2_450_000
 CEILING_TABLE_100KB_PY_FRAMEWORK = 250_000

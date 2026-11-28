@@ -18,6 +18,7 @@ mod child_bindings;
 mod deferred_children;
 mod fingerprint;
 mod provenance_edits;
+mod render_shape;
 use dashmap::DashMap;
 use djust_core::html_whitespace::is_html_whitespace_only;
 use djust_core::{Context, RenderEnv, Value};
@@ -462,6 +463,13 @@ pub struct RustLiveViewBackend {
     /// Cached HTML from the last render, used for text-only fast path detection.
     /// Not serialized — transient cache that's rebuilt on next render.
     last_html: Option<String>,
+    /// When set, `render_with_diff` leaves the page HTML unserialized on a
+    /// render that produced patches (it returns `""`): the caller sends the
+    /// patches and asks `committed_html` only if the page is needed later
+    /// (a WebSocket recovery). Set per render by the caller; never persisted.
+    defer_html: bool,
+    /// Whether the last `render_with_diff` left its HTML unserialized.
+    html_deferred: bool,
     /// Version number incremented on each render, used for VDOM synchronization
     version: u64,
     /// A process-unique stamp of the current diff baseline: a new value
@@ -623,6 +631,8 @@ impl RustLiveViewBackend {
             last_vdom: None,
             last_root_ns: None,
             last_html: None,
+            defer_html: false,
+            html_deferred: false,
             version: 0,
             epoch: next_epoch(),
             timestamp: 0.0, // Will be set on first serialization
@@ -2291,6 +2301,8 @@ impl RustLiveViewBackend {
             last_vdom: serializable.last_vdom,
             last_root_ns: None, // Not serialized: the next render parses
             last_html: None,    // Transient cache — rebuilt on next render
+            defer_html: false,
+            html_deferred: false,
             version: serializable.version,
             epoch: next_epoch(),
             timestamp: serializable.timestamp,
@@ -2365,6 +2377,39 @@ impl RustLiveViewBackend {
             m.insert("html_len".to_string(), t.html_len as f64);
             m.insert("fast_path".to_string(), t.fast_path);
             m
+        })
+    }
+
+    /// Leave the page HTML of the next `render_with_diff` calls unserialized
+    /// when they produce patches (they return `""` and `html_deferred()` is
+    /// true). For a caller that sends the patches and needs the page only on
+    /// a later recovery, which reads it with `committed_html`.
+    fn set_defer_html(&mut self, defer: bool) {
+        self.defer_html = defer;
+        if defer {
+            // A render that does not reach the deferring paths (an owned
+            // child diff) must not report an older render's deferral.
+            self.html_deferred = false;
+        }
+    }
+
+    /// Whether the last `render_with_diff` left its HTML unserialized.
+    fn html_deferred(&self) -> bool {
+        self.html_deferred
+    }
+
+    /// The HTML of the committed tree, as `render_with_diff` would have
+    /// returned it, while the view is still at `version`; `None` once a later
+    /// render, patch or reset has moved it on (or with no tree).
+    fn committed_html(&self, py: Python<'_>, version: u64) -> PyResult<Option<String>> {
+        guard_panic("committed_html", || {
+            if self.version != version {
+                return Ok(None);
+            }
+            let (Some(vdom), Some(root_ns)) = (self.last_vdom.as_ref(), self.last_root_ns) else {
+                return Ok(None);
+            };
+            Ok(Some(py.detach(|| vdom.to_html_in(Some(root_ns)))))
         })
     }
 
@@ -2708,9 +2753,11 @@ impl RustLiveViewBackend {
         // As on the ordinary diff path (#3647); this IS the commit, so the view counts it.
         self.accumulate_dropped +=
             splice_accumulating_subtrees(self.last_vdom.as_ref(), &mut vdom, &self.accumulate_ids);
+        let mut changed = false;
         let patches = if let Some(old) = &self.last_vdom {
             let patches = diff_in(old, &vdom, namespace);
             sync_ids(old, &mut vdom);
+            changed = !patches.is_empty();
             Some(if binary {
                 rmp_serde::to_vec_named(&patches)
                     .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?
@@ -2721,7 +2768,14 @@ impl RustLiveViewBackend {
         } else {
             None
         };
-        let html = vdom.to_html_in(Some(namespace));
+        // As on the ordinary path: a caller that sends only the patches
+        // (`set_defer_html`) has the page serialized later, on request.
+        self.html_deferred = self.defer_html && !binary && changed;
+        let html = if self.html_deferred {
+            String::new()
+        } else {
+            vdom.to_html_in(Some(namespace))
+        };
         cache_ignore_subtree_html_in(&mut vdom, namespace);
         self.install_committed_page(vdom, namespace, fields, authenticated, self.version + 1);
         Ok((html, patches, self.version))
@@ -2763,6 +2817,7 @@ impl RustLiveViewBackend {
     /// directly). Returns (html, patches_json, version).
     fn render_with_diff_detached(&mut self) -> PyResult<(String, Option<String>, u64)> {
         self.pending_partial_page = None;
+        self.html_deferred = false;
         let authenticate = self.potential_authenticated_partial_root;
         let result = guard_panic("render_with_diff", || {
             if authenticate {
@@ -3275,9 +3330,18 @@ impl RustLiveViewBackend {
             // the parse cache (splice) and populate it (miss items); put it back now.
             self.loop_render_cache = loop_cache;
 
-            // Phase 4: HTML serialization
+            // Phase 4: HTML serialization, unless the caller sends only the
+            // patches (`set_defer_html`) and this render produced some: the
+            // committed tree serializes later, on request (`committed_html`).
             let t_serial_start = Instant::now();
-            let hydrated_html = new_vdom.to_html_in(Some(root_ns));
+            // `patches` is `None` only for a first render (no baseline); the
+            // fast paths have taken `last_vdom` by now, so it is not the test.
+            self.html_deferred = self.defer_html && patches.as_deref().is_some_and(|p| p != "[]");
+            let hydrated_html = if self.html_deferred {
+                String::new()
+            } else {
+                new_vdom.to_html_in(Some(root_ns))
+            };
             let serialize_ms = t_serial_start.elapsed().as_secs_f64() * 1000.0;
 
             let total_ms = t_start.elapsed().as_secs_f64() * 1000.0;
@@ -8506,6 +8570,7 @@ fn _rust(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(fast_json_dumps, m)?)?;
     // Native plain-data content digest for change detection (#4325).
     m.add_function(wrap_pyfunction!(fingerprint::plain_digest, m)?)?;
+    m.add_function(wrap_pyfunction!(render_shape::render_shape_walk, m)?)?;
     m.add_function(wrap_pyfunction!(fingerprint::digest_rows_changed, m)?)?;
     m.add_function(wrap_pyfunction!(
         fingerprint::_set_plain_digest_sabotage,

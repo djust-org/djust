@@ -486,6 +486,18 @@ def plain_digest(
     """
     ...
 
+def render_shape_walk(
+    html: str, unescape: Callable[[str], str]
+) -> Optional[Tuple[str, List[List[int]], bool]]:
+    """Native ``_render_digest`` shape walk of a rendered root (#4108).
+
+    ``(shape, opaque_paths, client_owned)``, or ``None`` for unbalanced tags.
+    *unescape* decodes character references (``html.unescape``). Use
+    ``djust._render_digest.render_shape``, which memoizes and falls back to
+    the Python walk.
+    """
+    ...
+
 def digest_rows_changed(a: bytes, b: bytes) -> Optional[List[int]]:
     """Indices whose 16-byte row digests differ, or ``None`` on a length mismatch."""
     ...
@@ -1443,6 +1455,19 @@ class RustLiveView:
         """
         ...
 
+    def set_defer_html(self, defer: bool) -> None:
+        """Leave the page unserialized (``""``) on a render that produced patches."""
+        ...
+
+    def html_deferred(self) -> bool:
+        """Whether the last render left its page unserialized."""
+        ...
+
+    def committed_html(self, version: int) -> Optional[str]:
+        """The page of the tree committed at ``version``; ``None`` once a later
+        render moved the view on."""
+        ...
+
     def baseline_epoch(self) -> int:
         """A process-unique stamp of the current diff baseline: a new value on
         every render, commit or reset (``_snapshot_reuse``)."""
@@ -1522,6 +1547,7 @@ __all__ = [
     # Change detection (#4325)
     "plain_digest",
     "digest_rows_changed",
+    "render_shape_walk",
     "MAX_VDOM_DEPTH",
     "WALK_FLOOR_COVERS_FORMS",
     "collapse_inter_tag_whitespace",
