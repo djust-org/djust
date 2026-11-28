@@ -728,6 +728,18 @@ def _project_components(view: Any, enums: Any) -> Dict[str, Any]:
     return out
 
 
+def _bind_components(view: Any, components: Dict[str, Any]) -> None:
+    """Access each saved component name on ``view`` so a class-level
+    descriptor binds (the access ``apply_components`` makes)."""
+    for name in components or ():
+        if type(name) is not str or not _NAME.fullmatch(name):
+            continue
+        try:
+            getattr(view, name, None)
+        except Exception:  # noqa: BLE001 — a descriptor that cannot bind yet
+            continue
+
+
 def apply_components(view: Any, components: Dict[str, Any]) -> None:
     """Put saved component state back on the components the view holds now
     (after ``mount()`` rebuilt them, or as a class-level descriptor is
@@ -2059,6 +2071,12 @@ def load(view: Any, request: Any) -> Optional[Dict[str, Any]]:
     # shows the view's state, so the first event may answer with patches
     # (#1977).
     try:
+        # A class-level component descriptor is materialized on first access,
+        # which a socket mount has not made yet, while the page GET that saved
+        # the state had rendered it: bind the saved ones first, as
+        # ``apply_components`` below does, or every view declaring a component
+        # compares unequal and its first event answers with the whole page.
+        _bind_components(view, found.components)
         mine = project(view)
         same = mine.components == _encoded_components(found, mine) and all(
             found.raw[0].get(name, _MISSING) == mine.public.get(name, _MISSING)
