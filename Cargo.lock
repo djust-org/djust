@@ -350,6 +350,7 @@ dependencies = [
  "indexmap",
  "once_cell",
  "pyo3",
+ "regex",
  "rmp-serde",
  "serde",
  "serde_json",
