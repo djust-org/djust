@@ -7,6 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0rc7] - 2026-11-28
+
+> **Upgrading from rc6.** A performance release with no required changes. A
+> WebSocket event turn no longer serializes the page for recovery HTML (it is
+> built on demand), reuses the previous event's state snapshot, and a 1,000-row
+> table turn drops from about 9.0 to 8.4 ms p50 (`make benchmark-components`).
+> Two opt-ins: `DJUST_STATE_STORE = "djust.state_store.DatabaseViewStateStore"`
+> keeps view state in djust's own table instead of the session (run `migrate`),
+> and `{% badge %}` takes `sr_label`. Page loads and socket mounts no longer
+> re-parse include-heavy templates on every request (#4363, an rc6 regression),
+> the page-POST fallback's shape walk runs in Rust, and a view that declares a
+> component answers its first socket event with patches again. `manage.py check`
+> (V030) now reports a view value stored over a LiveView method or property.
+
+### Added
+
+- **`{% badge %}` takes `sr_label` (#4359).** The screen-reader text before the label
+  (`Status: <status>` for a status other than `default`) can be named,
+  `sr_label="Priority"`, or dropped, `sr_label=""`, for a label that already says the
+  state. Without it the badge reads as on rc6.
+- **`djust.state_store.DatabaseViewStateStore`: view state in djust's own table.** Name it in `DJUST_STATE_STORE` and run `migrate`. The session then keeps only the index entry, so the session read that re-authorizes every WebSocket event stays small however large a view's state is, and saving a state writes one row instead of rewriting the session. A 1,000-row table's WebSocket turn: 9.0 to 7.6 ms p50 (`make benchmark-components`). `DJUST_STATE_STORE_DATABASE` picks the database alias.
+
+### Changed
+
+- **`manage.py check` (V030) reports a view value stored over a LiveView method or
+  read-only property (#4360).** A view that assigned `self._pending = []` hid
+  `CommandsMixin._pending()`: `assert_push_event` reported nothing queued and the 1.x
+  `_pending_push_events` property raised `TypeError`, with no error at the
+  assignment. V030 now names any `self.<name> = ...` in a view's methods, or plain
+  class attribute, whose name is a method or setter-less property of djust's
+  `LiveView`. Overrides (a `def` of the same name) are not reported.
+  `StreamingText`'s docstring taught `self.stream = StreamingText(...)`, which hides
+  the view's `stream()` method; it now uses `self.streaming_text`.
+- A WebSocket event turn that sends patches no longer serializes the page only to keep it as recovery HTML. The page is serialized from the committed tree when a client asks for it after a failed patch (`request_html`), or when the frame needs it (a forced full render, the patch-compression fallback). The 1,000-row table turn went from 9.0 to 8.4 ms p50 (`make benchmark-components`), and each connected view holds one page's size less (0.05 MB of a 50 KB page, 0.11 MB of a 1,000-row table).
+- **Rendering serializes plain scalar values without type tests.** The per-value walks a render runs over its context (`serialize_value`, the sidecar floor walk, the safe-key scan) return an exact `str` / `int` / `float` / `bool` / `None` first; subclasses such as `SafeString` take the full path as before. A 1,000-row table through the `djust` template backend renders in 19 ms instead of 35 ms (`make benchmark-components`).
+- **The page-POST fallback and repeated page loads walk each rendered root for its shape once.** `render_shape` (the digest shape a fallback answer is checked against) is remembered by a digest of the HTML, so a fallback turn no longer walks its baseline twice and the next turn reuses the walk of this turn's answer. Measured with `make benchmark-components` on a 1,000-row table: a fallback turn 146 to 102 ms; an 80 KB page GET 45 to 26 ms when the page repeats.
+- **The page-POST fallback's shape walk runs in Rust.** `render_shape` now calls `djust._rust.render_shape_walk`, about 8x faster than the Python walk: a 1,000-row page walks in 3 ms instead of 25, and a fallback turn on it drops from 104 to 77 ms (`make benchmark-components`, `turn/table/http`). The Python walk stays as the reference the Rust one is tested against and answers where Rust cannot (no extension, or a lone surrogate in the HTML).
+- An event turn takes the previous event turn's post-handler snapshot as its pre-handler snapshot when nothing ran on the view in between (no other turn, no render, no application code in the render), walking again only the attributes whose objects were replaced. For a 1,000-row table this takes the pre-handler walk from about 0.29 ms to 0.03 ms per WebSocket event.
+
+### Fixed
+
+- **`{% resizable_panel %}` can leave its size to the stylesheet (#4361).** An empty
+  `initial_size=""` or `min_size=""` writes no value for that size, so a page whose
+  CSP drops `style` attributes can size the panel from its own CSS. With
+  `LIVEVIEW_CONFIG["csp_strict"]` on, the size is written as `data-dj-style-*`
+  attributes (as before), and the hook now reads that value as the size to reset
+  to on double-click, even when it mounts before `dj-style` applied it.
+- **Page loads and socket mounts no longer re-parse the template tree on every request
+  (#4363).** rc6's dj-model gate (#4347) remembered its answer per view instance, and
+  every GET and mount builds a new view, so each one re-parsed the page and every
+  literal `{% include %}` site, running the `{% load %}` hook for each: GETs and mounts
+  were about 2x slower than rc5 on include-heavy pages. With render caches on (`DEBUG`
+  off) the gate now shares the walk through the dj-model split cache, so a warm
+  request runs no `{% load %}` hook. An already-bridged library's `{% load %}`
+  answers from the registry generation instead of probing every tag, and the
+  client-chunk pre-check on a page GET finds its marker words with `str.find`
+  instead of a regex over the whole page (36 ms to under 2 ms on a 100 KB page).
+- **A view that declares a component answers its first socket event with patches again.** The socket mount compared the state the page GET saved with the view it had just built before any class-level component had bound, so a view declaring one always looked changed: its first event sent the whole page (losing focus and input state in the browser) and logged DJE-053. The saved components now bind before the comparison, as they do for the restore right after it.
+
 ## [2.0.0rc6] - 2026-11-27
 
 > **Upgrading from rc5.** The legacy modes are gone: `exposure_policy = "legacy"`

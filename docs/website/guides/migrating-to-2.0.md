@@ -23,9 +23,9 @@ its row says "(2.0 only)". You can migrate one view and one handler at a time,
 deploy between steps, and install 2.0 once nothing in the app still depends on
 the old behaviour.
 
-> **Where 2.0 is today.** 2.0.0rc6 is a release candidate. Install it with
+> **Where 2.0 is today.** 2.0.0rc7 is a release candidate. Install it with
 > `pip install --pre djust` (a plain `pip install djust` still installs 1.3.x).
-> In rc6 explicit exposure is the default (a view that states no policy is
+> Since rc6 explicit exposure is the default (a view that states no policy is
 > explicit) and strict event parameters are the default
 > ([#4189](https://github.com/djust-org/djust/issues/4189)). The removals in
 > [section 3](#3-replace-removed-names-and-settings) have landed.
@@ -1604,4 +1604,4 @@ removed setting at startup, and `exposure_policy = "legacy"`,
 module that states it is imported. `djust_exposure_inventory` lists any view
 still on `[policy: legacy]`; run `--fix` on it.
 
-<!-- generated-doc prose-sha256: 72f40ab69ce4 -->
+<!-- generated-doc prose-sha256: e59866a2e399 -->

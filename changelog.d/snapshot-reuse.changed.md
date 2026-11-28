@@ -1,1 +1,0 @@
-- An event turn takes the previous event turn's post-handler snapshot as its pre-handler snapshot when nothing ran on the view in between (no other turn, no render, no application code in the render), walking again only the attributes whose objects were replaced. For a 1,000-row table this takes the pre-handler walk from about 0.29 ms to 0.03 ms per WebSocket event.
