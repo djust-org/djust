@@ -2585,7 +2585,6 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
             if rendering_has_candidates():
                 # Embedded children are reconciled against the markup.
                 html = _deferred_html.materialize(self, html, version)
-                result = (html, patches_json, version)
         # ``static_render`` (#3626): keep no diff baseline.
         from .._static_render import release_render_baseline
 
