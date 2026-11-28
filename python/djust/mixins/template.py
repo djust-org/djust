@@ -2561,7 +2561,7 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
             and not is_static_render(self)
         )
         self.__dict__.pop(_deferred_html.DEFERRED_VERSION_ATTR, None)
-        if defer_html:
+        if defer_html and set_defer is not None:
             set_defer(True)
         try:
             with (
@@ -2575,7 +2575,7 @@ Object.assign(window.handlerMetadata, {escape_json_for_script(json.dumps(metadat
                     preloaded_context=None,
                 )
         finally:
-            if defer_html:
+            if defer_html and set_defer is not None:
                 set_defer(False)
         html, patches_json, version = result
         if defer_html and self._rust_view.html_deferred():
